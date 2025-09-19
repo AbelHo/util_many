@@ -37,8 +37,8 @@
       const max_distance = speed * frame_time;
       const min_sync_distance = max_distance / 2;
       document.getElementById('result').innerHTML =
-        `<b>Maximum distance sound travels in one frame:</b> ${max_distance.toFixed(3)} meters<br>` +
-        `<b>Maximum acceptable distance from sound source to all devices for good synchronization:</b> ${min_sync_distance.toFixed(3)} meters`;
+        `<b>Maximum distance sound travels in one frame:</b> ${max_distance.toFixed(3)} meters<br><hr>` +
+        `<b>Maximum acceptable distance from sound source to all devices for good synchronization(< half frame rate ambiguity):</b> ${min_sync_distance.toFixed(3)} meters`;
     }
     // Initial calculation
     calculate();
