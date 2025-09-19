@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Frame Distance Calculator</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    label { display: block; margin-top: 1em; }
+    .result { margin-top: 2em; font-size: 1.2em; }
+  </style>
+</head>
+<body>
+  <h2>Maximum Distance Traveled in One Video Frame</h2>
+  <label>
+    Video FPS:
+    <input type="number" id="fps" value="30" min="1" step="any">
+  </label>
+  <label>
+    Sound Speed:
+    <select id="medium">
+      <option value="air">Air (343 m/s)</option>
+      <option value="water">Water (1500 m/s)</option>
+    </select>
+  </label>
+  <button onclick="calculate()">Calculate</button>
+  <div class="result" id="result"></div>
+  <script>
+    function calculate() {
+      const fps = parseFloat(document.getElementById('fps').value);
+      const medium = document.getElementById('medium').value;
+      const speed = medium === 'air' ? 343 : 1500;
+      if (isNaN(fps) || fps <= 0) {
+        document.getElementById('result').textContent = "Please enter a valid FPS.";
+        return;
+      }
+      const frame_time = 1 / fps;
+      const max_distance = speed * frame_time;
+      const min_sync_distance = max_distance / 2;
+      document.getElementById('result').innerHTML =
+        `<b>Maximum distance sound travels in one frame:</b> ${max_distance.toFixed(3)} meters<br>` +
+        `<b>Maximum acceptable distance from sound source to all devices for good synchronization:</b> ${min_sync_distance.toFixed(3)} meters`;
+    }
+    // Initial calculation
+    calculate();
+  </script>
+</body>
+</html>
