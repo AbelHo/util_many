@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text Encoder/Decoder</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .back-link {
+            display: inline-block;
+            color: #667eea;
+            text-decoration: none;
+            margin-bottom: 1rem;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .encoding-tabs {
+            display: flex;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #e9ecef;
+            flex-wrap: wrap;
+        }
+
+        .tab-button {
+            background: none;
+            border: none;
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s ease;
+            font-size: 1rem;
+            color: #666;
+        }
+
+        .tab-button.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            background: #f8f9fa;
+        }
+
+        .tab-button:hover {
+            background: #f8f9fa;
+        }
+
+        .encoder-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-label {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 0.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .char-count {
+            font-size: 0.9rem;
+            color: #666;
+            font-weight: normal;
+        }
+
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 1rem;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            resize: vertical;
+            line-height: 1.4;
+        }
+
+        textarea:focus {
+            border-color: #667eea;
+            outline: none;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+            font-size: 1rem;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .action-btn.secondary {
+            background: #6c757d;
+        }
+
+        .action-btn.secondary:hover {
+            background: #5a6268;
+        }
+
+        .format-options {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .format-options h4 {
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.5rem;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            accent-color: #667eea;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .success-message {
+            background: #d1edff;
+            color: #0c5460;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .encoding-info {
+            background: #e7f3ff;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: #0066cc;
+        }
+
+        @media (max-width: 768px) {
+            .encoder-section {
+                grid-template-columns: 1fr;
+            }
+            
+            .encoding-tabs {
+                flex-direction: column;
+            }
+            
+            .tab-button {
+                text-align: left;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="../index.html" class="back-link">← Back to Utilities</a>
+        
+        <div class="header">
+            <h1>📝 Text Encoder/Decoder</h1>
+            <p>Encode and decode text using various formats</p>
+        </div>
+
+        <div class="encoding-tabs">
+            <button class="tab-button active" onclick="switchTab('base64')">Base64</button>
+            <button class="tab-button" onclick="switchTab('url')">URL Encoding</button>
+            <button class="tab-button" onclick="switchTab('html')">HTML Entities</button>
+            <button class="tab-button" onclick="switchTab('unicode')">Unicode</button>
+            <button class="tab-button" onclick="switchTab('hex')">Hex</button>
+            <button class="tab-button" onclick="switchTab('binary')">Binary</button>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="success-message" id="successMessage"></div>
+
+        <div class="encoding-info" id="encodingInfo">
+            Base64 encoding is commonly used to encode binary data for transmission over text-based protocols.
+        </div>
+
+        <div class="format-options" id="formatOptions">
+            <!-- Format-specific options will be inserted here -->
+        </div>
+
+        <div class="encoder-section">
+            <div class="input-group">
+                <label class="input-label">
+                    Input Text:
+                    <span class="char-count" id="inputCount">0 characters</span>
+                </label>
+                <textarea id="inputText" placeholder="Enter text to encode/decode..."></textarea>
+            </div>
+
+            <div class="input-group">
+                <label class="input-label">
+                    Output:
+                    <span class="char-count" id="outputCount">0 characters</span>
+                </label>
+                <textarea id="outputText" placeholder="Encoded/decoded text will appear here..." readonly></textarea>
+            </div>
+        </div>
+
+        <div class="action-buttons">
+            <button class="action-btn" onclick="encodeText()">Encode</button>
+            <button class="action-btn" onclick="decodeText()">Decode</button>
+            <button class="action-btn secondary" onclick="swapTexts()">Swap ⇄</button>
+            <button class="action-btn secondary" onclick="clearAll()">Clear All</button>
+            <button class="action-btn secondary" onclick="copyOutput()">Copy Output</button>
+        </div>
+    </div>
+
+    <script>
+        let currentFormat = 'base64';
+
+        const formatInfo = {
+            base64: {
+                info: 'Base64 encoding is commonly used to encode binary data for transmission over text-based protocols.',
+                options: ''
+            },
+            url: {
+                info: 'URL encoding converts characters into a format that can be transmitted over the Internet.',
+                options: `
+                    <h4>URL Encoding Options:</h4>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="encodeSpaces" checked>
+                            <label for="encodeSpaces">Encode spaces as %20</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="encodeSpecial" checked>
+                            <label for="encodeSpecial">Encode special characters</label>
+                        </div>
+                    </div>
+                `
+            },
+            html: {
+                info: 'HTML entities are used to display reserved characters in HTML.',
+                options: `
+                    <h4>HTML Entity Options:</h4>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="namedEntities" checked>
+                            <label for="namedEntities">Use named entities when possible</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="encodeAll">
+                            <label for="encodeAll">Encode all non-ASCII characters</label>
+                        </div>
+                    </div>
+                `
+            },
+            unicode: {
+                info: 'Unicode escape sequences represent characters using their Unicode code points.',
+                options: `
+                    <h4>Unicode Options:</h4>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="jsFormat" checked>
+                            <label for="jsFormat">JavaScript format (\\u0000)</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="upperCase">
+                            <label for="upperCase">Uppercase hex digits</label>
+                        </div>
+                    </div>
+                `
+            },
+            hex: {
+                info: 'Hexadecimal encoding represents data as hexadecimal digits.',
+                options: `
+                    <h4>Hex Options:</h4>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="hexSpaces" checked>
+                            <label for="hexSpaces">Add spaces between bytes</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="hexUpperCase">
+                            <label for="hexUpperCase">Uppercase letters</label>
+                        </div>
+                    </div>
+                `
+            },
+            binary: {
+                info: 'Binary encoding represents text as sequences of 0s and 1s.',
+                options: `
+                    <h4>Binary Options:</h4>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="binarySpaces" checked>
+                            <label for="binarySpaces">Add spaces between bytes</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="binaryPadding" checked>
+                            <label for="binaryPadding">Pad to 8 bits</label>
+                        </div>
+                    </div>
+                `
+            }
+        };
+
+        function switchTab(format) {
+            // Update active tab
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            currentFormat = format;
+            
+            // Update info and options
+            document.getElementById('encodingInfo').textContent = formatInfo[format].info;
+            document.getElementById('formatOptions').innerHTML = formatInfo[format].options;
+            
+            // Clear messages
+            hideMessages();
+        }
+
+        function encodeText() {
+            const input = document.getElementById('inputText').value;
+            if (!input) {
+                showError('Please enter some text to encode');
+                return;
+            }
+
+            try {
+                let result;
+                switch (currentFormat) {
+                    case 'base64':
+                        result = btoa(unescape(encodeURIComponent(input)));
+                        break;
+                    case 'url':
+                        result = encodeURIComponent(input);
+                        break;
+                    case 'html':
+                        result = encodeHTML(input);
+                        break;
+                    case 'unicode':
+                        result = encodeUnicode(input);
+                        break;
+                    case 'hex':
+                        result = encodeHex(input);
+                        break;
+                    case 'binary':
+                        result = encodeBinary(input);
+                        break;
+                }
+                
+                document.getElementById('outputText').value = result;
+                updateCharCounts();
+                showSuccess('Text encoded successfully');
+            } catch (error) {
+                showError('Error encoding text: ' + error.message);
+            }
+        }
+
+        function decodeText() {
+            const input = document.getElementById('inputText').value;
+            if (!input) {
+                showError('Please enter some text to decode');
+                return;
+            }
+
+            try {
+                let result;
+                switch (currentFormat) {
+                    case 'base64':
+                        result = decodeURIComponent(escape(atob(input)));
+                        break;
+                    case 'url':
+                        result = decodeURIComponent(input);
+                        break;
+                    case 'html':
+                        result = decodeHTML(input);
+                        break;
+                    case 'unicode':
+                        result = decodeUnicode(input);
+                        break;
+                    case 'hex':
+                        result = decodeHex(input);
+                        break;
+                    case 'binary':
+                        result = decodeBinary(input);
+                        break;
+                }
+                
+                document.getElementById('outputText').value = result;
+                updateCharCounts();
+                showSuccess('Text decoded successfully');
+            } catch (error) {
+                showError('Error decoding text: ' + error.message);
+            }
+        }
+
+        function encodeHTML(text) {
+            const namedEntities = document.getElementById('namedEntities')?.checked ?? true;
+            const encodeAll = document.getElementById('encodeAll')?.checked ?? false;
+            
+            const entityMap = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            };
+            
+            let result = text;
+            
+            if (namedEntities) {
+                result = result.replace(/[&<>"']/g, match => entityMap[match]);
+            }
+            
+            if (encodeAll) {
+                result = result.replace(/[^\x20-\x7E]/g, char => 
+                    `&#${char.charCodeAt(0)};`
+                );
+            }
+            
+            return result;
+        }
+
+        function decodeHTML(text) {
+            const textarea = document.createElement('textarea');
+            textarea.innerHTML = text;
+            return textarea.value;
+        }
+
+        function encodeUnicode(text) {
+            const jsFormat = document.getElementById('jsFormat')?.checked ?? true;
+            const upperCase = document.getElementById('upperCase')?.checked ?? false;
+            
+            return text.replace(/./g, char => {
+                const code = char.charCodeAt(0);
+                if (code > 127) {
+                    const hex = code.toString(16);
+                    const padded = hex.padStart(4, '0');
+                    const formatted = upperCase ? padded.toUpperCase() : padded;
+                    return jsFormat ? `\\u${formatted}` : `U+${formatted}`;
+                }
+                return char;
+            });
+        }
+
+        function decodeUnicode(text) {
+            return text.replace(/\\u([0-9a-fA-F]{4})/g, (match, hex) => 
+                String.fromCharCode(parseInt(hex, 16))
+            ).replace(/U\+([0-9a-fA-F]{4})/g, (match, hex) => 
+                String.fromCharCode(parseInt(hex, 16))
+            );
+        }
+
+        function encodeHex(text) {
+            const addSpaces = document.getElementById('hexSpaces')?.checked ?? true;
+            const upperCase = document.getElementById('hexUpperCase')?.checked ?? false;
+            
+            const hex = Array.from(new TextEncoder().encode(text))
+                .map(byte => {
+                    const h = byte.toString(16).padStart(2, '0');
+                    return upperCase ? h.toUpperCase() : h;
+                });
+            
+            return addSpaces ? hex.join(' ') : hex.join('');
+        }
+
+        function decodeHex(text) {
+            const hex = text.replace(/\s+/g, '');
+            if (hex.length % 2 !== 0) {
+                throw new Error('Invalid hex string length');
+            }
+            
+            const bytes = [];
+            for (let i = 0; i < hex.length; i += 2) {
+                bytes.push(parseInt(hex.substr(i, 2), 16));
+            }
+            
+            return new TextDecoder().decode(new Uint8Array(bytes));
+        }
+
+        function encodeBinary(text) {
+            const addSpaces = document.getElementById('binarySpaces')?.checked ?? true;
+            const padding = document.getElementById('binaryPadding')?.checked ?? true;
+            
+            const binary = Array.from(new TextEncoder().encode(text))
+                .map(byte => {
+                    const bin = byte.toString(2);
+                    return padding ? bin.padStart(8, '0') : bin;
+                });
+            
+            return addSpaces ? binary.join(' ') : binary.join('');
+        }
+
+        function decodeBinary(text) {
+            const binary = text.replace(/\s+/g, '');
+            if (binary.length % 8 !== 0) {
+                throw new Error('Invalid binary string length');
+            }
+            
+            const bytes = [];
+            for (let i = 0; i < binary.length; i += 8) {
+                bytes.push(parseInt(binary.substr(i, 8), 2));
+            }
+            
+            return new TextDecoder().decode(new Uint8Array(bytes));
+        }
+
+        function swapTexts() {
+            const input = document.getElementById('inputText');
+            const output = document.getElementById('outputText');
+            
+            const temp = input.value;
+            input.value = output.value;
+            output.value = temp;
+            
+            updateCharCounts();
+        }
+
+        function clearAll() {
+            document.getElementById('inputText').value = '';
+            document.getElementById('outputText').value = '';
+            updateCharCounts();
+            hideMessages();
+        }
+
+        function copyOutput() {
+            const output = document.getElementById('outputText');
+            if (!output.value) {
+                showError('No output to copy');
+                return;
+            }
+            
+            navigator.clipboard.writeText(output.value).then(() => {
+                showSuccess('Output copied to clipboard');
+            });
+        }
+
+        function updateCharCounts() {
+            const input = document.getElementById('inputText').value;
+            const output = document.getElementById('outputText').value;
+            
+            document.getElementById('inputCount').textContent = `${input.length} characters`;
+            document.getElementById('outputCount').textContent = `${output.length} characters`;
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                successDiv.style.display = 'none';
+            }, 3000);
+        }
+
+        function hideMessages() {
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        // Event listeners
+        document.getElementById('inputText').addEventListener('input', updateCharCounts);
+        document.getElementById('outputText').addEventListener('input', updateCharCounts);
+
+        // Initialize
+        switchTab('base64');
+    </script>
+</body>
+</html>

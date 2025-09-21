@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Utility Collection - Many Useful Tools</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            color: white;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .utilities-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .utility-card {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .utility-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+
+        .utility-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        .utility-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            color: #333;
+        }
+
+        .utility-description {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        footer {
+            text-align: center;
+            color: white;
+            opacity: 0.8;
+            margin-top: 3rem;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .utilities-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛠️ Utility Collection</h1>
+            <p class="subtitle">A collection of useful standalone web tools</p>
+        </header>
+
+        <div class="utilities-grid">
+            <a href="utilities/qr-generator.html" class="utility-card">
+                <div class="utility-icon">🔗</div>
+                <div class="utility-title">QR Code Generator</div>
+                <div class="utility-description">Generate QR codes from any text, URL, or data. Perfect for sharing links and information quickly.</div>
+            </a>
+
+            <a href="utilities/password-generator.html" class="utility-card">
+                <div class="utility-icon">🔐</div>
+                <div class="utility-title">Password Generator</div>
+                <div class="utility-description">Create secure, customizable passwords with various options for length, characters, and complexity.</div>
+            </a>
+
+            <a href="utilities/color-palette.html" class="utility-card">
+                <div class="utility-icon">🎨</div>
+                <div class="utility-title">Color Palette Generator</div>
+                <div class="utility-description">Generate beautiful color palettes, explore color harmonies, and get color codes for your projects.</div>
+            </a>
+
+            <a href="utilities/text-encoder.html" class="utility-card">
+                <div class="utility-icon">📝</div>
+                <div class="utility-title">Text Encoder/Decoder</div>
+                <div class="utility-description">Encode and decode text using Base64, URL encoding, HTML entities, and more formats.</div>
+            </a>
+
+            <a href="utilities/json-formatter.html" class="utility-card">
+                <div class="utility-icon">📋</div>
+                <div class="utility-title">JSON Formatter</div>
+                <div class="utility-description">Format, validate, and beautify JSON data. Perfect for developers and API testing.</div>
+            </a>
+
+            <a href="utilities/unit-converter.html" class="utility-card">
+                <div class="utility-icon">📏</div>
+                <div class="utility-title">Unit Converter</div>
+                <div class="utility-description">Convert between different units of measurement including length, weight, temperature, and more.</div>
+            </a>
+        </div>
+
+        <footer>
+            <p>All tools run entirely in your browser - no data is sent to any server</p>
+        </footer>
+    </div>
+</body>
+</html>
