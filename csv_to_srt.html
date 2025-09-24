@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CSV/XLSX to SRT Converter</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 500px; margin: auto; }
+        input[type="file"] { margin-bottom: 20px; }
+        button { padding: 10px 20px; }
+        #result { margin-top: 20px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>CSV/XLSX to SRT Converter</h2>
+    <div id="drop-area" style="border:2px dashed #aaa; border-radius:8px; padding:30px; text-align:center; margin-bottom:20px; background:#fafafa;">
+        <p>Drag & drop your CSV or XLSX file here</p>
+        <input type="file" id="inputFile" accept=".csv,.xlsx" style="display:none;">
+        <button id="browseBtn" type="button">Browse File</button>
+    </div>
+    <button onclick="convertToSrt()">Convert & Download SRT</button>
+    <div id="result"></div>
+</div>
+<script>
+// Drag and drop logic
+const dropArea = document.getElementById('drop-area');
+const inputFile = document.getElementById('inputFile');
+const browseBtn = document.getElementById('browseBtn');
+let droppedFile = null;
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    dropArea.addEventListener(eventName, preventDefaults, false);
+});
+
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+dropArea.addEventListener('dragover', () => {
+    dropArea.style.background = '#e3e3e3';
+});
+dropArea.addEventListener('dragleave', () => {
+    dropArea.style.background = '#fafafa';
+});
+dropArea.addEventListener('drop', handleDrop, false);
+
+function handleDrop(e) {
+    dropArea.style.background = '#fafafa';
+    const dt = e.dataTransfer;
+    const files = dt.files;
+    if (files.length) {
+        inputFile.files = files;
+        droppedFile = files[0];
+        dropArea.querySelector('p').textContent = `Selected: ${droppedFile.name}`;
+    }
+}
+
+browseBtn.addEventListener('click', () => {
+    inputFile.click();
+});
+inputFile.addEventListener('change', () => {
+    if (inputFile.files.length) {
+        droppedFile = inputFile.files[0];
+        dropArea.querySelector('p').textContent = `Selected: ${droppedFile.name}`;
+    }
+});
+function secondsToSrtTime(seconds) {
+    seconds = parseFloat(seconds);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const millis = Math.round((seconds - Math.floor(seconds)) * 1000);
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(millis).padStart(3, '0')}`;
+}
+
+function convertToSrt() {
+    if (!droppedFile) {
+        alert('Please select or drop a CSV or XLSX file.');
+        return;
+    }
+    const file = droppedFile;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'csv') {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            processCsv(e.target.result, file.name);
+        };
+        reader.readAsText(file);
+    } else if (ext === 'xlsx') {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(firstSheet, {defval: ''});
+            processXlsx(json, file.name);
+        };
+        reader.readAsArrayBuffer(file);
+    } else {
+        alert('Unsupported file type.');
+    }
+}
+
+function processCsv(text, filename) {
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) {
+        alert('CSV file is empty or invalid.');
+        return;
+    }
+    let headers = lines[0].split(',');
+    let headerLine = 0;
+    const required = ['Start (s)', 'Stop (s)', 'Behavior type', 'Behavior', 'Subject'];
+    function getMissingHeaders(hdrs) {
+        return required.filter(col => hdrs.indexOf(col) === -1);
+    }
+    let missing = getMissingHeaders(headers);
+    if (missing.length && lines.length > 1) {
+        headers = lines[1].split(',');
+        headerLine = 1;
+        missing = getMissingHeaders(headers);
+    }
+    const startIdx = headers.indexOf('Start (s)');
+    const stopIdx = headers.indexOf('Stop (s)');
+    const typeIdx = headers.indexOf('Behavior type');
+    const behIdx = headers.indexOf('Behavior');
+    const subjIdx = headers.indexOf('Subject');
+    // If only Start (s) and Stop (s) are present, proceed and fill missing columns with empty string
+    if ((startIdx !== -1 && stopIdx !== -1) && (typeIdx === -1 || behIdx === -1 || subjIdx === -1)) {
+        let srt = '';
+        for (let i = headerLine + 1; i < lines.length; i++) {
+            const row = lines[i].split(',');
+            if (row.length < headers.length) continue;
+            const idx = i - headerLine;
+            const start = secondsToSrtTime(row[startIdx]);
+            const stop = secondsToSrtTime(row[stopIdx]);
+            const type = typeIdx !== -1 ? row[typeIdx].trim().toUpperCase() : '';
+            const beh = behIdx !== -1 ? row[behIdx].trim() : '';
+            const subj = subjIdx !== -1 ? row[subjIdx].trim() : '';
+            const text = `${type}: ${beh}(${subj})`;
+            srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+        }
+        downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
+        document.getElementById('result').innerText = 'Conversion complete!';
+        return;
+    }
+    if (missing.length) {
+        alert('CSV headers missing required columns: ' + missing.join(', '));
+        return;
+    }
+    let srt = '';
+    for (let i = headerLine + 1; i < lines.length; i++) {
+        const row = lines[i].split(',');
+        if (row.length < headers.length) continue;
+        const idx = i - headerLine;
+        const start = secondsToSrtTime(row[startIdx]);
+        const stop = secondsToSrtTime(row[stopIdx]);
+        const text = `${row[typeIdx].trim().toUpperCase()}: ${row[behIdx].trim()}(${row[subjIdx].trim()})`;
+        srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+    }
+    downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
+    document.getElementById('result').innerText = 'Conversion complete!';
+}
+
+function processXlsx(json, filename) {
+    // json is an array of objects, each representing a row
+    const required = ['Start (s)', 'Stop (s)', 'Behavior type', 'Behavior', 'Subject'];
+    let headerRow = 0;
+    function getMissingHeaders(obj) {
+        return required.filter(col => !(col in obj));
+    }
+    let missing = getMissingHeaders(json[0] || {});
+    if (missing.length && json.length > 1) {
+        missing = getMissingHeaders(json[1] || {});
+        if (!missing.length) headerRow = 1;
+    }
+    const hasStartStop = ('Start (s)' in json[headerRow]) && ('Stop (s)' in json[headerRow]);
+    // If only Start (s) and Stop (s) are present, proceed and fill missing columns with empty string
+    if (hasStartStop && missing.length) {
+        let srt = '';
+        for (let i = headerRow; i < json.length; i++) {
+            const row = json[i];
+            const idx = i - headerRow + 1;
+            const type = ('Behavior type' in row) ? row['Behavior type'].toString().trim().toUpperCase() : '';
+            const beh = ('Behavior' in row) ? row['Behavior'].toString().trim() : '';
+            const subj = ('Subject' in row) ? row['Subject'].toString().trim() : '';
+            const start = secondsToSrtTime(row['Start (s)']);
+            const stop = secondsToSrtTime(row['Stop (s)']);
+            const text = `${type}: ${beh}(${subj})`;
+            srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+        }
+        downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
+        document.getElementById('result').innerText = 'Conversion complete!';
+        return;
+    }
+    if (missing.length) {
+        alert('XLSX file missing required columns: ' + missing.join(', '));
+        return;
+    }
+    let srt = '';
+    for (let i = headerRow; i < json.length; i++) {
+        const row = json[i];
+        const idx = i - headerRow + 1;
+        const start = secondsToSrtTime(row['Start (s)']);
+        const stop = secondsToSrtTime(row['Stop (s)']);
+        const text = `${row['Behavior type'].toString().trim().toUpperCase()}: ${row['Behavior'].toString().trim()}(${row['Subject'].toString().trim()})`;
+        srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+    }
+    downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
+    document.getElementById('result').innerText = 'Conversion complete!';
+}
+
+function downloadSrt(srt, filename) {
+    const blob = new Blob([srt], { type: 'text/plain' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+</script>
+</body>
+</html>
