@@ -1,0 +1,76 @@
+name: Update README with HTML utilities
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '*.html'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Update README with HTML utilities
+      run: |
+        # Function to extract title from HTML file
+        extract_title() {
+          local file="$1"
+          # Try to extract title from <title> tag first
+          title=$(grep -o '<title[^>]*>[^<]*</title>' "$file" | sed 's/<title[^>]*>//;s/<\/title>//')
+          # If no title found, try to extract from h1 or h2 tags
+          if [ -z "$title" ]; then
+            title=$(grep -o '<h[12][^>]*>[^<]*</h[12]>' "$file" | head -1 | sed 's/<h[12][^>]*>//;s/<\/h[12]>//')
+          fi
+          # If still no title, use filename without extension
+          if [ -z "$title" ]; then
+            title=$(basename "$file" .html)
+          fi
+          echo "$title"
+        }
+        
+        # Start building the new README content
+        cat > README.md << 'EOF'
+        # util_many
+        Simple Utility Websites
+
+        ## Available Utilities
+
+        EOF
+        
+        # Find all HTML files and add them to README
+        for htmlfile in *.html; do
+          if [ -f "$htmlfile" ]; then
+            title=$(extract_title "$htmlfile")
+            # Create GitHub Pages URL (assuming GitHub Pages is enabled)
+            url="https://AbelHo.github.io/util_many/$htmlfile"
+            echo "- [$title]($url)" >> README.md
+          fi
+        done
+        
+        echo "" >> README.md
+    
+    - name: Check if README was changed
+      id: verify-changed-files
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Commit and push changes
+      if: steps.verify-changed-files.outputs.changed == 'true'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add README.md
+        git commit -m "Auto-update README with HTML utilities"
+        git push

@@ -1,0 +1,14 @@
+# Temporary files
+*.backup
+*.tmp
+.DS_Store
+
+# Editor files
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts (if any are added in the future)
+dist/
+build/
+node_modules/
