@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Camera Calibration FOV Calculator</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 600px; margin: auto; }
+        input[type="file"] { margin-bottom: 20px; }
+        button { padding: 10px 20px; }
+        #result { margin-top: 20px; }
+        textarea { width: 100%; min-height: 200px; margin-top: 10px; font-family: monospace; }
+        .fov { font-size: 1.2em; margin: 10px 0; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>Camera Calibration FOV Calculator</h2>
+    <div id="drop-area" style="border:2px dashed #aaa; border-radius:8px; padding:30px; text-align:center; margin-bottom:20px; background:#fafafa;">
+        <p>Drag & drop your calibration JSON file here</p>
+        <input type="file" id="inputFile" accept=".json" style="display:none;">
+        <button id="browseBtn" type="button">Browse File</button>
+    </div>
+    <div id="fov"></div>
+    <div id="result"></div>
+    <div id="edit-area" style="display:none;">
+        <h3>Edit JSON Data</h3>
+        <textarea id="jsonEdit"></textarea><br>
+        <button id="updateBtn">Update & Recalculate</button>
+    </div>
+</div>
+<script src="camera_fov.js"></script>
+</body>
+</html>
