@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Allow the action to push changes
-    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -40,12 +39,12 @@ jobs:
         
         # Start building the new README content
         cat > README.md << 'EOF'
-# [util_many](https://AbelHo.github.io/util_many/)
-Simple Utility Websites
+        # util_many
+        Simple Utility Websites
 
-## Available Utilities
+        ## Available Utilities
 
-EOF
+        EOF
         
         # Find all HTML files and add them to README
         for htmlfile in *.html; do
@@ -62,20 +61,14 @@ EOF
     - name: Check if README was changed
       id: verify-changed-files
       run: |
-        # Check if README.md was changed and if the last commit was NOT by the action itself
         if [ -n "$(git status --porcelain)" ]; then
-          last_commit_msg=$(git log -1 --pretty=%B)
-          if [[ "$last_commit_msg" == "Auto-update README with HTML utilities" ]]; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-          fi
+          echo "changed=true" >> $GITHUB_OUTPUT
         else
           echo "changed=false" >> $GITHUB_OUTPUT
         fi
     
     - name: Commit and push changes
-      if: ${{ steps.verify-changed-files.outputs.changed == 'true' }}
+      if: steps.verify-changed-files.outputs.changed == 'true'
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
