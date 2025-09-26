@@ -10,6 +10,8 @@ on:
 jobs:
   update-readme:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Allow the action to push changes
     
     steps:
     - name: Checkout repository
@@ -38,12 +40,12 @@ jobs:
         
         # Start building the new README content
         cat > README.md << 'EOF'
-        # util_many
-        Simple Utility Websites
+# [util_many](https://AbelHo.github.io/util_many/)
+Simple Utility Websites
 
-        ## Available Utilities
+## Available Utilities
 
-        EOF
+EOF
         
         # Find all HTML files and add them to README
         for htmlfile in *.html; do
