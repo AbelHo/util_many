@@ -11,6 +11,10 @@
         #result { margin-top: 20px; }
         textarea { width: 100%; min-height: 200px; margin-top: 10px; font-family: monospace; }
         .fov { font-size: 1.2em; margin: 10px 0; }
+        .section { margin-top: 32px; padding: 18px 16px; background: #f6f6f6; border-radius: 8px; }
+        .section label { display: block; margin: 8px 0 4px; }
+        .section input[type="number"] { width: 120px; }
+        .section .output { margin-top: 10px; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -28,7 +32,38 @@
         <textarea id="jsonEdit"></textarea><br>
         <button id="updateBtn">Update & Recalculate</button>
     </div>
+
+    <div class="section" id="manual-fov-section">
+        <h3>Manual FOV Angle Calculator</h3>
+        <label for="h_length">Horizontal field width (same units as distance):</label>
+        <input type="number" id="h_length" step="any" placeholder="e.g. 2.0">
+        <label for="v_length">Vertical field height (same units as distance):</label>
+        <input type="number" id="v_length" step="any" placeholder="e.g. 1.5">
+        <label for="distance">Perpendicular distance from camera to target:</label>
+        <input type="number" id="distance" step="any" placeholder="e.g. 3.0">
+        <br><br>
+        <button id="manualCalcBtn" type="button">Calculate</button>
+        <div class="output" id="manual-fov-output"></div>
+    </div>
 </div>
 <script src="camera_fov.js"></script>
+<script>
+// Manual FOV calculation logic
+document.getElementById('manualCalcBtn').onclick = function() {
+    const h = parseFloat(document.getElementById('h_length').value);
+    const v = parseFloat(document.getElementById('v_length').value);
+    const d = parseFloat(document.getElementById('distance').value);
+    let out = '';
+    if (isNaN(h) || isNaN(v) || isNaN(d) || d <= 0) {
+        out = 'Please enter valid positive numbers for all fields.';
+    } else {
+        // FOV = 2 * arctan((size/2) / distance)
+        const hFov = 2 * Math.atan((h/2)/d) * 180/Math.PI;
+        const vFov = 2 * Math.atan((v/2)/d) * 180/Math.PI;
+        out = `Horizontal FOV: ${hFov.toFixed(2)}°<br>Vertical FOV: ${vFov.toFixed(2)}°`;
+    }
+    document.getElementById('manual-fov-output').innerHTML = out;
+};
+</script>
 </body>
 </html>
