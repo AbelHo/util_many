@@ -10,7 +10,7 @@
   </style>
 </head>
 <body>
-  <h2>Maximum Distance Traveled in One Video Frame</h2>
+  <h2>Sound Sync Maximum Valid Distance Calculator</h2>
   <label>
     Video FPS:
     <input type="number" id="fps" value="30" min="1" step="any">
@@ -37,7 +37,7 @@
       const max_distance = speed * frame_time;
       const min_sync_distance = max_distance / 2;
       document.getElementById('result').innerHTML =
-        `<b>Maximum distance sound travels in one frame:</b> ${max_distance.toFixed(3)} meters<br><hr>` +
+        `<b>Distance sound travel in the time of one video frame:</b> ${max_distance.toFixed(3)} meters<br><hr>` +
         `<b>Maximum acceptable distance from sound source to all devices for good synchronization(< half frame rate ambiguity):</b> ${min_sync_distance.toFixed(3)} meters`;
     }
     // Initial calculation
