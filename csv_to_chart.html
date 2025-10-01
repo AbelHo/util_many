@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CSV Table Viewer & Editor</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
+    th, td { border: 1px solid #ccc; padding: 0.5em; text-align: left; }
+    th { background: #f0f0f0; }
+    td[contenteditable="true"] { background: #fffbe7; }
+    button { margin-right: 1em; }
+    #fileInput { margin-bottom: 1em; }
+    #plot-controls { margin-top: 2em; margin-bottom: 1em; }
+    #plot-container { margin-top: 1em; }
+    #chartType { margin-right: 1em; }
+  </style>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+  <h2>CSV Table Viewer & Editor</h2>
+  <input type="file" id="fileInput" accept=".csv">
+  <div id="drop-area" style="border: 2px dashed #aaa; border-radius: 8px; padding: 1.5em; text-align: center; color: #888; margin-bottom: 1em; background: #f9f9f9;">
+    <b>Drag & drop a CSV file here</b> or click above to select
+  </div>
+  <button onclick="downloadCSV()">Download CSV</button>
+  <script>
+    // Drag and drop support
+    window.addEventListener('DOMContentLoaded', function() {
+      const dropArea = document.getElementById('drop-area');
+      dropArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        dropArea.style.background = '#e0f7fa';
+        dropArea.style.color = '#00796b';
+      });
+      dropArea.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        dropArea.style.background = '#f9f9f9';
+        dropArea.style.color = '#888';
+      });
+      dropArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        dropArea.style.background = '#f9f9f9';
+        dropArea.style.color = '#888';
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          const file = files[0];
+          if (file.name.endsWith('.csv')) {
+            window.lastUploadedFilename = file.name;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+              currentCSV = e.target.result;
+              renderTable(currentCSV);
+            };
+            reader.readAsText(file);
+          } else {
+            alert('Please drop a .csv file.');
+          }
+        }
+      });
+    });
+  </script>
+  <div id="table-container">Loading...</div>
+  <div id="plot-controls">
+    <select id="chartType" onchange="refreshPlot()">
+      <option value="lines+markers">Line Chart</option>
+      <option value="bar">Bar Chart</option>
+    </select>
+    <button onclick="refreshPlot()">Refresh Plot</button>
+  </div>
+  <div id="plot-container"></div>
+
+  <script>
+    let currentCSV = "";
+
+    function parseCSV(csv) {
+      return csv.trim().split('\n').map(row => row.split(','));
+    }
+
+    function toCSV(data) {
+      return data.map(row => row.map(cell => cell.replace(/"/g, '""')).join(',')).join('\n');
+    }
+
+    function renderTable(csv) {
+      const data = parseCSV(csv);
+      const table = document.createElement('table');
+      // Header
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      data[0].forEach(header => {
+        const th = document.createElement('th');
+        th.textContent = header;
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      // Body
+      const tbody = document.createElement('tbody');
+      for (let i = 1; i < data.length; i++) {
+        const tr = document.createElement('tr');
+        data[i].forEach((cell, j) => {
+          const td = document.createElement('td');
+          td.contentEditable = "true";
+          td.textContent = cell;
+          td.addEventListener('input', () => {
+            updateCSVFromTable();
+            renderPlots();
+          });
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+
+      const container = document.getElementById('table-container');
+      container.innerHTML = '';
+      container.appendChild(table);
+
+      // Render plots after table is rendered
+      renderPlots();
+    }
+
+    function updateCSVFromTable() {
+      const table = document.querySelector('table');
+      const rows = Array.from(table.rows);
+      const data = rows.map(row =>
+        Array.from(row.cells).map(cell => cell.textContent)
+      );
+      currentCSV = toCSV(data);
+    }
+
+    function downloadCSV() {
+      updateCSVFromTable();
+      const blob = new Blob([currentCSV], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Use original filename if available, else fallback
+      let originalFilename = window.lastUploadedFilename || 'counts.csv';
+      let baseName = originalFilename.replace(/\.csv$/i, '');
+      let now = new Date();
+      let pad = n => n.toString().padStart(2, '0');
+      let timestamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      a.download = `${baseName}_${timestamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        currentCSV = e.target.result;
+        renderTable(currentCSV);
+      };
+      reader.readAsText(file);
+    });
+
+    // Fetch counts.csv from the same folder as this HTML file
+    fetch('sample/counts.csv')
+      .then(response => {
+        if (!response.ok) throw new Error("CSV file not found.");
+        return response.text();
+      })
+      .then(csv => {
+        currentCSV = csv;
+        renderTable(currentCSV);
+      })
+      .catch(err => {
+        document.getElementById('table-container').innerHTML = "<b>Could not load counts.csv from this folder.</b>";
+      });
+
+    // Plotting function
+    function renderPlots() {
+      const data = parseCSV(currentCSV);
+      if (data.length < 2) {
+        document.getElementById('plot-container').innerHTML = '';
+        return;
+      }
+      const headers = data[0];
+      const rows = data.slice(1);
+
+      // Parse datetime and numeric columns
+      const datetimes = rows.map(row => row[0]);
+      const chartType = document.getElementById('chartType').value;
+      let plots = [];
+      for (let col = 1; col < headers.length; col++) {
+        // Try to parse as numbers, skip if not possible
+        let y = rows.map(row => {
+          let v = row[col];
+          let n = Number(v);
+          return isNaN(n) ? null : n;
+        });
+        if (y.every(v => v === null)) continue;
+
+        plots.push({
+          x: datetimes,
+          y: y,
+          mode: chartType === "bar" ? undefined : chartType,
+          name: headers[col],
+          type: chartType
+        });
+      }
+
+      const layout = {
+        title: 'Counts vs. Datetime',
+        xaxis: { title: headers[0], type: 'date', automargin: true },
+        yaxis: { title: 'Value', automargin: true },
+        legend: { orientation: "h" }
+      };
+
+      Plotly.newPlot('plot-container', plots, layout, {responsive: true});
+    }
+
+    // Button to refresh plot according to latest edited table
+    function refreshPlot() {
+      updateCSVFromTable();
+      renderPlots();
+    }
+  </script>
+</body>
+</html>
