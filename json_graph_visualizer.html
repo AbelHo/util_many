@@ -186,7 +186,40 @@ function visualizeGraph(data) {
         interaction: { hover: true, tooltipDelay: 100 },
         physics: { stabilization: true }
     };
-    new vis.Network(container, networkData, options);
+    const network = new vis.Network(container, networkData, options);
+
+    // Click to edit node/edge
+    network.on('click', function(params) {
+        if (params.nodes.length > 0) {
+            // Node clicked
+            let nodeId = params.nodes[0];
+            let node = nodes.find(n => n.id == nodeId);
+            let newLabel = prompt('Edit node label:', node.label);
+            if (newLabel !== null) {
+                node.label = newLabel;
+                // Update table and graph
+                renderTables({nodes, edges});
+                visualizeGraph({nodes, edges});
+            }
+        } else if (params.edges.length > 0) {
+            // Edge clicked
+            let edgeId = params.edges[0];
+            let edge = edges[edgeId] || edges.find((e, i) => i == edgeId);
+            // Find edge by from/to/label
+            if (!edge) {
+                let visEdge = networkData.edges.get(edgeId);
+                edge = edges.find(e => e.from == visEdge.from && e.to == visEdge.to && e.label == visEdge.label);
+            }
+            if (edge) {
+                let newLabel = prompt('Edit edge label:', edge.label);
+                if (newLabel !== null) {
+                    edge.label = newLabel;
+                    renderTables({nodes, edges});
+                    visualizeGraph({nodes, edges});
+                }
+            }
+        }
+    });
 }
 
 function renderTables(json) {
