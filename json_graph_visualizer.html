@@ -11,6 +11,15 @@
         button { padding: 10px 20px; margin-bottom: 10px; }
         #result { margin-top: 20px; }
         #graph { width: 100%; height: 500px; border: 1px solid #ccc; background: #fff; }
+        #tables-flex {
+            display: flex;
+            gap: 32px;
+            margin-bottom: 1em;
+        }
+        .table-section {
+            flex: 1;
+            min-width: 280px;
+        }
     </style>
     <!-- Vis.js for graph visualization -->
     <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
@@ -25,13 +34,79 @@
         <button id="browseBtn" type="button">Browse File</button>
     </div>
     <div id="result"></div>
+    <button id="downloadJsonBtn" type="button">Download JSON</button>
+    <div id="tables-container"></div>
     <div id="graph"></div>
 </div>
 <script>
+// Load sample JSON on startup
+fetch('sample/vocalization_hierarchy.json')
+    .then(response => {
+        if (!response.ok) throw new Error("Sample JSON file not found.");
+        return response.text();
+    })
+    .then(jsonText => {
+        let json;
+        try {
+            json = JSON.parse(jsonText);
+        } catch (err) {
+            document.getElementById('result').innerText = 'Invalid sample JSON.';
+            return;
+        }
+        document.getElementById('result').innerText = "Loaded sample: vocalization_hierarchy.json";
+        currentJson = json;
+        renderTables(json);
+        visualizeGraph(json);
+    })
+    .catch(err => {
+        document.getElementById('result').innerHTML = "<b>Could not load sample/vocalization_hierarchy.json.</b>";
+    });
+document.getElementById('downloadJsonBtn').onclick = function() {
+    // Get current nodes and edges from the tables
+    let nodes = [];
+    let edges = [];
+    // Try to get from last renderTables call
+    const container = document.getElementById('tables-container');
+    const tables = container.getElementsByTagName('table');
+    if (tables.length >= 2) {
+        // Nodes table
+        const nodeRows = tables[0].rows;
+        for (let i = 1; i < nodeRows.length; i++) {
+            let id = nodeRows[i].cells[0].textContent;
+            let label = nodeRows[i].cells[1].textContent;
+            if (id !== '' || label !== '') nodes.push({id, label});
+        }
+        // Edges table
+        const edgeRows = tables[1].rows;
+        for (let i = 1; i < edgeRows.length; i++) {
+            let from = edgeRows[i].cells[0].textContent;
+            let to = edgeRows[i].cells[1].textContent;
+            let label = edgeRows[i].cells[2].textContent;
+            if (from !== '' || to !== '' || label !== '') edges.push({from, to, label});
+        }
+    }
+    let jsonOut = JSON.stringify({nodes, edges}, null, 2);
+    const blob = new Blob([jsonOut], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    // Use original filename if available, else fallback
+    let originalFilename = (window.droppedFile && window.droppedFile.name) || (window.uploadedFileName) || 'graph.json';
+    let baseName = originalFilename.replace(/\.json$/i, '');
+    let now = new Date();
+    let pad = n => n.toString().padStart(2, '0');
+    let timestamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    a.download = `${baseName}_${timestamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
 const dropArea = document.getElementById('drop-area');
 const inputFile = document.getElementById('inputFile');
 const browseBtn = document.getElementById('browseBtn');
 let droppedFile = null;
+let currentJson = null;
 
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
     dropArea.addEventListener(eventName, preventDefaults, false);
@@ -54,6 +129,7 @@ function handleDrop(e) {
     if (files.length) {
         inputFile.files = files;
         droppedFile = files[0];
+        window.droppedFile = droppedFile;
         dropArea.querySelector('p').textContent = `Selected: ${droppedFile.name}`;
         readAndVisualizeJson(droppedFile);
     }
@@ -64,6 +140,8 @@ browseBtn.addEventListener('click', () => {
 inputFile.addEventListener('change', () => {
     if (inputFile.files.length) {
         droppedFile = inputFile.files[0];
+        window.droppedFile = droppedFile;
+        window.uploadedFileName = droppedFile.name;
         dropArea.querySelector('p').textContent = `Selected: ${droppedFile.name}`;
         readAndVisualizeJson(droppedFile);
     }
@@ -79,6 +157,8 @@ function readAndVisualizeJson(file) {
             return;
         }
         document.getElementById('result').innerText = 'File loaded!';
+        currentJson = json;
+        renderTables(json);
         visualizeGraph(json);
     };
     reader.readAsText(file);
@@ -107,6 +187,137 @@ function visualizeGraph(data) {
         physics: { stabilization: true }
     };
     new vis.Network(container, networkData, options);
+}
+
+function renderTables(json) {
+    let nodes = Array.isArray(json.nodes) ? json.nodes : [];
+    let edges = Array.isArray(json.edges) ? json.edges : [];
+    // If top-level is array, try to infer
+    if (Array.isArray(json) && !json.nodes && !json.edges) {
+        nodes = json.filter(x => x.id !== undefined);
+        edges = json.filter(x => x.from !== undefined && x.to !== undefined);
+    }
+    const container = document.getElementById('tables-container');
+    container.innerHTML = '';
+    // Flex container for tables
+    const flexDiv = document.createElement('div');
+    flexDiv.id = 'tables-flex';
+    // Nodes section
+    const nodesSection = document.createElement('div');
+    nodesSection.className = 'table-section';
+    let nodesLabel = document.createElement('div');
+    nodesLabel.innerHTML = '<b>Nodes</b>';
+    const nodesTable = document.createElement('table');
+    nodesTable.style.marginBottom = '1em';
+    nodesTable.style.border = '1px solid #ccc';
+    let nodeHeaders = ['id', 'label'];
+    let nodeHeaderRow = document.createElement('tr');
+    nodeHeaders.forEach(h => {
+        let th = document.createElement('th');
+        th.textContent = h;
+        nodeHeaderRow.appendChild(th);
+    });
+    let thDelNode = document.createElement('th');
+    thDelNode.textContent = '';
+    nodeHeaderRow.appendChild(thDelNode);
+    nodesTable.appendChild(nodeHeaderRow);
+    nodes.forEach((node, i) => {
+        let tr = document.createElement('tr');
+        nodeHeaders.forEach((h, j) => {
+            let td = document.createElement('td');
+            td.contentEditable = 'true';
+            td.textContent = node[h] !== undefined ? node[h] : '';
+            td.addEventListener('input', () => {
+                nodes[i][h] = td.textContent;
+                visualizeGraph({nodes, edges});
+            });
+            tr.appendChild(td);
+        });
+        // Delete button for node
+        let delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.style.marginLeft = '0.5em';
+        delBtn.onclick = function() {
+            nodes.splice(i, 1);
+            renderTables({nodes, edges});
+            visualizeGraph({nodes, edges});
+        };
+        let tdDel = document.createElement('td');
+        tdDel.appendChild(delBtn);
+        tr.appendChild(tdDel);
+        nodesTable.appendChild(tr);
+    });
+    const addNodeBtn = document.createElement('button');
+    addNodeBtn.textContent = 'Add Node';
+    addNodeBtn.style.marginBottom = '1em';
+    addNodeBtn.onclick = function() {
+        nodes.push({id: '', label: ''});
+        renderTables({nodes, edges});
+        visualizeGraph({nodes, edges});
+    };
+    nodesSection.appendChild(nodesLabel);
+    nodesSection.appendChild(nodesTable);
+    nodesSection.appendChild(addNodeBtn);
+    // Edges section
+    const edgesSection = document.createElement('div');
+    edgesSection.className = 'table-section';
+    let edgesLabel = document.createElement('div');
+    edgesLabel.innerHTML = '<b>Edges</b>';
+    const edgesTable = document.createElement('table');
+    edgesTable.style.marginBottom = '1em';
+    edgesTable.style.border = '1px solid #ccc';
+    let edgeHeaders = ['from', 'to', 'label'];
+    let edgeHeaderRow = document.createElement('tr');
+    edgeHeaders.forEach(h => {
+        let th = document.createElement('th');
+        th.textContent = h;
+        edgeHeaderRow.appendChild(th);
+    });
+    let thDelEdge = document.createElement('th');
+    thDelEdge.textContent = '';
+    edgeHeaderRow.appendChild(thDelEdge);
+    edgesTable.appendChild(edgeHeaderRow);
+    edges.forEach((edge, i) => {
+        let tr = document.createElement('tr');
+        edgeHeaders.forEach((h, j) => {
+            let td = document.createElement('td');
+            td.contentEditable = 'true';
+            td.textContent = edge[h] !== undefined ? edge[h] : '';
+            td.addEventListener('input', () => {
+                edges[i][h] = td.textContent;
+                visualizeGraph({nodes, edges});
+            });
+            tr.appendChild(td);
+        });
+        // Delete button for edge
+        let delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.style.marginLeft = '0.5em';
+        delBtn.onclick = function() {
+            edges.splice(i, 1);
+            renderTables({nodes, edges});
+            visualizeGraph({nodes, edges});
+        };
+        let tdDel = document.createElement('td');
+        tdDel.appendChild(delBtn);
+        tr.appendChild(tdDel);
+        edgesTable.appendChild(tr);
+    });
+    const addEdgeBtn = document.createElement('button');
+    addEdgeBtn.textContent = 'Add Edge';
+    addEdgeBtn.style.marginBottom = '1em';
+    addEdgeBtn.onclick = function() {
+        edges.push({from: '', to: '', label: ''});
+        renderTables({nodes, edges});
+        visualizeGraph({nodes, edges});
+    };
+    edgesSection.appendChild(edgesLabel);
+    edgesSection.appendChild(edgesTable);
+    edgesSection.appendChild(addEdgeBtn);
+    // Add both sections to flex container
+    flexDiv.appendChild(nodesSection);
+    flexDiv.appendChild(edgesSection);
+    container.appendChild(flexDiv);
 }
 </script>
 </body>
