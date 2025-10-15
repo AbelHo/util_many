@@ -239,15 +239,17 @@ async function populateSampleDbDropdown() {
     try {
         // Try to fetch directory listing (works on GitHub Pages, some servers)
         const resp = await fetch('sample/');
-        if (!resp.ok) throw new Error('No directory listing');
-        const text = await resp.text();
-        // Try to extract .sqlite files from HTML directory listing
-        const regex = /href=["']([^"'>]+\.sqlite)["']/gi;
-        let match, files = [];
-        while ((match = regex.exec(text)) !== null) {
-            let fname = match[1];
-            if (!fname.startsWith('http') && !fname.startsWith('/')) fname = 'sample/' + fname.replace(/^\/?/, '');
-            files.push(fname);
+        let files = [];
+        if (resp.ok) {
+            const text = await resp.text();
+            // Try to extract .sqlite files from HTML directory listing
+            const regex = /href=["']([^"'>]+\.sqlite)["']/gi;
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                let fname = match[1];
+                if (!fname.startsWith('http') && !fname.startsWith('/')) fname = 'sample/' + fname.replace(/^\/?/, '');
+                files.push(fname);
+            }
         }
         select.innerHTML = '<option value="">-- Select a sample database --</option>';
         files.forEach(f => {
@@ -258,10 +260,38 @@ async function populateSampleDbDropdown() {
             select.appendChild(opt);
         });
         if (files.length === 0) {
-            select.innerHTML = '<option value="">(No .sqlite files found in sample/)</option>';
+            // Try to fetch sample/example.sqlite directly
+            try {
+                const testResp = await fetch('sample/example.sqlite');
+                if (testResp.ok) {
+                    // Add it to the dropdown and select it
+                    const opt = document.createElement('option');
+                    opt.value = 'sample/example.sqlite';
+                    opt.textContent = 'example.sqlite';
+                    select.appendChild(opt);
+                } else {
+                    select.innerHTML = '<option value="">(No .sqlite files found in sample/)</option>';
+                }
+            } catch {
+                select.innerHTML = '<option value="">(No .sqlite files found in sample/)</option>';
+            }
         }
     } catch (e) {
-        select.innerHTML = '<option value="">(Could not list sample/ directory)</option>';
+        // If directory listing fails, still try to fetch sample/example.sqlite
+        try {
+            const testResp = await fetch('sample/example.sqlite');
+            if (testResp.ok) {
+                select.innerHTML = '<option value="">-- Select a sample database --</option>';
+                const opt = document.createElement('option');
+                opt.value = 'sample/example.sqlite';
+                opt.textContent = 'example.sqlite';
+                select.appendChild(opt);
+            } else {
+                select.innerHTML = '<option value="">(Could not list sample/ directory)</option>';
+            }
+        } catch {
+            select.innerHTML = '<option value="">(Could not list sample/ directory)</option>';
+        }
     }
 }
 
