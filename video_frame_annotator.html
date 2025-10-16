@@ -23,10 +23,18 @@
   <div class="row">
     <input id="fileInput" type="file" accept="video/*" />
     <label><input id="frameStepInput" type="number" value="1" min="1" style="width:80px"> frames per step</label>
+    <label title="Estimated FPS (editable)"><strong>FPS:</strong> <input id="fpsInput" type="number" step="0.01" style="width:80px"> <span id="fpsWarn" style="color:crimson; margin-left:6px; visibility:hidden;" title="FPS is estimated — double-click to edit">⚠</span></label>
     <label><input id="exportFormat" type="radio" name="format" value="json" checked> JSON</label>
     <label><input id="exportFormatCsv" type="radio" name="format" value="csv"> CSV</label>
     <button id="exportBtn">Export</button>
+    <button id="undoBtn">Undo</button>
+    <button id="redoBtn">Redo</button>
     <button id="clearBtn">Clear All Markers</button>
+  </div>
+  <div class="row">
+    <label>Go to frame: <input id="gotoFrameInput" type="number" min="0" style="width:120px"></label>
+    <button id="gotoFrameBtn">Go</button>
+    <button id="firstFrameBtn">First Frame</button>
   </div>
 
   <div id="player">
@@ -69,10 +77,22 @@
   const frameStepInput = document.getElementById('frameStepInput');
   const exportFormat = document.getElementById('exportFormat');
   const exportFormatCsv = document.getElementById('exportFormatCsv');
+  const fpsInput = document.getElementById('fpsInput');
+  const fpsWarn = document.getElementById('fpsWarn');
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  const gotoFrameInput = document.getElementById('gotoFrameInput');
+  const gotoFrameBtn = document.getElementById('gotoFrameBtn');
+  const firstFrameBtn = document.getElementById('firstFrameBtn');
 
   // Data structure: map frameNumber -> array of {x, y} in pixel coordinates relative to video natural size
   const markers = {};
   let detectedFPS = null; // will hold detected fps when available
+  let uploadedFilename = null;
+
+  // Undo/redo stacks: store simple operations {type:'add'|'remove'|'clear-frame'|'clear-all', frame, point, prevState}
+  const undoStack = [];
+  const redoStack = [];
 
   let rafId = null;
   let playing = false;
@@ -153,7 +173,9 @@
 
   // Heuristic to estimate fps from media (some videos don't expose fps); fallback to 25
   function estimateFPS() {
-    // Prefer detectedFPS (from media metadata), otherwise fallback to 25
+    // Prefer user-entered FPS, then detectedFPS, otherwise fallback to 25
+    const user = parseFloat(fpsInput.value);
+    if (isFinite(user) && user > 0) return user;
     if (detectedFPS && isFinite(detectedFPS) && detectedFPS > 0) return detectedFPS;
     const defaultFPS = 25;
     // Try to infer from video.getVideoPlaybackQuality() if available (best-effort)
@@ -217,6 +239,7 @@
   fileInput.addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+    uploadedFilename = file.name;
     const url = URL.createObjectURL(file);
     video.src = url;
     video.load();
@@ -252,6 +275,8 @@
         }
         updateFrameLabels();
         drawFrameOverlay();
+        // reflect detectedFPS in UI
+        if (detectedFPS) { fpsInput.value = detectedFPS; fpsWarn.style.visibility = 'visible'; }
       };
       probe();
     }, { once: true });
@@ -264,6 +289,7 @@
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
     if (!f) return;
     fileInput.files = e.dataTransfer.files;
+    uploadedFilename = f.name;
     const url = URL.createObjectURL(f);
     video.src = url;
     video.load();
@@ -291,10 +317,15 @@
         const d = Math.hypot(arr[i].x - x, arr[i].y - y);
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
-      if (bestDist < 20) { arr.splice(bestIdx, 1); markers[frame] = arr; }
+      if (bestDist < 20) {
+        const removed = arr.splice(bestIdx, 1)[0]; markers[frame] = arr;
+        undoStack.push({ type: 'remove', frame, point: removed }); redoStack.length = 0;
+      }
     } else {
       if (!markers[frame]) markers[frame] = [];
-      markers[frame].push({ x: Math.round(x), y: Math.round(y) });
+      const pt = { x: Math.round(x), y: Math.round(y) };
+      markers[frame].push(pt);
+      undoStack.push({ type: 'add', frame, point: pt }); redoStack.length = 0;
     }
     drawFrameOverlay();
   });
@@ -312,6 +343,19 @@
       const timeSec = +(frameNum / fps).toFixed(4);
       out.push({ frame: frameNum, time: timeSec, points: pts.map(p=>({ x: p.x, y: p.y })) });
     }
+    // produce a safe filename base from uploaded filename or default
+    function safeBaseName(name) {
+      if (!name) return 'markers';
+      // strip extension and unsafe chars
+      const base = name.replace(/\.[^.]+$/, '');
+      return base.replace(/[^a-zA-Z0-9-_\.]/g, '_');
+    }
+    const base = safeBaseName(uploadedFilename);
+  // local YYYYMMDD_HHMMSS
+  const dt = new Date();
+  const pad = (n, z=2) => String(n).padStart(z,'0');
+  const tsForName = `${dt.getFullYear()}${pad(dt.getMonth()+1)}${pad(dt.getDate())}_${pad(dt.getHours())}${pad(dt.getMinutes())}${pad(dt.getSeconds())}`;
+  const outNameBase = `${base}_${tsForName}`;
     if (wantCsv) {
       // CSV columns: frame,time_seconds,point_index,x,y
       let rows = ['frame,time_seconds,point_index,x,y'];
@@ -323,20 +367,74 @@
       const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'markers.csv';
+      a.download = outNameBase + '.csv';
       document.body.appendChild(a);
       a.click();
       a.remove();
     } else {
-      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      // include metadata: filename and export timestamp
+      const exportMeta = { filename: uploadedFilename || null, exported_at: new Date().toISOString(), fps: estimateFPS() };
+      const blob = new Blob([JSON.stringify({ meta: exportMeta, markers: out }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'markers.json';
+      a.download = outNameBase + '.json';
       document.body.appendChild(a);
       a.click();
       a.remove();
     }
   });
+
+  // Undo / Redo logic
+  undoBtn.addEventListener('click', () => { performUndo(); });
+  redoBtn.addEventListener('click', () => { performRedo(); });
+
+  function performUndo() {
+    const op = undoStack.pop(); if (!op) return;
+    if (op.type === 'add') {
+      const arr = markers[op.frame] || [];
+      const idx = arr.findIndex(p => p.x === op.point.x && p.y === op.point.y);
+      if (idx >= 0) arr.splice(idx,1);
+      redoStack.push(op);
+    } else if (op.type === 'remove') {
+      if (!markers[op.frame]) markers[op.frame] = [];
+      markers[op.frame].push(op.point);
+      redoStack.push(op);
+    } else if (op.type === 'clear-frame') {
+      markers[op.frame] = op.prevState || [];
+      redoStack.push(op);
+    } else if (op.type === 'clear-all') {
+      // restore prevState which is a shallow copy
+      for (const k in markers) delete markers[k];
+      Object.assign(markers, op.prevState || {});
+      redoStack.push(op);
+    }
+    drawFrameOverlay();
+  }
+
+  function performRedo() {
+    const op = redoStack.pop(); if (!op) return;
+    if (op.type === 'add') {
+      if (!markers[op.frame]) markers[op.frame] = [];
+      markers[op.frame].push(op.point);
+      undoStack.push(op);
+    } else if (op.type === 'remove') {
+      const arr = markers[op.frame] || [];
+      const idx = arr.findIndex(p => p.x === op.point.x && p.y === op.point.y);
+      if (idx >= 0) arr.splice(idx,1);
+      undoStack.push(op);
+    } else if (op.type === 'clear-frame') {
+      const prev = markers[op.frame];
+      op.prevState = prev;
+      delete markers[op.frame];
+      undoStack.push(op);
+    } else if (op.type === 'clear-all') {
+      const prev = {};
+      for (const k in markers) prev[k] = markers[k];
+      for (const k in markers) delete markers[k];
+      undoStack.push(op);
+    }
+    drawFrameOverlay();
+  }
 
   // Keyboard shortcuts
   // Left/Right: prev/next frame, Space: play/pause, C: clear markers for current frame, D: delete nearest (same as shift+click), S: export
@@ -347,7 +445,7 @@
     else if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
     else if (e.key === ' ') { e.preventDefault(); playPauseBtn.click(); }
     else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); // clear current frame markers
-      const f = getCurrentFrameIndex(); if (markers[f]) { delete markers[f]; drawFrameOverlay(); }
+      const f = getCurrentFrameIndex(); if (markers[f]) { const prev = markers[f].slice(); undoStack.push({ type:'clear-frame', frame:f, prevState: prev }); delete markers[f]; drawFrameOverlay(); }
     }
     else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); // delete nearest marker to center (user can move mouse then press D)
       // find mouse position over canvas; if none, use center
@@ -372,9 +470,24 @@
   canvas.addEventListener('mousemove', (ev) => { lastMousePos.x = ev.clientX; lastMousePos.y = ev.clientY; });
 
   clearBtn.addEventListener('click', () => {
+    const prev = {};
+    for (const k in markers) prev[k] = markers[k];
+    undoStack.push({ type: 'clear-all', prevState: prev });
     for (const k in markers) delete markers[k];
     drawFrameOverlay();
   });
+
+  // goto frame
+  gotoFrameBtn.addEventListener('click', () => {
+    const v = parseInt(gotoFrameInput.value);
+    if (!isFinite(v) || v < 0) return;
+    seekToFrame(v);
+  });
+  firstFrameBtn.addEventListener('click', () => { seekToFrame(0); });
+
+  // Show FPS warning on hover (tooltip handled by title); make icon visible if fps is estimated
+  fpsWarn.addEventListener('dblclick', () => { fpsInput.removeAttribute('readonly'); fpsInput.focus(); });
+  fpsInput.addEventListener('input', () => { fpsWarn.style.visibility = 'hidden'; });
 
   // small UI update loop to keep labels updated when video playing or seeking
   setInterval(() => {
