@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Video Frame Annotator</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; margin: 20px; }
+    #player { display:flex; gap:20px; align-items:flex-start; }
+    video, canvas { background: #111; max-width: 80vw; border: 1px solid #ccc; }
+    .controls { display:flex; gap:8px; flex-direction:column; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    button { padding:6px 10px; }
+    #pointsList { max-height:200px; overflow:auto; border:1px solid #eee; padding:8px; }
+    .point-item { font-size:13px; }
+    .hint { color:#666; font-size:13px; }
+  </style>
+</head>
+<body>
+  <h2>Video Frame Annotator</h2>
+  <p class="hint">Upload a video, navigate frames, click on the canvas to add a marker (shift+click to remove nearest). Export markers as JSON.</p>
+
+  <div class="row">
+    <input id="fileInput" type="file" accept="video/*" />
+    <label><input id="frameStepInput" type="number" value="1" min="1" style="width:80px"> frames per step</label>
+    <label><input id="exportFormat" type="radio" name="format" value="json" checked> JSON</label>
+    <label><input id="exportFormatCsv" type="radio" name="format" value="csv"> CSV</label>
+    <button id="exportBtn">Export</button>
+    <button id="clearBtn">Clear All Markers</button>
+  </div>
+
+  <div id="player">
+    <div>
+      <video id="video" crossorigin="anonymous" playsinline></video>
+      <canvas id="canvas"></canvas>
+      <div class="row">
+        <button id="prevBtn">◀ Prev</button>
+        <button id="nextBtn">Next ▶</button>
+        <button id="playPauseBtn">Play</button>
+        <label>Frame: <span id="frameIndex">0</span>/<span id="frameCount">0</span></label>
+      </div>
+      <div class="row">
+        <label>Current frame markers: <span id="markerCount">0</span></label>
+        <span class="hint">(click canvas to add, shift+click to remove nearest)</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div><strong>Markers per frame</strong></div>
+      <div id="pointsList">No frame loaded.</div>
+    </div>
+  </div>
+
+  <script>
+  // Minimal, standalone video frame annotator tool.
+  const fileInput = document.getElementById('fileInput');
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const playPauseBtn = document.getElementById('playPauseBtn');
+  const frameIndexLabel = document.getElementById('frameIndex');
+  const frameCountLabel = document.getElementById('frameCount');
+  const markerCountLabel = document.getElementById('markerCount');
+  const pointsList = document.getElementById('pointsList');
+  const exportBtn = document.getElementById('exportBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const frameStepInput = document.getElementById('frameStepInput');
+  const exportFormat = document.getElementById('exportFormat');
+  const exportFormatCsv = document.getElementById('exportFormatCsv');
+
+  // Data structure: map frameNumber -> array of {x, y} in pixel coordinates relative to video natural size
+  const markers = {};
+  let detectedFPS = null; // will hold detected fps when available
+
+  let rafId = null;
+  let playing = false;
+
+  function resetCanvasSize() {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) return;
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.width = Math.min(w, window.innerWidth*0.75) + 'px';
+    canvas.style.height = (canvas.height * (parseInt(canvas.style.width)/canvas.width)) + 'px';
+  }
+
+  function drawFrameOverlay() {
+    if (!video.videoWidth) return;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // draw current video frame into canvas
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    } catch(e) {
+      // drawImage may fail if video not ready
+    }
+
+    // draw markers for current frame
+    const frame = getCurrentFrameIndex();
+    const arr = markers[frame] || [];
+    for (let i = 0; i < arr.length; i++) {
+      const p = arr[i];
+      drawMarker(p.x, p.y, i+1);
+    }
+    markerCountLabel.textContent = arr.length;
+    renderPointsList(frame, arr);
+  }
+
+  function drawMarker(x, y, index) {
+    ctx.save();
+    ctx.strokeStyle = 'lime';
+    ctx.fillStyle = 'rgba(0,255,0,0.7)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = 'black';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(String(index), x+8, y+4);
+    ctx.restore();
+  }
+
+  function renderPointsList(frame, arr) {
+    pointsList.innerHTML = '';
+    const title = document.createElement('div');
+    title.textContent = 'Frame ' + frame + ' — ' + arr.length + ' point(s)';
+    title.style.fontWeight = '600';
+    title.style.marginBottom = '6px';
+    pointsList.appendChild(title);
+    if (arr.length === 0) {
+      const note = document.createElement('div');
+      note.textContent = 'No markers for this frame.';
+      pointsList.appendChild(note);
+      return;
+    }
+    arr.forEach((p, i) => {
+      const d = document.createElement('div');
+      d.className = 'point-item';
+      d.textContent = `${i+1}: x=${Math.round(p.x)}, y=${Math.round(p.y)}`;
+      pointsList.appendChild(d);
+    });
+  }
+
+  // Convert video currentTime to frame index (integer)
+  function getCurrentFrameIndex() {
+    const fps = estimateFPS();
+    const frame = Math.round(video.currentTime * fps);
+    return frame;
+  }
+
+  // Heuristic to estimate fps from media (some videos don't expose fps); fallback to 25
+  function estimateFPS() {
+    // Prefer detectedFPS (from media metadata), otherwise fallback to 25
+    if (detectedFPS && isFinite(detectedFPS) && detectedFPS > 0) return detectedFPS;
+    const defaultFPS = 25;
+    // Try to infer from video.getVideoPlaybackQuality() if available (best-effort)
+    try {
+      if (video.getVideoPlaybackQuality) {
+        const q = video.getVideoPlaybackQuality();
+        if (q && q.totalVideoFrames && video.duration) {
+          const guessed = q.totalVideoFrames / video.duration;
+          if (isFinite(guessed) && guessed > 1 && guessed < 1000) return Math.round(guessed);
+        }
+      }
+    } catch(e) {}
+    return defaultFPS;
+  }
+
+  // Seek to a specific frame index
+  function seekToFrame(frameIndex) {
+    const fps = estimateFPS();
+    video.currentTime = frameIndex / fps;
+  }
+
+  function updateFrameLabels() {
+    const fps = estimateFPS();
+    const totalFrames = Math.max(0, Math.round(video.duration * fps));
+    frameCountLabel.textContent = totalFrames;
+    frameIndexLabel.textContent = getCurrentFrameIndex();
+  }
+
+  // Navigation
+  prevBtn.addEventListener('click', () => {
+    const step = parseInt(frameStepInput.value) || 1;
+    const idx = getCurrentFrameIndex() - step;
+    seekToFrame(Math.max(0, idx));
+  });
+  nextBtn.addEventListener('click', () => {
+    const step = parseInt(frameStepInput.value) || 1;
+    const idx = getCurrentFrameIndex() + step;
+    seekToFrame(Math.max(0, idx));
+  });
+
+  playPauseBtn.addEventListener('click', () => {
+    if (playing) { video.pause(); } else { video.play(); }
+  });
+
+  video.addEventListener('play', () => { playing = true; playPauseBtn.textContent = 'Pause'; tick(); });
+  video.addEventListener('pause', () => { playing = false; playPauseBtn.textContent = 'Play'; cancelAnimationFrame(rafId); });
+
+  function tick() {
+    drawFrameOverlay();
+    updateFrameLabels();
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // When seeking completes, redraw overlay
+  video.addEventListener('seeked', () => {
+    drawFrameOverlay();
+    updateFrameLabels();
+  });
+
+  // File input
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    video.src = url;
+    video.load();
+    video.addEventListener('loadedmetadata', () => {
+      resetCanvasSize();
+      // Attempt to read FPS from file metadata if available via mediaTracks (some browsers expose frameRate)
+      detectedFPS = null;
+      try {
+        const tracks = video.webkitVideoDecodedByteCount !== undefined ? video.webkitDecodedFrameCount : null;
+      } catch(e) {}
+      // Some browsers expose frameRate on the first video track via mediaStreamTrack.getSettings (rare on local files)
+      // We'll also try to probe playback quality after a short play to populate totalVideoFrames
+      drawFrameOverlay();
+      updateFrameLabels();
+      // quick probe: play briefly muted to let getVideoPlaybackQuality gather frames
+      const probe = async () => {
+        try {
+          video.muted = true;
+          await video.play();
+          await new Promise(r => setTimeout(r, 200));
+          video.pause();
+          video.muted = false;
+          // try to compute fps from playbackQuality
+          if (video.getVideoPlaybackQuality) {
+            const q = video.getVideoPlaybackQuality();
+            if (q && q.totalVideoFrames && video.duration) {
+              const guessed = q.totalVideoFrames / video.duration;
+              if (isFinite(guessed) && guessed > 1 && guessed < 1000) detectedFPS = Math.round(guessed);
+            }
+          }
+        } catch(e) {
+          // ignore probe errors
+        }
+        updateFrameLabels();
+        drawFrameOverlay();
+      };
+      probe();
+    }, { once: true });
+  });
+
+  // Drag & drop support for the whole document
+  ['dragenter','dragover'].forEach(evt => document.addEventListener(evt, (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }));
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    fileInput.files = e.dataTransfer.files;
+    const url = URL.createObjectURL(f);
+    video.src = url;
+    video.load();
+    video.addEventListener('loadedmetadata', () => { resetCanvasSize(); drawFrameOverlay(); updateFrameLabels(); }, { once: true });
+  });
+
+  // Canvas click to add/remove markers
+  canvas.addEventListener('click', (ev) => {
+    if (!video.videoWidth || !video.videoHeight) return;
+    // get click relative to displayed canvas size then map to natural pixels
+    const rect = canvas.getBoundingClientRect();
+    const cssX = ev.clientX - rect.left;
+    const cssY = ev.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = cssX * scaleX;
+    const y = cssY * scaleY;
+    const frame = getCurrentFrameIndex();
+    if (ev.shiftKey) {
+      // remove nearest point within threshold
+      const arr = markers[frame] || [];
+      if (arr.length === 0) return;
+      let bestIdx = -1; let bestDist = Infinity;
+      for (let i=0;i<arr.length;i++){
+        const d = Math.hypot(arr[i].x - x, arr[i].y - y);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+      if (bestDist < 20) { arr.splice(bestIdx, 1); markers[frame] = arr; }
+    } else {
+      if (!markers[frame]) markers[frame] = [];
+      markers[frame].push({ x: Math.round(x), y: Math.round(y) });
+    }
+    drawFrameOverlay();
+  });
+
+  // Export JSON
+  exportBtn.addEventListener('click', () => {
+    const wantCsv = exportFormatCsv.checked;
+    // Build array of {frame, time, points:[{x,y}, ...]}
+    const fps = estimateFPS();
+    const out = [];
+    for (const k of Object.keys(markers).sort((a,b)=>Number(a)-Number(b))) {
+      const pts = markers[k];
+      if (!pts || pts.length === 0) continue;
+      const frameNum = Number(k);
+      const timeSec = +(frameNum / fps).toFixed(4);
+      out.push({ frame: frameNum, time: timeSec, points: pts.map(p=>({ x: p.x, y: p.y })) });
+    }
+    if (wantCsv) {
+      // CSV columns: frame,time_seconds,point_index,x,y
+      let rows = ['frame,time_seconds,point_index,x,y'];
+      out.forEach(item => {
+        item.points.forEach((p, i) => {
+          rows.push(`${item.frame},${item.time},${i+1},${p.x},${p.y}`);
+        });
+      });
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'markers.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } else {
+      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'markers.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  });
+
+  // Keyboard shortcuts
+  // Left/Right: prev/next frame, Space: play/pause, C: clear markers for current frame, D: delete nearest (same as shift+click), S: export
+  document.addEventListener('keydown', (e) => {
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return; // don't hijack typing
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prevBtn.click(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
+    else if (e.key === ' ') { e.preventDefault(); playPauseBtn.click(); }
+    else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); // clear current frame markers
+      const f = getCurrentFrameIndex(); if (markers[f]) { delete markers[f]; drawFrameOverlay(); }
+    }
+    else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); // delete nearest marker to center (user can move mouse then press D)
+      // find mouse position over canvas; if none, use center
+      const rect = canvas.getBoundingClientRect();
+      const mx = (lastMousePos.x !== undefined) ? lastMousePos.x : rect.left + rect.width/2;
+      const my = (lastMousePos.y !== undefined) ? lastMousePos.y : rect.top + rect.height/2;
+      const cssX = mx - rect.left; const cssY = my - rect.top;
+      const scaleX = canvas.width / rect.width; const scaleY = canvas.height / rect.height;
+      const x = cssX * scaleX; const y = cssY * scaleY;
+      const frame = getCurrentFrameIndex();
+      const arr = markers[frame] || [];
+      if (arr.length === 0) return;
+      let bestIdx = -1; let bestDist = Infinity;
+      for (let i=0;i<arr.length;i++){ const d = Math.hypot(arr[i].x - x, arr[i].y - y); if (d < bestDist) { bestDist = d; bestIdx = i; } }
+      if (bestDist < 40) { arr.splice(bestIdx,1); markers[frame] = arr; drawFrameOverlay(); }
+    }
+    else if (e.key === 's' || e.key === 'S') { e.preventDefault(); exportBtn.click(); }
+  });
+
+  // track last mouse pos over canvas for keyboard delete
+  let lastMousePos = {};
+  canvas.addEventListener('mousemove', (ev) => { lastMousePos.x = ev.clientX; lastMousePos.y = ev.clientY; });
+
+  clearBtn.addEventListener('click', () => {
+    for (const k in markers) delete markers[k];
+    drawFrameOverlay();
+  });
+
+  // small UI update loop to keep labels updated when video playing or seeking
+  setInterval(() => {
+    if (video.readyState >= 2) {
+      updateFrameLabels();
+    }
+  }, 250);
+
+  // Initial placeholder canvas size
+  canvas.width = 640; canvas.height = 360;
+  ctx.fillStyle = '#222'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#999'; ctx.font = '14px sans-serif'; ctx.fillText('Load a video to start', 10, 30);
+  </script>
+</body>
+</html>
