@@ -24,8 +24,8 @@
     <input id="fileInput" type="file" accept="video/*" />
     <label><input id="frameStepInput" type="number" value="1" min="1" style="width:80px"> frames per step</label>
     <label title="Estimated FPS (editable)"><strong>FPS:</strong> <input id="fpsInput" type="number" step="0.01" style="width:80px"> <span id="fpsWarn" style="color:crimson; margin-left:6px; visibility:hidden;" title="FPS is estimated — double-click to edit">⚠</span></label>
-    <label><input id="exportFormat" type="radio" name="format" value="json" checked> JSON</label>
-    <label><input id="exportFormatCsv" type="radio" name="format" value="csv"> CSV</label>
+    <label><input id="exportFormat" type="radio" name="format" value="json"> JSON</label>
+    <label><input id="exportFormatCsv" type="radio" name="format" value="csv" checked> CSV</label>
     <button id="exportBtn">Export</button>
     <button id="undoBtn">Undo</button>
     <button id="redoBtn">Redo</button>
@@ -500,6 +500,54 @@
   canvas.width = 640; canvas.height = 360;
   ctx.fillStyle = '#222'; ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.fillStyle = '#999'; ctx.font = '14px sans-serif'; ctx.fillText('Load a video to start', 10, 30);
+  </script>
+
+  <!-- Teach Me collapsible tutorial -->
+  <div style="margin-top:18px; border-top:1px solid #eee; padding-top:12px;">
+    <button id="teachBtn" style="padding:8px 12px; background:#c00; color:#fff; border:1px solid #900; border-radius:4px;">Teach Me!</button>
+    <div id="teachSection" style="display:none; margin-top:12px; background:#fafafa; border:1px solid #eee; padding:12px;">
+      <h3>Quick start</h3>
+      <ol>
+        <li>Click "Choose file" or drag & drop a video onto the page.</li>
+        <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
+        <li>Click on the canvas to add a marker. Shift+Click removes the nearest marker on that frame.</li>
+        <li>Use Undo / Redo to revert changes. Press <kbd>S</kbd> to export, or click Export (choose JSON or CSV).</li>
+      </ol>
+
+      <h3>Detailed instructions</h3>
+      <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
+      <p><strong>Navigating frames:</strong> Click "Prev" / "Next" or use the Left/Right arrow keys. The "frames per step" input controls how many frames are skipped when stepping. You can also jump to a specific frame number using the "Go to frame" input and button, or return to the first frame with "First Frame".</p>
+      <p><strong>Marking:</strong> Click the video canvas to add a point on the current frame. Markers are stored per-frame. Shift+Click a nearby marker to remove it. Press <kbd>D</kbd> to delete the nearest marker to the mouse cursor (or center if cursor is not over the canvas).</p>
+      <p><strong>Undo / Redo:</strong> Use the Undo and Redo buttons to step through recent add/remove/clear actions. Clearing the current frame or all markers is also undoable.</p>
+      <p><strong>Exporting:</strong> Choose JSON or CSV. JSON exports a metadata block (filename, export timestamp, fps) plus markers grouped by frame with time in seconds. CSV exports a row per point: frame,time_seconds,point_index,x,y. Filenames are based on the original filename plus a local timestamp.</p>
+
+      <h3>Features (at a glance)</h3>
+      <ul>
+        <li>Video upload via file picker or drag & drop</li>
+        <li>Per-frame marking with pixel coordinates</li>
+        <li>Estimated FPS detection; editable FPS override</li>
+        <li>Frame navigation (Prev/Next, keyboard arrows, jump to frame, first frame)</li>
+        <li>Undo / Redo for marker edits</li>
+        <li>Export JSON (with metadata) or CSV (per-point rows)</li>
+        <li>Keyboard shortcuts: ← → (frame), Space (play/pause), C (clear frame), D (delete nearest), S (export)</li>
+      </ul>
+      <p class="hint">Click "Teach Me!" again to hide this tutorial.</p>
+    </div>
+  </div>
+
+  <script>
+    // Teach Me toggle
+    const teachBtn = document.getElementById('teachBtn');
+    const teachSection = document.getElementById('teachSection');
+    teachBtn.addEventListener('click', () => {
+      if (teachSection.style.display === 'none') {
+        teachSection.style.display = 'block';
+        teachBtn.textContent = 'Hide Tutorial';
+      } else {
+        teachSection.style.display = 'none';
+        teachBtn.textContent = 'Teach Me!';
+      }
+    });
   </script>
 </body>
 </html>
