@@ -34,11 +34,168 @@
         <button id="browseBtn" type="button">Browse File</button>
     </div>
     <div id="result"></div>
-    <button id="downloadJsonBtn" type="button">Download JSON</button>
+    <button id="downloadJsonBtn" type="button">Download JSON (nodes/edges)</button>
+    <button id="downloadHierarchyBtn" type="button">Download Hierarchy JSON</button>
     <div id="tables-container"></div>
     <div id="graph"></div>
 </div>
 <script>
+// Utility: convert a hierarchical JSON into nodes/edges
+function hierarchyToGraph(data) {
+    const nodes = [];
+    const edges = [];
+    const idMap = new Map();
+    let nextId = 1;
+
+    function makeId(preferred) {
+        if (preferred !== undefined && preferred !== null && preferred !== '') {
+            const s = String(preferred);
+            if (!idMap.has(s)) {
+                idMap.set(s, s);
+                return s;
+            }
+            // fallback to numeric if collision
+        }
+        let id;
+        do { id = 'n' + (nextId++); } while (idMap.has(id));
+        idMap.set(id, id);
+        return id;
+    }
+
+    function addNode(id, label) {
+        nodes.push({ id, label: label === undefined ? String(id) : label });
+    }
+
+    function visit(node, parentId) {
+        if (node == null) return;
+        // If node is a primitive, create a node for it
+        if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') {
+            const id = makeId(String(node));
+            addNode(id, String(node));
+            if (parentId) edges.push({ from: parentId, to: id, label: '' });
+            return id;
+        }
+
+        // If node is an array, visit each element
+        if (Array.isArray(node)) {
+            let lastId = null;
+            node.forEach(el => {
+                const childId = visit(el, parentId);
+                lastId = childId || lastId;
+            });
+            return lastId;
+        }
+
+        // node is an object
+        // If object looks like {id, name/label, children}
+        let label = node.label || node.name || node.title || node.id || undefined;
+        // Prefer explicit id property if present
+        let preferredId = node.id !== undefined ? String(node.id) : undefined;
+        const myId = makeId(preferredId);
+        addNode(myId, label !== undefined ? String(label) : myId);
+        if (parentId) edges.push({ from: parentId, to: myId, label: '' });
+
+        // If object has a children array, traverse it
+        if (Array.isArray(node.children) && node.children.length) {
+            node.children.forEach(child => visit(child, myId));
+        } else {
+            // Otherwise, treat other keys whose values are arrays/objects as children
+            Object.keys(node).forEach(k => {
+                if (['id','label','name','title'].includes(k)) return;
+                const v = node[k];
+                if (v == null) return;
+                // If value is array/object, create implicit child node for key then attach
+                if (Array.isArray(v)) {
+                    // If array of primitives, create child nodes under this object
+                    if (v.every(x => typeof x !== 'object')) {
+                        v.forEach(prim => visit(prim, myId));
+                    } else {
+                        visit(v, myId);
+                    }
+                } else if (typeof v === 'object') {
+                    // If the key looks like a single child object with a label equal to key, create a key-node wrapper
+                    // but more useful is to recurse into the object and attach its contents to current node
+                    visit(v, myId);
+                }
+            });
+        }
+        return myId;
+    }
+
+    // Entry points: if data is array, iterate; if object that maps labels to arrays, detect that
+    if (Array.isArray(data)) {
+        data.forEach(el => visit(el, null));
+    } else if (typeof data === 'object') {
+        // If top-level keys appear to be labels mapping to arrays/objects (like {A: {...}, B: {...}})
+        const topKeysAreNodes = Object.keys(data).length > 0 && Object.values(data).every(v => typeof v !== 'string' || Array.isArray(v) || typeof v === 'object');
+        // If object has a single root-like shape (has name/children), just visit it
+        if (data.name || data.label || data.children) {
+            visit(data, null);
+        } else if (topKeysAreNodes) {
+            // treat each key as a node with children = value
+            Object.keys(data).forEach(k => {
+                const wrapper = { name: k, children: Array.isArray(data[k]) ? data[k] : [data[k]] };
+                visit(wrapper, null);
+            });
+        } else {
+            // fallback: visit the object itself
+            visit(data, null);
+        }
+    }
+
+    // Deduplicate nodes (by id) - nodes were added in order, ensure unique by id
+    const seen = new Map();
+    const outNodes = [];
+    nodes.forEach(n => {
+        if (!seen.has(n.id)) { seen.set(n.id, true); outNodes.push(n); }
+    });
+
+    return { nodes: outNodes, edges };
+}
+
+// Convert nodes/edges back into a simple hierarchy JSON using { name, children } format
+function graphToHierarchy(nodes, edges) {
+    const nodeMap = new Map();
+    nodes.forEach(n => nodeMap.set(String(n.id), { id: String(n.id), name: n.label || String(n.id), children: [] }));
+    const incoming = new Map();
+    edges.forEach(e => {
+        const from = String(e.from), to = String(e.to);
+        if (!nodeMap.has(from) || !nodeMap.has(to)) return;
+        nodeMap.get(from).children.push(nodeMap.get(to));
+        incoming.set(to, (incoming.get(to) || 0) + 1);
+    });
+    // roots are nodes with no incoming edges
+    const roots = [];
+    nodeMap.forEach((v, k) => { if (!incoming.has(k)) roots.push(v); });
+    // If no roots (cycle or disconnected), return all nodes as top-level
+    if (roots.length === 0) return Array.from(nodeMap.values()).map(n => ({ name: n.name, children: n.children.length ? n.children : undefined }));
+    // Clean up children arrays: remove id references
+    function clean(node) {
+        const out = { name: node.name };
+        if (node.children && node.children.length) {
+            out.children = node.children.map(c => clean(c));
+        }
+        return out;
+    }
+    return roots.map(r => clean(r));
+}
+
+// Helper: take any loaded JSON and return {nodes, edges} for the rest of the app
+function parseToGraph(json) {
+    if (!json) return { nodes: [], edges: [] };
+    if (Array.isArray(json) && json.length && json[0] && (json[0].from !== undefined || json[0].to !== undefined)) {
+        // array of edges or mixed; try to split
+        const nodes = json.filter(x => x.id !== undefined).map(x => ({ id: x.id, label: x.label || String(x.id) }));
+        const edges = json.filter(x => x.from !== undefined && x.to !== undefined).map(x => ({ from: x.from, to: x.to, label: x.label || '' }));
+        return { nodes, edges };
+    }
+    if (json.nodes && json.edges && Array.isArray(json.nodes) && Array.isArray(json.edges)) {
+        return { nodes: json.nodes.map(n => ({ id: n.id, label: n.label || String(n.id) })), edges: json.edges.map(e => ({ from: e.from, to: e.to, label: e.label || '' })) };
+    }
+    // Otherwise try to treat as hierarchy
+    return hierarchyToGraph(json);
+}
+
 // Load sample JSON on startup
 fetch('sample/vocalization_hierarchy.json')
     .then(response => {
@@ -55,8 +212,9 @@ fetch('sample/vocalization_hierarchy.json')
         }
         document.getElementById('result').innerText = "Loaded sample: vocalization_hierarchy.json";
         currentJson = json;
-        renderTables(json);
-        visualizeGraph(json);
+        const graph = parseToGraph(json);
+        renderTables({ nodes: graph.nodes, edges: graph.edges });
+        visualizeGraph({ nodes: graph.nodes, edges: graph.edges });
     })
     .catch(err => {
         document.getElementById('result').innerHTML = "<b>Could not load sample/vocalization_hierarchy.json.</b>";
@@ -97,6 +255,44 @@ document.getElementById('downloadJsonBtn').onclick = function() {
     let pad = n => n.toString().padStart(2, '0');
     let timestamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     a.download = `${baseName}_${timestamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
+// New: download hierarchy JSON reconstructed from current nodes/edges
+document.getElementById('downloadHierarchyBtn').onclick = function() {
+    let nodes = [];
+    let edges = [];
+    const container = document.getElementById('tables-container');
+    const tables = container.getElementsByTagName('table');
+    if (tables.length >= 2) {
+        const nodeRows = tables[0].rows;
+        for (let i = 1; i < nodeRows.length; i++) {
+            let id = nodeRows[i].cells[0].textContent;
+            let label = nodeRows[i].cells[1].textContent;
+            if (id !== '' || label !== '') nodes.push({id, label});
+        }
+        const edgeRows = tables[1].rows;
+        for (let i = 1; i < edgeRows.length; i++) {
+            let from = edgeRows[i].cells[0].textContent;
+            let to = edgeRows[i].cells[1].textContent;
+            let label = edgeRows[i].cells[2].textContent;
+            if (from !== '' || to !== '' || label !== '') edges.push({from, to, label});
+        }
+    }
+    const hierarchy = graphToHierarchy(nodes, edges);
+    let jsonOut = JSON.stringify(hierarchy.length === 1 ? hierarchy[0] : hierarchy, null, 2);
+    const blob = new Blob([jsonOut], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    let originalFilename = (window.droppedFile && window.droppedFile.name) || (window.uploadedFileName) || 'hierarchy.json';
+    let baseName = originalFilename.replace(/\.json$/i, '');
+    let now = new Date();
+    let pad = n => n.toString().padStart(2, '0');
+    let timestamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    a.download = `${baseName}_hierarchy_${timestamp}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -158,8 +354,10 @@ function readAndVisualizeJson(file) {
         }
         document.getElementById('result').innerText = 'File loaded!';
         currentJson = json;
-        renderTables(json);
-        visualizeGraph(json);
+        // Ensure any hierarchy input is converted to nodes/edges for rendering
+        const graph = parseToGraph(json);
+        renderTables({ nodes: graph.nodes, edges: graph.edges });
+        visualizeGraph({ nodes: graph.nodes, edges: graph.edges });
     };
     reader.readAsText(file);
 }

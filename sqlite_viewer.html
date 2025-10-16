@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SQLite Database Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h2 { color: #333; margin-top: 0; }
+        #drop-area { border: 2px dashed #aaa; border-radius: 8px; padding: 30px; text-align: center; margin-bottom: 20px; background: #fafafa; cursor: pointer; transition: background 0.3s; }
+        #drop-area:hover { background: #f0f0f0; }
+        #drop-area.dragover { background: #e3e3e3; border-color: #666; }
+        input[type="file"] { display: none; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #database-info { margin-top: 20px; }
+        .table-container { margin: 20px 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
+        .table-header { background: #f8f9fa; padding: 15px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; transition: background 0.2s; }
+        .table-header:hover { background: #e9ecef; }
+        .table-name { font-weight: bold; font-size: 16px; color: #333; }
+        .table-info { color: #666; font-size: 14px; }
+        .expand-icon { font-size: 18px; transition: transform 0.3s; user-select: none; }
+        .expand-icon.expanded { transform: rotate(90deg); }
+        .table-content { display: none; padding: 15px; background: white; }
+        .table-content.visible { display: block; }
+        .table-controls { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
+        .table-controls label { font-size: 14px; color: #666; }
+        .table-controls select { padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th { background: #007bff; color: white; padding: 10px; text-align: left; font-weight: 600; position: sticky; top: 0; }
+        td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+        tr:hover { background: #f8f9fa; }
+        .table-wrapper { max-height: 600px; overflow: auto; border: 1px solid #ddd; border-radius: 4px; }
+        .schema-info { background: #f8f9fa; padding: 10px; margin-bottom: 15px; border-radius: 4px; font-family: monospace; font-size: 13px; white-space: pre-wrap; color: #555; }
+        .loading { text-align: center; padding: 20px; color: #666; }
+        .error { background: #ffebee; color: #c62828; padding: 15px; border-radius: 4px; margin: 20px 0; }
+        .empty-state { text-align: center; padding: 40px; color: #999; }
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 15px; }
+        .pagination button { padding: 5px 15px; font-size: 13px; }
+        .pagination span { color: #666; font-size: 14px; }
+        
+        button { 
+            padding: 10px 20px; 
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #database-info {
+            margin-top: 20px;
+        }
+        .table-container {
+            margin: 20px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .table-header {
+            background: #f8f9fa;
+            padding: 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            transition: background 0.2s;
+        }
+        .table-header:hover {
+            background: #e9ecef;
+        }
+        .table-name {
+            font-weight: bold;
+            font-size: 16px;
+            color: #333;
+        }
+        .table-info {
+            color: #666;
+            font-size: 14px;
+        }
+        .expand-icon {
+            font-size: 18px;
+            transition: transform 0.3s;
+            user-select: none;
+        }
+        .expand-icon.expanded {
+            transform: rotate(90deg);
+        }
+        .table-content {
+            display: none;
+            padding: 15px;
+            background: white;
+        }
+        .table-content.visible {
+            display: block;
+        }
+        .table-controls {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .table-controls label {
+            font-size: 14px;
+            color: #666;
+        }
+        .table-controls select {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th {
+            background: #007bff;
+            color: white;
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #eee;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        .table-wrapper {
+            max-height: 600px;
+            overflow: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .schema-info {
+            background: #f8f9fa;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            color: #555;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .pagination button {
+            padding: 5px 15px;
+            font-size: 13px;
+        }
+        .pagination span {
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>SQLite Database Viewer</h2>
+    <div style="margin-bottom:18px;">
+        <label for="sampleDbSelect"><b>Sample DB:</b></label>
+        <select id="sampleDbSelect" style="margin-left:8px; padding:6px 12px; font-size:15px;">
+            <option value="">-- Loading sample databases... --</option>
+        </select>
+    </div>
+    <div id="drop-area">
+        <p id="drop-text">Drag & drop your SQLite database file here</p>
+        <input type="file" id="inputFile" accept=".db,.sqlite,.sqlite3">
+        <button id="browseBtn" type="button">Browse File</button>
+    </div>
+    <div id="loading" class="loading" style="display:none;">Loading database...</div>
+    <div id="error" class="error" style="display:none;"></div>
+    <div id="database-info"></div>
+</div>
+<script>
+let SQL;
+let db;
+const sampleDbSelect = document.getElementById('sampleDbSelect');
+const dropArea = document.getElementById('drop-area');
+const inputFile = document.getElementById('inputFile');
+const browseBtn = document.getElementById('browseBtn');
+const dropText = document.getElementById('drop-text');
+
+function showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'block' : 'none';
+}
+function showError(message) {
+    const errorDiv = document.getElementById('error');
+    errorDiv.textContent = message;
+    errorDiv.style.display = 'block';
+    showLoading(false);
+}
+function hideError() {
+    document.getElementById('error').style.display = 'none';
+}
+
+// Dynamically populate sample DB dropdown by scanning sample/ for .sqlite files
+async function populateSampleDbDropdown() {
+    const select = sampleDbSelect;
+    select.innerHTML = '<option value="">-- Loading sample databases... --</option>';
+    try {
+        // Try to fetch directory listing (works on GitHub Pages, some servers)
+        const resp = await fetch('sample/');
+        let files = [];
+        if (resp.ok) {
+            const text = await resp.text();
+            // Try to extract .sqlite files from HTML directory listing
+            const regex = /href=["']([^"'>]+\.sqlite)["']/gi;
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                let fname = match[1];
+                if (!fname.startsWith('http') && !fname.startsWith('/')) fname = 'sample/' + fname.replace(/^\/?/, '');
+                files.push(fname);
+            }
+        }
+        select.innerHTML = '<option value="">-- Select a sample database --</option>';
+        files.forEach(f => {
+            const label = f.split('/').pop();
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = label;
+            select.appendChild(opt);
+        });
+        if (files.length === 0) {
+            // Try to fetch sample/example.sqlite directly
+            try {
+                const testResp = await fetch('sample/example.sqlite');
+                if (testResp.ok) {
+                    // Add it to the dropdown and select it
+                    const opt = document.createElement('option');
+                    opt.value = 'sample/example.sqlite';
+                    opt.textContent = 'example.sqlite';
+                    select.appendChild(opt);
+                } else {
+                    select.innerHTML = '<option value="">(No .sqlite files found in sample/)</option>';
+                }
+            } catch {
+                select.innerHTML = '<option value="">(No .sqlite files found in sample/)</option>';
+            }
+        }
+    } catch (e) {
+        // If directory listing fails, still try to fetch sample/example.sqlite
+        try {
+            const testResp = await fetch('sample/example.sqlite');
+            if (testResp.ok) {
+                select.innerHTML = '<option value="">-- Select a sample database --</option>';
+                const opt = document.createElement('option');
+                opt.value = 'sample/example.sqlite';
+                opt.textContent = 'example.sqlite';
+                select.appendChild(opt);
+            } else {
+                select.innerHTML = '<option value="">(Could not list sample/ directory)</option>';
+            }
+        } catch {
+            select.innerHTML = '<option value="">(Could not list sample/ directory)</option>';
+        }
+    }
+}
+
+sampleDbSelect.addEventListener('change', function() {
+    const val = sampleDbSelect.value;
+    if (val) {
+        fetchAndLoadDatabase(val);
+    }
+});
+
+function fetchAndLoadDatabase(path) {
+    showLoading(true);
+    fetch(path)
+        .then(response => {
+            if (!response.ok) {
+                showError('Could not load ' + path);
+                return Promise.reject();
+            }
+            return response.arrayBuffer();
+        })
+        .then(buffer => {
+            if (buffer) {
+                const uint8Array = new Uint8Array(buffer);
+                loadDatabase(uint8Array, path);
+            }
+        })
+        .catch(() => {});
+}
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    dropArea.addEventListener(eventName, preventDefaults, false);
+});
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+dropArea.addEventListener('dragenter', () => {
+    dropArea.classList.add('dragover');
+});
+dropArea.addEventListener('dragleave', () => {
+    dropArea.classList.remove('dragover');
+});
+dropArea.addEventListener('dragover', () => {
+    dropArea.classList.add('dragover');
+});
+dropArea.addEventListener('drop', handleDrop, false);
+function handleDrop(e) {
+    dropArea.classList.remove('dragover');
+    const dt = e.dataTransfer;
+    const files = dt.files;
+    if (files.length) {
+        handleFileSelect(files[0]);
+    }
+}
+browseBtn.addEventListener('click', () => {
+    inputFile.click();
+});
+inputFile.addEventListener('change', () => {
+    if (inputFile.files.length) {
+        handleFileSelect(inputFile.files[0]);
+    }
+});
+function handleFileSelect(file) {
+    dropText.textContent = `Selected: ${file.name}`;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const uint8Array = new Uint8Array(e.target.result);
+        loadDatabase(uint8Array, file.name);
+    };
+    reader.readAsArrayBuffer(file);
+}
+function waitForInitSqlJs(callback) {
+    if (typeof window.initSqlJs === 'function') {
+        callback();
+    } else {
+        setTimeout(() => waitForInitSqlJs(callback), 50);
+    }
+}
+function startSqlJs() {
+    window.initSqlJs({
+        locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+    }).then(function(SQLLib) {
+        SQL = SQLLib;
+        loadDefaultDatabase();
+    }).catch(function(error) {
+        showError('Failed to initialize SQL.js: ' + error.message);
+    });
+}
+waitForInitSqlJs(startSqlJs);
+function loadDefaultDatabase() {
+    // Wait for dropdown to be populated, then try to load the first sample DB if available
+    populateSampleDbDropdown().then(() => {
+        const firstSample = sampleDbSelect.options[1]?.value;
+        if (firstSample) {
+            fetchAndLoadDatabase(firstSample);
+        } else {
+            showLoading(false);
+        }
+    });
+}
+function loadDatabase(data, filename) {
+    try {
+        showLoading(true);
+        hideError();
+        if (db) db.close();
+        db = new SQL.Database(data);
+        displayDatabase(filename);
+        showLoading(false);
+    } catch (error) {
+        showError('Failed to load database: ' + error.message);
+    }
+}
+function displayDatabase(filename) {
+    const container = document.getElementById('database-info');
+    container.innerHTML = '';
+    const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+    if (!tables.length || !tables[0].values.length) {
+        container.innerHTML = '<div class="empty-state">No tables found in database</div>';
+        return;
+    }
+    const tableNames = tables[0].values.map(row => row[0]);
+    const header = document.createElement('div');
+    header.innerHTML = `<h3>Database: ${filename}</h3><p>Tables: ${tableNames.length}</p>`;
+    container.appendChild(header);
+    tableNames.forEach(tableName => {
+        createTableView(container, tableName);
+    });
+}
+function createTableView(container, tableName) {
+    const tableDiv = document.createElement('div');
+    tableDiv.className = 'table-container';
+    const countResult = db.exec(`SELECT COUNT(*) FROM "${tableName}"`);
+    const rowCount = countResult[0].values[0][0];
+    const schemaResult = db.exec(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${tableName}'`);
+    const schema = schemaResult[0]?.values[0]?.[0] || 'Schema not available';
+    const header = document.createElement('div');
+    header.className = 'table-header';
+    header.innerHTML = `
+        <div>
+            <div class="table-name">${tableName}</div>
+            <div class="table-info">${rowCount} rows</div>
+        </div>
+        <span class="expand-icon">▶</span>
+    `;
+    const content = document.createElement('div');
+    content.className = 'table-content';
+    let isExpanded = false;
+    header.addEventListener('click', () => {
+        isExpanded = !isExpanded;
+        content.classList.toggle('visible', isExpanded);
+        header.querySelector('.expand-icon').classList.toggle('expanded', isExpanded);
+        if (isExpanded && !content.dataset.loaded) {
+            loadTableData(content, tableName, schema, rowCount);
+            content.dataset.loaded = 'true';
+        }
+    });
+    tableDiv.appendChild(header);
+    tableDiv.appendChild(content);
+    container.appendChild(tableDiv);
+}
+function loadTableData(container, tableName, schema, totalRows) {
+    const schemaDiv = document.createElement('div');
+    schemaDiv.className = 'schema-info';
+    schemaDiv.textContent = schema;
+    container.appendChild(schemaDiv);
+    const controls = document.createElement('div');
+    controls.className = 'table-controls';
+    const rowsPerPageOptions = [10, 25, 50, 100, 500, 1000];
+    let currentPage = 1;
+    let rowsPerPage = 50;
+    controls.innerHTML = `
+        <label>Rows per page:</label>
+        <select id="rows-${tableName}">
+            ${rowsPerPageOptions.map(opt => 
+                `<option value="${opt}" ${opt === rowsPerPage ? 'selected' : ''}>${opt}</option>`
+            ).join('')}
+        </select>
+    `;
+    container.appendChild(controls);
+    const tableWrapper = document.createElement('div');
+    tableWrapper.className = 'table-wrapper';
+    container.appendChild(tableWrapper);
+    const pagination = document.createElement('div');
+    pagination.className = 'pagination';
+    container.appendChild(pagination);
+    function renderTable() {
+        const offset = (currentPage - 1) * rowsPerPage;
+        const query = `SELECT * FROM "${tableName}" LIMIT ${rowsPerPage} OFFSET ${offset}`;
+        try {
+            const result = db.exec(query);
+            if (!result.length) {
+                tableWrapper.innerHTML = '<div class="empty-state">No data in table</div>';
+                return;
+            }
+            const columns = result[0].columns;
+            const values = result[0].values;
+            let html = '<table><thead><tr>';
+            columns.forEach(col => {
+                html += `<th>${escapeHtml(col)}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+            values.forEach(row => {
+                html += '<tr>';
+                row.forEach(cell => {
+                    const cellValue = cell === null ? '<em>NULL</em>' : escapeHtml(String(cell));
+                    html += `<td>${cellValue}</td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            tableWrapper.innerHTML = html;
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            const startRow = offset + 1;
+            const endRow = Math.min(offset + rowsPerPage, totalRows);
+            pagination.innerHTML = `
+                <button ${currentPage === 1 ? 'disabled' : ''} onclick="window['${tableName}_prevPage']()">Previous</button>
+                <span>Showing ${startRow}-${endRow} of ${totalRows}</span>
+                <button ${currentPage >= totalPages ? 'disabled' : ''} onclick="window['${tableName}_nextPage']()">Next</button>
+            `;
+        } catch (error) {
+            tableWrapper.innerHTML = `<div class="error">Error loading table data: ${escapeHtml(error.message)}</div>`;
+        }
+    }
+    window[`${tableName}_prevPage`] = () => {
+        if (currentPage > 1) {
+            currentPage--;
+            renderTable();
+        }
+    };
+    window[`${tableName}_nextPage`] = () => {
+        const totalPages = Math.ceil(totalRows / rowsPerPage);
+        if (currentPage < totalPages) {
+            currentPage++;
+            renderTable();
+        }
+    };
+    const select = controls.querySelector('select');
+    select.addEventListener('change', (e) => {
+        rowsPerPage = parseInt(e.target.value);
+        currentPage = 1;
+        renderTable();
+    });
+    renderTable();
+}
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+</body>
+</html>

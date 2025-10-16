@@ -1,0 +1,8 @@
+{
+    "whistle": ["harmonic", "upsweep", "concave", "downsweep", "sine", "constant", "convex", "whistle"],
+    "click": ["click", "clicktrain", "individualclick", "burstpulse", "buzz", "bark", "quack", "grunt"],
+    "clicktrain": ["click", "clicktrain", "burstpulse", "buzz", "bark", "quack", "grunt"],
+    "burstpulse": ["burstpulse", "bark", "quack", "grunt"],
+    "overlap": ["overlap", "biphonal"],
+    "uncertain": ["unsure", "nah", "not", "maybe", "?", "unknown", "uncertain"]
+}
