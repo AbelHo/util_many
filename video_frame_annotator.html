@@ -1,3 +1,31 @@
+<!--
+Programmer Reference Summary
+---------------------------
+Video Frame Annotator: A browser-based tool for annotating video frames with points, bounding boxes, and circles.
+
+Key Features:
+- Upload video via file input or drag & drop (no server, all client-side)
+- Frame navigation: step, jump, play/pause, go to frame
+- Annotation modes: Point (click), Bounding Box (click-drag), Circle (click-drag)
+- Markers are stored per-frame, with undo/redo support for all actions
+- Remove markers with shift+click or keyboard shortcut (D)
+- Export annotations as JSON (with metadata and all marker types) or CSV (one row per marker, type and coordinates)
+- FPS is estimated but user-editable; accurate FPS is critical for correct frame mapping
+- Minimal CSS, no dependencies, no build step
+
+Usage Instructions:
+- Open the HTML file in a browser
+- Load a video, set FPS if needed
+- Select annotation mode, annotate frames as needed
+- Use Undo/Redo, clear, and export as required
+
+Maintenance Notes:
+- All logic is in this file (no external JS)
+- Markers data structure: { [frameNumber]: [ {type, ...coords} ] }
+- Undo/redo stacks store operation objects for all marker types
+- UI and instructions are updated to reflect all annotation modes
+- See README.md for project-wide conventions
+-->
 <!doctype html>
 <html lang="en">
 <head>
