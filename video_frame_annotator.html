@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="description" content="Video Frame Annotator - A browser-based tool for annotating video frames with points, bounding boxes, and circles. Navigate frame-by-frame, draw annotations with drag-and-drop, and export to JSON or CSV. Perfect for video analysis, object tracking, and dataset creation. No installation required." />
+  <meta name="keywords" content="video annotation, frame annotator, bounding box, video labeling, object detection, computer vision, video analysis, dataset creation, frame-by-frame annotation, point annotation, circle annotation" />
   <title>Video Frame Annotator</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; margin: 20px; }
@@ -18,12 +20,21 @@
 </head>
 <body>
   <h2>Video Frame Annotator</h2>
-  <p class="hint">Upload a video, navigate frames, click on the canvas to add a marker (shift+click to remove nearest). Export markers as JSON.</p>
+  <p class="hint">Upload a video, navigate frames, and annotate with points, bounding boxes, or circles. Click/drag to add markers (shift+click to remove nearest). Export as JSON or CSV.</p>
 
   <div class="row">
     <input id="fileInput" type="file" accept="video/*" />
     <label><input id="frameStepInput" type="number" value="1" min="1" style="width:80px"> frames per step</label>
     <label title="Estimated FPS (editable)" style="color:red;"><strong>FPS:</strong> <input id="fpsInput" type="number" step="0.01" style="width:80px"> <span id="fpsWarn" style="margin-left:6px; visibility:hidden;" title="FPS is estimated — double-click to edit">⚠</span></label>
+  </div>
+  <div class="row">
+    <strong>Annotation Mode:</strong>
+    <label><input id="modePoint" type="radio" name="annotationMode" value="point" checked> Point</label>
+    <label><input id="modeBox" type="radio" name="annotationMode" value="box"> Bounding Box</label>
+    <label><input id="modeCircle" type="radio" name="annotationMode" value="circle"> Circle</label>
+  </div>
+  <div class="row">
+    <strong>Export Format:</strong>
     <label><input id="exportFormat" type="radio" name="format" value="json"> JSON</label>
     <label><input id="exportFormatCsv" type="radio" name="format" value="csv" checked> CSV</label>
     <button id="exportBtn">Export</button>
@@ -49,7 +60,7 @@
       </div>
       <div class="row">
         <label>Current frame markers: <span id="markerCount">0</span></label>
-        <span class="hint">(click canvas to add, shift+click to remove nearest)</span>
+        <span class="hint">(click/drag to add, shift+click to remove nearest)</span>
       </div>
     </div>
 
@@ -84,8 +95,12 @@
   const gotoFrameInput = document.getElementById('gotoFrameInput');
   const gotoFrameBtn = document.getElementById('gotoFrameBtn');
   const firstFrameBtn = document.getElementById('firstFrameBtn');
+  const modePoint = document.getElementById('modePoint');
+  const modeBox = document.getElementById('modeBox');
+  const modeCircle = document.getElementById('modeCircle');
 
-  // Data structure: map frameNumber -> array of {x, y} in pixel coordinates relative to video natural size
+  // Data structure: map frameNumber -> array of markers
+  // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius}
   const markers = {};
   let detectedFPS = null; // will hold detected fps when available
   let uploadedFilename = null;
@@ -96,6 +111,13 @@
 
   let rafId = null;
   let playing = false;
+
+  // Drawing state for drag operations
+  let isDragging = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragCurrentX = 0;
+  let dragCurrentY = 0;
 
   function resetCanvasSize() {
     const w = video.videoWidth;
@@ -121,32 +143,91 @@
     const frame = getCurrentFrameIndex();
     const arr = markers[frame] || [];
     for (let i = 0; i < arr.length; i++) {
-      const p = arr[i];
-      drawMarker(p.x, p.y, i+1);
+      const m = arr[i];
+      drawMarker(m, i+1);
     }
+
+    // draw drag preview if dragging
+    if (isDragging) {
+      drawDragPreview();
+    }
+
     markerCountLabel.textContent = arr.length;
     renderPointsList(frame, arr);
   }
 
-  function drawMarker(x, y, index) {
+  function drawMarker(marker, index) {
     ctx.save();
     ctx.strokeStyle = 'lime';
     ctx.fillStyle = 'rgba(0,255,0,0.7)';
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI*2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = 'black';
-    ctx.font = '12px sans-serif';
-    ctx.fillText(String(index), x+8, y+4);
+
+    if (!marker.type || marker.type === 'point') {
+      // Draw point marker
+      ctx.beginPath();
+      ctx.arc(marker.x, marker.y, 6, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'black';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(String(index), marker.x+8, marker.y+4);
+    } else if (marker.type === 'box') {
+      // Draw bounding box
+      const x = Math.min(marker.x1, marker.x2);
+      const y = Math.min(marker.y1, marker.y2);
+      const w = Math.abs(marker.x2 - marker.x1);
+      const h = Math.abs(marker.y2 - marker.y1);
+      ctx.fillStyle = 'rgba(0,255,0,0.2)';
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = 'lime';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(String(index), x+4, y+14);
+    } else if (marker.type === 'circle') {
+      // Draw circle
+      ctx.beginPath();
+      ctx.arc(marker.cx, marker.cy, marker.radius, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(0,255,0,0.2)';
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'lime';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(String(index), marker.cx+marker.radius+4, marker.cy);
+    }
+
+    ctx.restore();
+  }
+
+  function drawDragPreview() {
+    ctx.save();
+    ctx.strokeStyle = 'yellow';
+    ctx.fillStyle = 'rgba(255,255,0,0.2)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+
+    const mode = document.querySelector('input[name="annotationMode"]:checked').value;
+    if (mode === 'box') {
+      const x = Math.min(dragStartX, dragCurrentX);
+      const y = Math.min(dragStartY, dragCurrentY);
+      const w = Math.abs(dragCurrentX - dragStartX);
+      const h = Math.abs(dragCurrentY - dragStartY);
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+    } else if (mode === 'circle') {
+      const radius = Math.hypot(dragCurrentX - dragStartX, dragCurrentY - dragStartY);
+      ctx.beginPath();
+      ctx.arc(dragStartX, dragStartY, radius, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 
   function renderPointsList(frame, arr) {
     pointsList.innerHTML = '';
     const title = document.createElement('div');
-    title.textContent = 'Frame ' + frame + ' — ' + arr.length + ' point(s)';
+    title.textContent = 'Frame ' + frame + ' — ' + arr.length + ' marker(s)';
     title.style.fontWeight = '600';
     title.style.marginBottom = '6px';
     pointsList.appendChild(title);
@@ -156,10 +237,16 @@
       pointsList.appendChild(note);
       return;
     }
-    arr.forEach((p, i) => {
+    arr.forEach((m, i) => {
       const d = document.createElement('div');
       d.className = 'point-item';
-      d.textContent = `${i+1}: x=${Math.round(p.x)}, y=${Math.round(p.y)}`;
+      if (!m.type || m.type === 'point') {
+        d.textContent = `${i+1}: Point (${Math.round(m.x)}, ${Math.round(m.y)})`;
+      } else if (m.type === 'box') {
+        d.textContent = `${i+1}: Box (${Math.round(m.x1)}, ${Math.round(m.y1)}) to (${Math.round(m.x2)}, ${Math.round(m.y2)})`;
+      } else if (m.type === 'circle') {
+        d.textContent = `${i+1}: Circle center (${Math.round(m.cx)}, ${Math.round(m.cy)}) radius ${Math.round(m.radius)}`;
+      }
       pointsList.appendChild(d);
     });
   }
@@ -296,53 +383,153 @@
     video.addEventListener('loadedmetadata', () => { resetCanvasSize(); drawFrameOverlay(); updateFrameLabels(); }, { once: true });
   });
 
-  // Canvas click to add/remove markers
-  canvas.addEventListener('click', (ev) => {
-    if (!video.videoWidth || !video.videoHeight) return;
-    // get click relative to displayed canvas size then map to natural pixels
+  // Canvas mouse handlers for drawing markers
+  function getCanvasCoords(ev) {
     const rect = canvas.getBoundingClientRect();
     const cssX = ev.clientX - rect.left;
     const cssY = ev.clientY - rect.top;
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const x = cssX * scaleX;
-    const y = cssY * scaleY;
+    return { x: cssX * scaleX, y: cssY * scaleY };
+  }
+
+  canvas.addEventListener('mousedown', (ev) => {
+    if (!video.videoWidth || !video.videoHeight) return;
+    const coords = getCanvasCoords(ev);
     const frame = getCurrentFrameIndex();
+
     if (ev.shiftKey) {
-      // remove nearest point within threshold
+      // remove nearest marker within threshold
       const arr = markers[frame] || [];
       if (arr.length === 0) return;
       let bestIdx = -1; let bestDist = Infinity;
-      for (let i=0;i<arr.length;i++){
-        const d = Math.hypot(arr[i].x - x, arr[i].y - y);
+      for (let i=0; i<arr.length; i++){
+        const m = arr[i];
+        let d = Infinity;
+        if (!m.type || m.type === 'point') {
+          d = Math.hypot(m.x - coords.x, m.y - coords.y);
+        } else if (m.type === 'box') {
+          // distance to box center
+          const cx = (m.x1 + m.x2) / 2;
+          const cy = (m.y1 + m.y2) / 2;
+          d = Math.hypot(cx - coords.x, cy - coords.y);
+        } else if (m.type === 'circle') {
+          d = Math.hypot(m.cx - coords.x, m.cy - coords.y);
+        }
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
-      if (bestDist < 20) {
-        const removed = arr.splice(bestIdx, 1)[0]; markers[frame] = arr;
-        undoStack.push({ type: 'remove', frame, point: removed }); redoStack.length = 0;
+      if (bestDist < 30) {
+        const removed = arr.splice(bestIdx, 1)[0]; 
+        markers[frame] = arr;
+        undoStack.push({ type: 'remove', frame, point: removed }); 
+        redoStack.length = 0;
+        drawFrameOverlay();
       }
-    } else {
-      if (!markers[frame]) markers[frame] = [];
-      const pt = { x: Math.round(x), y: Math.round(y) };
-      markers[frame].push(pt);
-      undoStack.push({ type: 'add', frame, point: pt }); redoStack.length = 0;
+      return;
     }
+
+    // Start drag
+    isDragging = true;
+    dragStartX = coords.x;
+    dragStartY = coords.y;
+    dragCurrentX = coords.x;
+    dragCurrentY = coords.y;
+  });
+
+  canvas.addEventListener('mousemove', (ev) => {
+    if (!isDragging) return;
+    const coords = getCanvasCoords(ev);
+    dragCurrentX = coords.x;
+    dragCurrentY = coords.y;
     drawFrameOverlay();
   });
 
-  // Export JSON
+  canvas.addEventListener('mouseup', (ev) => {
+    if (!isDragging) return;
+    isDragging = false;
+
+    const coords = getCanvasCoords(ev);
+    const frame = getCurrentFrameIndex();
+    const mode = document.querySelector('input[name="annotationMode"]:checked').value;
+
+    if (!markers[frame]) markers[frame] = [];
+
+    const dragDist = Math.hypot(coords.x - dragStartX, coords.y - dragStartY);
+
+    if (mode === 'point') {
+      // Simple click adds a point
+      const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+      markers[frame].push(pt);
+      undoStack.push({ type: 'add', frame, point: pt });
+      redoStack.length = 0;
+    } else if (mode === 'box') {
+      // Only create box if dragged significantly (more than 5 pixels)
+      if (dragDist > 5) {
+        const box = { 
+          type: 'box', 
+          x1: Math.round(dragStartX), 
+          y1: Math.round(dragStartY), 
+          x2: Math.round(coords.x), 
+          y2: Math.round(coords.y) 
+        };
+        markers[frame].push(box);
+        undoStack.push({ type: 'add', frame, point: box });
+        redoStack.length = 0;
+      } else {
+        // Small drag, treat as point click
+        const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+        markers[frame].push(pt);
+        undoStack.push({ type: 'add', frame, point: pt });
+        redoStack.length = 0;
+      }
+    } else if (mode === 'circle') {
+      // Only create circle if dragged significantly
+      if (dragDist > 5) {
+        const circle = { 
+          type: 'circle', 
+          cx: Math.round(dragStartX), 
+          cy: Math.round(dragStartY), 
+          radius: Math.round(dragDist) 
+        };
+        markers[frame].push(circle);
+        undoStack.push({ type: 'add', frame, point: circle });
+        redoStack.length = 0;
+      } else {
+        // Small drag, treat as point click
+        const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+        markers[frame].push(pt);
+        undoStack.push({ type: 'add', frame, point: pt });
+        redoStack.length = 0;
+      }
+    }
+
+    drawFrameOverlay();
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (isDragging) {
+      isDragging = false;
+      drawFrameOverlay();
+    }
+  });
+
+  // Export JSON or CSV
   exportBtn.addEventListener('click', () => {
     const wantCsv = exportFormatCsv.checked;
-    // Build array of {frame, time, points:[{x,y}, ...]}
     const fps = estimateFPS();
     const out = [];
+    
+    // Build array of {frame, time, markers:[...]}
     for (const k of Object.keys(markers).sort((a,b)=>Number(a)-Number(b))) {
-      const pts = markers[k];
-      if (!pts || pts.length === 0) continue;
+      const markerArr = markers[k];
+      if (!markerArr || markerArr.length === 0) continue;
       const frameNum = Number(k);
       const timeSec = +(frameNum / fps).toFixed(4);
-      out.push({ frame: frameNum, time: timeSec, points: pts.map(p=>({ x: p.x, y: p.y })) });
+      
+      // Keep full marker data with type information
+      out.push({ frame: frameNum, time: timeSec, markers: markerArr });
     }
+    
     // produce a safe filename base from uploaded filename or default
     function safeBaseName(name) {
       if (!name) return 'markers';
@@ -351,17 +538,25 @@
       return base.replace(/[^a-zA-Z0-9-_\.]/g, '_');
     }
     const base = safeBaseName(uploadedFilename);
-  // local YYYYMMDD_HHMMSS
-  const dt = new Date();
-  const pad = (n, z=2) => String(n).padStart(z,'0');
-  const tsForName = `${dt.getFullYear()}${pad(dt.getMonth()+1)}${pad(dt.getDate())}_${pad(dt.getHours())}${pad(dt.getMinutes())}${pad(dt.getSeconds())}`;
-  const outNameBase = `${base}_${tsForName}`;
+    // local YYYYMMDD_HHMMSS
+    const dt = new Date();
+    const pad = (n, z=2) => String(n).padStart(z,'0');
+    const tsForName = `${dt.getFullYear()}${pad(dt.getMonth()+1)}${pad(dt.getDate())}_${pad(dt.getHours())}${pad(dt.getMinutes())}${pad(dt.getSeconds())}`;
+    const outNameBase = `${base}_${tsForName}`;
+    
     if (wantCsv) {
-      // CSV columns: frame,time_seconds,point_index,x,y
-      let rows = ['frame,time_seconds,point_index,x,y'];
+      // CSV columns: frame,time_seconds,marker_index,type,x,y,x2,y2,cx,cy,radius
+      let rows = ['frame,time_seconds,marker_index,type,x,y,x2,y2,cx,cy,radius'];
       out.forEach(item => {
-        item.points.forEach((p, i) => {
-          rows.push(`${item.frame},${item.time},${i+1},${p.x},${p.y}`);
+        item.markers.forEach((m, i) => {
+          const idx = i + 1;
+          if (!m.type || m.type === 'point') {
+            rows.push(`${item.frame},${item.time},${idx},point,${m.x},${m.y},,,,,`);
+          } else if (m.type === 'box') {
+            rows.push(`${item.frame},${item.time},${idx},box,,,${m.x1},${m.y1},${m.x2},${m.y2},`);
+          } else if (m.type === 'circle') {
+            rows.push(`${item.frame},${item.time},${idx},circle,,,,,${m.cx},${m.cy},${m.radius}`);
+          }
         });
       });
       const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
@@ -372,8 +567,12 @@
       a.click();
       a.remove();
     } else {
-      // include metadata: filename and export timestamp
-      const exportMeta = { filename: uploadedFilename || null, exported_at: new Date().toISOString(), fps: estimateFPS() };
+      // JSON: include metadata and full marker data
+      const exportMeta = { 
+        filename: uploadedFilename || null, 
+        exported_at: new Date().toISOString(), 
+        fps: estimateFPS() 
+      };
       const blob = new Blob([JSON.stringify({ meta: exportMeta, markers: out }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -445,7 +644,14 @@
     else if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
     else if (e.key === ' ') { e.preventDefault(); playPauseBtn.click(); }
     else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); // clear current frame markers
-      const f = getCurrentFrameIndex(); if (markers[f]) { const prev = markers[f].slice(); undoStack.push({ type:'clear-frame', frame:f, prevState: prev }); delete markers[f]; drawFrameOverlay(); }
+      const f = getCurrentFrameIndex(); 
+      if (markers[f]) { 
+        const prev = markers[f].slice(); 
+        undoStack.push({ type:'clear-frame', frame:f, prevState: prev }); 
+        redoStack.length = 0;
+        delete markers[f]; 
+        drawFrameOverlay(); 
+      }
     }
     else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); // delete nearest marker to center (user can move mouse then press D)
       // find mouse position over canvas; if none, use center
@@ -459,8 +665,27 @@
       const arr = markers[frame] || [];
       if (arr.length === 0) return;
       let bestIdx = -1; let bestDist = Infinity;
-      for (let i=0;i<arr.length;i++){ const d = Math.hypot(arr[i].x - x, arr[i].y - y); if (d < bestDist) { bestDist = d; bestIdx = i; } }
-      if (bestDist < 40) { arr.splice(bestIdx,1); markers[frame] = arr; drawFrameOverlay(); }
+      for (let i=0; i<arr.length; i++){
+        const m = arr[i];
+        let d = Infinity;
+        if (!m.type || m.type === 'point') {
+          d = Math.hypot(m.x - x, m.y - y);
+        } else if (m.type === 'box') {
+          const cx = (m.x1 + m.x2) / 2;
+          const cy = (m.y1 + m.y2) / 2;
+          d = Math.hypot(cx - x, cy - y);
+        } else if (m.type === 'circle') {
+          d = Math.hypot(m.cx - x, m.cy - y);
+        }
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+      if (bestDist < 40) { 
+        const removed = arr.splice(bestIdx, 1)[0];
+        markers[frame] = arr; 
+        undoStack.push({ type: 'remove', frame, point: removed }); 
+        redoStack.length = 0;
+        drawFrameOverlay(); 
+      }
     }
     else if (e.key === 's' || e.key === 'S') { e.preventDefault(); exportBtn.click(); }
   });
@@ -509,27 +734,36 @@
       <h3>Quick start</h3>
       <ol>
         <li>Click "Choose file" or drag & drop a video onto the page.</li>
-        <li>Set the FPS(frames per seconds) of the video</li>
+        <li><span style="color:red">Manually set the FPS (frames per seconds) of the video. Currently the FPS auto-detection is typically wrong.</span></li>
+        <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, or <strong>Circle</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
-        <li>Click on the canvas to add a marker. Shift+Click removes the nearest marker on that frame.</li>
+        <li>Click or click-and-drag on the canvas to add markers. Shift+Click removes the nearest marker on that frame.</li>
         <li>Use Undo / Redo to revert changes. Press <kbd>S</kbd> to export, or click Export (choose JSON or CSV).</li>
       </ol>
 
       <h3>Detailed instructions</h3>
       <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
       <p><strong>Navigating frames:</strong> Click "Prev" / "Next" or use the Left/Right arrow keys. The "frames per step" input controls how many frames are skipped when stepping. You can also jump to a specific frame number using the "Go to frame" input and button, or return to the first frame with "First Frame".</p>
-      <p><strong>Marking:</strong> Click the video canvas to add a point on the current frame. Markers are stored per-frame. Shift+Click a nearby marker to remove it. Press <kbd>D</kbd> to delete the nearest marker to the mouse cursor (or center if cursor is not over the canvas).</p>
+      <p><strong>Annotation Modes:</strong></p>
+      <ul>
+        <li><strong>Point:</strong> Click to place a single point marker at that location.</li>
+        <li><strong>Bounding Box:</strong> Click and drag to draw a rectangular box. If you only click (drag less than 5 pixels), a point will be added instead.</li>
+        <li><strong>Circle:</strong> Click and drag to draw a circle. The click location becomes the center, and the drag distance becomes the radius. Small drags (less than 5 pixels) create a point instead.</li>
+      </ul>
+      <p><strong>Removing markers:</strong> Shift+Click near a marker to remove it. Press <kbd>D</kbd> to delete the nearest marker to the mouse cursor (or center if cursor is not over the canvas). Press <kbd>C</kbd> to clear all markers on the current frame.</p>
       <p><strong>Undo / Redo:</strong> Use the Undo and Redo buttons to step through recent add/remove/clear actions. Clearing the current frame or all markers is also undoable.</p>
-      <p><strong>Exporting:</strong> Choose JSON or CSV. JSON exports a metadata block (filename, export timestamp, fps) plus markers grouped by frame with time in seconds. CSV exports a row per point: frame,time_seconds,point_index,x,y. Filenames are based on the original filename plus a local timestamp.</p>
+      <p><strong>Exporting:</strong> Choose JSON or CSV format. JSON exports include metadata (filename, export timestamp, fps) plus markers grouped by frame with time in seconds and full marker data (type and coordinates). CSV exports one row per marker with columns: frame, time_seconds, marker_index, type, x, y, x2, y2, cx, cy, radius (with empty fields for inapplicable coordinates). Filenames are based on the original filename plus a local timestamp.</p>
 
       <h3>Features (at a glance)</h3>
       <ul>
         <li>Video upload via file picker or drag & drop</li>
+        <li>Three annotation modes: Point, Bounding Box, and Circle</li>
         <li>Per-frame marking with pixel coordinates</li>
+        <li>Visual preview while dragging boxes/circles</li>
         <li>Estimated FPS detection; editable FPS override</li>
         <li>Frame navigation (Prev/Next, keyboard arrows, jump to frame, first frame)</li>
-        <li>Undo / Redo for marker edits</li>
-        <li>Export JSON (with metadata) or CSV (per-point rows)</li>
+        <li>Undo / Redo for all marker operations</li>
+        <li>Export JSON (with metadata and full marker data) or CSV (with type column and all coordinate fields)</li>
         <li>Keyboard shortcuts: ← → (frame), Space (play/pause), C (clear frame), D (delete nearest), S (export)</li>
       </ul>
       <p class="hint">Click "Teach Me!" again to hide this tutorial.</p>
