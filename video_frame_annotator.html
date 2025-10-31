@@ -10,6 +10,7 @@ Key Features:
 - Markers are stored per-frame, with undo/redo support for all actions
 - Remove markers with shift+click or keyboard shortcut (D)
 - Export annotations as JSON (with metadata and all marker types) or CSV (one row per marker, type and coordinates)
+- Import annotations from JSON or CSV files, with option to merge or replace existing
 - FPS is estimated but user-editable; accurate FPS is critical for correct frame mapping
 - Minimal CSS, no dependencies, no build step
 
@@ -71,6 +72,11 @@ Maintenance Notes:
     <button id="clearBtn">Clear All Markers</button>
   </div>
   <div class="row">
+    <label>Import annotations: <input id="importInput" type="file" accept=".json,.csv" /></label>
+    <button id="importBtn">Import</button>
+    <span class="hint">(You can also drop a JSON/CSV file anywhere to import)</span>
+  </div>
+  <div class="row">
     <label>Go to frame: <input id="gotoFrameInput" type="number" min="0" style="width:120px"></label>
     <button id="gotoFrameBtn">Go</button>
     <button id="firstFrameBtn">First Frame</button>
@@ -126,6 +132,8 @@ Maintenance Notes:
   const modePoint = document.getElementById('modePoint');
   const modeBox = document.getElementById('modeBox');
   const modeCircle = document.getElementById('modeCircle');
+  const importInput = document.getElementById('importInput');
+  const importBtn = document.getElementById('importBtn');
 
   // Data structure: map frameNumber -> array of markers
   // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius}
@@ -401,15 +409,194 @@ Maintenance Notes:
   ['dragenter','dragover'].forEach(evt => document.addEventListener(evt, (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }));
   document.addEventListener('drop', (e) => {
     e.preventDefault();
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (!f) return;
-    fileInput.files = e.dataTransfer.files;
-    uploadedFilename = f.name;
-    const url = URL.createObjectURL(f);
-    video.src = url;
-    video.load();
-    video.addEventListener('loadedmetadata', () => { resetCanvasSize(); drawFrameOverlay(); updateFrameLabels(); }, { once: true });
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+
+    // Handle video files (first one)
+    const videoFile = files.find(file => file.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/i.test(file.name));
+    if (videoFile) {
+      fileInput.files = e.dataTransfer.files; // keep default behavior
+      uploadedFilename = videoFile.name;
+      const url = URL.createObjectURL(videoFile);
+      video.src = url;
+      video.load();
+      video.addEventListener('loadedmetadata', () => { resetCanvasSize(); drawFrameOverlay(); updateFrameLabels(); }, { once: true });
+    }
+
+    // Handle annotation files (all .json/.csv)
+    const annoFiles = files.filter(file => /\.(json|csv)$/i.test(file.name) || /json|csv/.test(file.type));
+    if (annoFiles.length) {
+      const replace = confirm('Import annotations from dropped file(s). Replace existing annotations?\nOK = Replace, Cancel = Merge');
+      annoFiles.forEach(f => importAnnotationsFile(f, replace));
+    }
   });
+
+  // Import controls
+  importBtn.addEventListener('click', () => {
+    if (importInput.files && importInput.files[0]) {
+      const file = importInput.files[0];
+      const replace = confirm('Replace existing annotations?\nOK = Replace, Cancel = Merge');
+      importAnnotationsFile(file, replace);
+    } else {
+      alert('Please choose a JSON or CSV file to import.');
+    }
+  });
+
+  function importAnnotationsFile(file, replace) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const name = file.name.toLowerCase();
+        if (name.endsWith('.json')) {
+          const text = reader.result;
+          loadAnnotationsFromJsonText(String(text), replace);
+        } else if (name.endsWith('.csv')) {
+          const text = reader.result;
+          loadAnnotationsFromCsvText(String(text), replace);
+        } else if (/json/.test(file.type)) {
+          const text = reader.result;
+          loadAnnotationsFromJsonText(String(text), replace);
+        } else if (/csv/.test(file.type) || name.includes('.csv')) {
+          const text = reader.result;
+          loadAnnotationsFromCsvText(String(text), replace);
+        } else {
+          alert('Unsupported annotation file: ' + file.name);
+        }
+      } catch(err) {
+        console.error('Import failed', err);
+        alert('Failed to import annotations: ' + err.message);
+      }
+    };
+    reader.onerror = () => alert('Failed to read file: ' + file.name);
+    reader.readAsText(file);
+  }
+
+  function loadAnnotationsFromJsonText(text, replace) {
+    const data = JSON.parse(text);
+    // Accept multiple shapes
+    // 1) { meta, markers: [ { frame, time, markers: [ {type,...} ] } ] }
+    // 2) [ { frame, time, points: [ {x,y} ] } ] -> convert to type 'point'
+    // 3) { [frame]: [ {x,y} ] } -> convert to type 'point'
+
+    const incoming = {};
+    if (Array.isArray(data)) {
+      data.forEach(fr => {
+        const frame = Number(fr.frame);
+        if (!isFinite(frame)) return;
+        if (!incoming[frame]) incoming[frame] = [];
+        const arr = fr.markers || fr.points || [];
+        arr.forEach(m => {
+          incoming[frame].push(normalizeMarker(m));
+        });
+      });
+    } else if (data && Array.isArray(data.markers)) {
+      data.markers.forEach(fr => {
+        const frame = Number(fr.frame);
+        if (!isFinite(frame)) return;
+        if (!incoming[frame]) incoming[frame] = [];
+        const arr = fr.markers || fr.points || [];
+        arr.forEach(m => {
+          incoming[frame].push(normalizeMarker(m));
+        });
+      });
+      // If FPS exists in meta, set it (hint only)
+      if (data.meta && data.meta.fps && isFinite(data.meta.fps)) {
+        fpsInput.value = Number(data.meta.fps);
+      }
+    } else if (data && typeof data === 'object') {
+      Object.keys(data).forEach(k => {
+        const frame = Number(k);
+        if (!isFinite(frame)) return;
+        if (!incoming[frame]) incoming[frame] = [];
+        const arr = data[k] || [];
+        arr.forEach(m => incoming[frame].push(normalizeMarker(m)));
+      });
+    }
+
+    applyImportedMarkers(incoming, replace);
+  }
+
+  function loadAnnotationsFromCsvText(text, replace) {
+    const lines = String(text).split(/\r?\n/).filter(l => l.trim().length);
+    if (!lines.length) return;
+    const header = lines[0].split(',').map(s => s.trim());
+    const rows = lines.slice(1);
+    const incoming = {};
+
+    // Detect format: new has 'type' in header; old has 'point_index' without 'type'
+    const idx = (name) => header.indexOf(name);
+    const hasType = idx('type') !== -1;
+
+    if (hasType) {
+      const fi = idx('frame');
+      const ti = idx('time_seconds');
+      const mi = idx('marker_index');
+      const ty = idx('type');
+      const x = idx('x');
+      const y = idx('y');
+      const x2 = idx('x2');
+      const y2 = idx('y2');
+      const cx = idx('cx');
+      const cy = idx('cy');
+      const rad = idx('radius');
+      rows.forEach(line => {
+        const cols = line.split(',');
+        const frame = Number(cols[fi]);
+        if (!isFinite(frame)) return;
+        const type = (cols[ty] || 'point').trim();
+        if (!incoming[frame]) incoming[frame] = [];
+        if (type === 'point') {
+          incoming[frame].push({ type: 'point', x: num(cols[x]), y: num(cols[y]) });
+        } else if (type === 'box') {
+          incoming[frame].push({ type: 'box', x1: num(cols[x]), y1: num(cols[y]), x2: num(cols[x2]), y2: num(cols[y2]) });
+        } else if (type === 'circle') {
+          incoming[frame].push({ type: 'circle', cx: num(cols[cx]), cy: num(cols[cy]), radius: num(cols[rad]) });
+        }
+      });
+    } else {
+      // Old format: frame,time_seconds,point_index,x,y
+      const fi = idx('frame');
+      const x = idx('x');
+      const y = idx('y');
+      rows.forEach(line => {
+        const cols = line.split(',');
+        const frame = Number(cols[fi]);
+        if (!isFinite(frame)) return;
+        if (!incoming[frame]) incoming[frame] = [];
+        incoming[frame].push({ type: 'point', x: num(cols[x]), y: num(cols[y]) });
+      });
+    }
+
+    applyImportedMarkers(incoming, replace);
+  }
+
+  function num(v) { const n = Number(v); return isFinite(n) ? Math.round(n) : 0; }
+
+  function normalizeMarker(m) {
+    if (!m) return null;
+    if (!m.type) {
+      if (isFinite(m.x) && isFinite(m.y)) return { type: 'point', x: num(m.x), y: num(m.y) };
+      // otherwise ignore
+      return null;
+    }
+    if (m.type === 'point') return { type: 'point', x: num(m.x), y: num(m.y) };
+    if (m.type === 'box') return { type: 'box', x1: num(m.x1), y1: num(m.y1), x2: num(m.x2), y2: num(m.y2) };
+    if (m.type === 'circle') return { type: 'circle', cx: num(m.cx), cy: num(m.cy), radius: num(m.radius) };
+    return null;
+  }
+
+  function applyImportedMarkers(incoming, replace) {
+    if (replace) {
+      for (const k in markers) delete markers[k];
+    }
+    Object.keys(incoming).forEach(k => {
+      const frame = Number(k);
+      if (!markers[frame]) markers[frame] = [];
+      incoming[frame].forEach(m => { if (m) markers[frame].push(m); });
+    });
+    drawFrameOverlay();
+    updateFrameLabels();
+  }
 
   // Canvas mouse handlers for drawing markers
   function getCanvasCoords(ev) {
@@ -581,7 +768,7 @@ Maintenance Notes:
           if (!m.type || m.type === 'point') {
             rows.push(`${item.frame},${item.time},${idx},point,${m.x},${m.y},,,,,`);
           } else if (m.type === 'box') {
-            rows.push(`${item.frame},${item.time},${idx},box,,,${m.x1},${m.y1},${m.x2},${m.y2},`);
+            rows.push(`${item.frame},${item.time},${idx},box,${m.x1},${m.y1},${m.x2},${m.y2},,,`);
           } else if (m.type === 'circle') {
             rows.push(`${item.frame},${item.time},${idx},circle,,,,,${m.cx},${m.cy},${m.radius}`);
           }
@@ -762,6 +949,7 @@ Maintenance Notes:
       <h3>Quick start</h3>
       <ol>
         <li>Click "Choose file" or drag & drop a video onto the page.</li>
+        <li>Optionally import existing annotations (JSON/CSV) using the Import control or by dropping the file anywhere. You'll be asked to Replace or Merge.</li>
         <li><span style="color:red">Manually set the FPS (frames per seconds) of the video. Currently the FPS auto-detection is typically wrong.</span></li>
         <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, or <strong>Circle</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
@@ -770,7 +958,12 @@ Maintenance Notes:
       </ol>
 
       <h3>Detailed instructions</h3>
-      <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
+  <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
+  <p><strong>Importing annotations:</strong> You can import annotations from JSON or CSV either via the Import control (next to Export) or by dropping the file anywhere on the page. You'll be prompted to <em>Replace</em> existing annotations or <em>Merge</em> into them. Supported formats:
+  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle', ...coords} ] } ] }
+  <br>• Legacy JSON: [ { frame, time, points: [ {x,y} ] } ] or { [frame]: [ {x,y} ] }
+  <br>• CSV (this tool's export): frame,time_seconds,marker_index,type,x,y,x2,y2,cx,cy,radius
+  <br>• Legacy CSV: frame,time_seconds,point_index,x,y (points only)</p>
       <p><strong>Navigating frames:</strong> Click "Prev" / "Next" or use the Left/Right arrow keys. The "frames per step" input controls how many frames are skipped when stepping. You can also jump to a specific frame number using the "Go to frame" input and button, or return to the first frame with "First Frame".</p>
       <p><strong>Annotation Modes:</strong></p>
       <ul>
@@ -785,6 +978,7 @@ Maintenance Notes:
       <h3>Features (at a glance)</h3>
       <ul>
         <li>Video upload via file picker or drag & drop</li>
+        <li>Import annotations from JSON/CSV (replace or merge)</li>
         <li>Three annotation modes: Point, Bounding Box, and Circle</li>
         <li>Per-frame marking with pixel coordinates</li>
         <li>Visual preview while dragging boxes/circles</li>
