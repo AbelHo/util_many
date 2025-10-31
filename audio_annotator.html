@@ -1,0 +1,1555 @@
+<!--
+Programmer Reference Summary
+---------------------------
+Audio Annotator: A browser-based tool for annotating audio files with synchronized time-series and spectrogram visualization.
+
+Key Features:
+- Upload audio via file input or drag & drop (no server, all client-side)
+- Dual visualization: waveform (time-series) and spectrogram in parallel
+- Playback controls with time scrubbing, play/pause, speed control
+- Adjustable amplitude, sample rate display, and spectrogram settings
+- Zoom and scroll through audio with synchronized views
+- Annotation modes: Point, Time Range, and Frequency Range markers
+- Markers stored with timestamps, with undo/redo support
+- Export annotations as JSON or CSV (with metadata and all marker types)
+- Import annotations from JSON or CSV files, with merge or replace option
+- Audio analysis features: FFT size control, frequency range selection, color scale
+- Minimal CSS, no build step, uses Web Audio API
+
+Usage Instructions:
+- Open the HTML file in a browser
+- Load an audio file, adjust visualization settings as needed
+- Select annotation mode, annotate regions as needed
+- Use zoom/scroll controls to navigate audio
+- Use Undo/Redo, clear, and export as required
+
+Maintenance Notes:
+- All logic is in this file (no external JS dependencies)
+- Uses Web Audio API for audio processing and playback
+- Canvas-based rendering for waveform and spectrogram
+- Markers data structure: [ {type, time, endTime?, freqMin?, freqMax?, label} ]
+- Undo/redo stacks store operation objects for all marker types
+- See README.md for project-wide conventions
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="description" content="Audio Annotator - A browser-based tool for annotating audio files with synchronized time-series waveform and spectrogram visualization. Analyze sound, add time and frequency annotations, zoom and scroll through audio, and export to JSON or CSV. Perfect for audio analysis, speech research, bioacoustics, and music analysis. No installation required." />
+  <meta name="keywords" content="audio annotation, spectrogram, waveform, sound analysis, audio labeling, speech analysis, bioacoustics, music analysis, frequency analysis, audio visualization, time-frequency, FFT, Web Audio API" />
+  <title>Audio Annotator</title>
+  <style>
+    body { 
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; 
+      margin: 20px; 
+      background: #fafafa;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    .controls-row { 
+      display: flex; 
+      gap: 12px; 
+      flex-wrap: wrap; 
+      align-items: center; 
+      margin-bottom: 12px; 
+      padding: 10px; 
+      background: white; 
+      border-radius: 4px; 
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .control-group { 
+      display: flex; 
+      gap: 6px; 
+      align-items: center; 
+      padding: 4px 8px;
+      border-right: 1px solid #eee;
+    }
+    .control-group:last-child { border-right: none; }
+    button { 
+      padding: 6px 12px; 
+      background: #4CAF50; 
+      color: white; 
+      border: none; 
+      border-radius: 3px; 
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #45a049; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    button.danger { background: #f44336; }
+    button.danger:hover { background: #da190b; }
+    button.secondary { background: #2196F3; }
+    button.secondary:hover { background: #0b7dda; }
+    input[type="number"], input[type="range"], select { 
+      padding: 4px 8px; 
+      border: 1px solid #ddd; 
+      border-radius: 3px;
+      font-size: 13px;
+    }
+    input[type="number"] { width: 80px; }
+    label { font-size: 13px; color: #333; font-weight: 500; }
+    .hint { color: #666; font-size: 12px; font-style: italic; }
+    .canvas-container { 
+      position: relative; 
+      background: #111; 
+      border: 1px solid #ccc; 
+      border-radius: 4px; 
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    canvas { 
+      display: block; 
+      cursor: crosshair;
+    }
+    .timeline { 
+      background: #fff; 
+      border: 1px solid #ccc; 
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 16px;
+    }
+    #timeSlider { width: 100%; }
+    .annotations-panel {
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .annotation-item {
+      padding: 6px;
+      margin-bottom: 4px;
+      background: #f5f5f5;
+      border-left: 3px solid #4CAF50;
+      border-radius: 2px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .annotation-item:hover { background: #e8e8e8; }
+    .annotation-delete {
+      background: #f44336;
+      color: white;
+      border: none;
+      padding: 2px 8px;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .stats-panel {
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .stat-item {
+      padding: 8px;
+      background: #f5f5f5;
+      border-radius: 3px;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .stat-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+    }
+    h2 { color: #333; margin-bottom: 8px; }
+    h3 { color: #555; font-size: 16px; margin: 12px 0 8px 0; }
+    .teach-section {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 2px solid #ddd;
+    }
+    #teachContent {
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 16px;
+      margin-top: 12px;
+    }
+    kbd {
+      background: #f5f5f5;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      padding: 2px 6px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🎵 Audio Annotator</h2>
+    <p class="hint">Upload an audio file to visualize waveform and spectrogram. Annotate time regions and frequencies, zoom and scroll, adjust playback speed, and export annotations.</p>
+
+    <!-- File Upload -->
+    <div class="controls-row">
+      <div class="control-group">
+        <label>Load Audio:</label>
+        <input id="fileInput" type="file" accept="audio/*" />
+      </div>
+      <span class="hint">or drag & drop an audio file anywhere</span>
+    </div>
+
+    <!-- Audio Stats -->
+    <div class="stats-panel" id="statsPanel" style="display:none;">
+      <h3>Audio Information</h3>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Duration</div>
+          <div class="stat-value" id="statDuration">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Sample Rate</div>
+          <div class="stat-value" id="statSampleRate">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Channels</div>
+          <div class="stat-value" id="statChannels">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Bit Depth</div>
+          <div class="stat-value" id="statBitDepth">16-bit</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Playback Controls -->
+    <div class="controls-row">
+      <div class="control-group">
+        <button id="playBtn" disabled>▶ Play</button>
+        <button id="pauseBtn" disabled>⏸ Pause</button>
+        <button id="stopBtn" disabled>⏹ Stop</button>
+      </div>
+      <div class="control-group">
+        <label>Speed:</label>
+        <select id="speedSelect">
+          <option value="0.25">0.25x</option>
+          <option value="0.5">0.5x</option>
+          <option value="0.75">0.75x</option>
+          <option value="1" selected>1x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Volume:</label>
+        <input id="volumeSlider" type="range" min="0" max="100" value="100" style="width:100px">
+        <span id="volumeValue">100%</span>
+      </div>
+      <div class="control-group">
+        <label>Time: <span id="currentTime">0:00.000</span> / <span id="totalTime">0:00.000</span></label>
+      </div>
+    </div>
+
+    <!-- Timeline Scrubber -->
+    <div class="timeline">
+      <input id="timeSlider" type="range" min="0" max="100" value="0" step="0.01" disabled>
+    </div>
+
+    <!-- Visualization Controls -->
+    <div class="controls-row">
+      <div class="control-group">
+        <label>Zoom:</label>
+        <button id="zoomInBtn">🔍+</button>
+        <button id="zoomOutBtn">🔍−</button>
+        <button id="zoomResetBtn">Reset</button>
+        <span id="zoomLevel">100%</span>
+      </div>
+      <div class="control-group">
+        <label>Amplitude:</label>
+        <input id="amplitudeSlider" type="range" min="1" max="10" value="1" step="0.1" style="width:100px">
+        <span id="amplitudeValue">1x</span>
+      </div>
+      <div class="control-group">
+        <label>FFT Size:</label>
+        <select id="fftSizeSelect">
+          <option value="256">256</option>
+          <option value="512">512</option>
+          <option value="1024">1024</option>
+          <option value="2048" selected>2048</option>
+          <option value="4096">4096</option>
+          <option value="8192">8192</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Color Scale:</label>
+        <select id="colorScaleSelect">
+          <option value="viridis" selected>Viridis</option>
+          <option value="grayscale">Grayscale</option>
+          <option value="hot">Hot</option>
+          <option value="cool">Cool</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Annotation Controls -->
+    <div class="controls-row">
+      <div class="control-group">
+        <strong>Annotation Mode:</strong>
+        <label><input type="radio" name="annotationMode" value="point" checked> Point</label>
+        <label><input type="radio" name="annotationMode" value="timeRange"> Time Range</label>
+        <label><input type="radio" name="annotationMode" value="freqRange"> Frequency Range</label>
+      </div>
+      <div class="control-group">
+        <button id="undoBtn">↶ Undo</button>
+        <button id="redoBtn">↷ Redo</button>
+        <button id="clearBtn" class="danger">Clear All</button>
+      </div>
+    </div>
+
+    <!-- Export/Import Controls -->
+    <div class="controls-row">
+      <div class="control-group">
+        <strong>Export:</strong>
+        <label><input type="radio" name="exportFormat" value="json" checked> JSON</label>
+        <label><input type="radio" name="exportFormat" value="csv"> CSV</label>
+        <button id="exportBtn" class="secondary">📥 Export</button>
+      </div>
+      <div class="control-group">
+        <label>Import:</label>
+        <input id="importInput" type="file" accept=".json,.csv" />
+        <button id="importBtn" class="secondary">📤 Import</button>
+      </div>
+    </div>
+
+    <!-- Waveform Canvas -->
+    <div class="canvas-container">
+      <h3 style="color:white; padding:8px; margin:0;">Waveform (Time-Series)</h3>
+      <canvas id="waveformCanvas" width="1200" height="200"></canvas>
+    </div>
+
+    <!-- Spectrogram Canvas -->
+    <div class="canvas-container">
+      <h3 style="color:white; padding:8px; margin:0;">Spectrogram (Time-Frequency)</h3>
+      <canvas id="spectrogramCanvas" width="1200" height="400"></canvas>
+    </div>
+
+    <!-- Annotations List -->
+    <div class="annotations-panel">
+      <h3>Annotations (<span id="annotationCount">0</span>)</h3>
+      <div id="annotationsList">
+        <p class="hint">No annotations yet. Click or drag on the visualizations to add markers.</p>
+      </div>
+    </div>
+
+    <!-- Tutorial Section -->
+    <div class="teach-section">
+      <button id="teachBtn" style="background:#c00;">📚 Teach Me!</button>
+      <div id="teachContent" style="display:none;">
+        <h3>Quick Start</h3>
+        <ol>
+          <li>Upload an audio file using the file picker or drag & drop.</li>
+          <li>Use playback controls to listen to the audio (adjust speed and volume as needed).</li>
+          <li>Zoom and scroll through the visualizations to explore the audio.</li>
+          <li>Select an annotation mode and click/drag on waveform or spectrogram to add markers.</li>
+          <li>Export annotations as JSON or CSV when done.</li>
+        </ol>
+
+        <h3>Features</h3>
+        <p><strong>Dual Visualization:</strong> The tool displays both the time-series waveform and frequency spectrogram in parallel, synchronized for easy analysis.</p>
+        
+        <p><strong>Playback Controls:</strong></p>
+        <ul>
+          <li>Play/Pause/Stop buttons for audio playback</li>
+          <li>Playback speed control (0.25x to 2x)</li>
+          <li>Volume control with visual indicator</li>
+          <li>Time scrubbing with slider (updates visualizations in real-time)</li>
+        </ul>
+
+        <p><strong>Visualization Controls:</strong></p>
+        <ul>
+          <li><strong>Zoom:</strong> Zoom in/out to see more detail or overview (scroll wheel also works)</li>
+          <li><strong>Amplitude:</strong> Adjust waveform amplitude scaling (1x to 10x)</li>
+          <li><strong>FFT Size:</strong> Control spectrogram frequency resolution (256 to 8192)</li>
+          <li><strong>Color Scale:</strong> Choose color mapping for spectrogram (Viridis, Grayscale, Hot, Cool)</li>
+        </ul>
+
+        <p><strong>Annotation Modes:</strong></p>
+        <ul>
+          <li><strong>Point:</strong> Click to mark a specific time point</li>
+          <li><strong>Time Range:</strong> Click and drag horizontally to mark a time region</li>
+          <li><strong>Frequency Range:</strong> Click and drag on spectrogram to mark time and frequency region</li>
+        </ul>
+
+        <p><strong>Navigation:</strong></p>
+        <ul>
+          <li>Click on visualizations to jump to that time</li>
+          <li>Drag on canvas to pan left/right when zoomed in</li>
+          <li>Mouse wheel to zoom in/out</li>
+          <li>Timeline slider for quick navigation</li>
+        </ul>
+
+        <p><strong>Annotations Management:</strong></p>
+        <ul>
+          <li>Annotations appear in the list below the visualizations</li>
+          <li>Click on an annotation to jump to that time</li>
+          <li>Delete individual annotations with the × button</li>
+          <li>Undo/Redo support for all operations</li>
+          <li>Clear All to remove all annotations at once</li>
+        </ul>
+
+        <p><strong>Export/Import:</strong></p>
+        <ul>
+          <li><strong>JSON:</strong> Full metadata with all annotation details</li>
+          <li><strong>CSV:</strong> Tabular format with time, frequency, and label columns</li>
+          <li>Import previously exported annotations (merge or replace)</li>
+          <li>Drag & drop annotation files to import</li>
+        </ul>
+
+        <p><strong>Keyboard Shortcuts:</strong></p>
+        <ul>
+          <li><kbd>Space</kbd> - Play/Pause</li>
+          <li><kbd>←</kbd><kbd>→</kbd> - Skip backward/forward (1 second)</li>
+          <li><kbd>+</kbd><kbd>-</kbd> - Zoom in/out</li>
+          <li><kbd>0</kbd> - Reset zoom</li>
+          <li><kbd>Ctrl+Z</kbd> - Undo</li>
+          <li><kbd>Ctrl+Y</kbd> - Redo</li>
+          <li><kbd>Ctrl+S</kbd> - Export</li>
+        </ul>
+
+        <p><strong>Audio Analysis Tips:</strong></p>
+        <ul>
+          <li>Use larger FFT sizes (4096, 8192) for better frequency resolution but lower time resolution</li>
+          <li>Use smaller FFT sizes (256, 512) for better time resolution in rapidly changing sounds</li>
+          <li>Adjust amplitude to see quiet signals more clearly</li>
+          <li>Use different color scales to highlight different features</li>
+          <li>Slow down playback (0.5x, 0.25x) to hear details in fast audio</li>
+        </ul>
+
+        <p class="hint">Click "Teach Me!" again to hide this tutorial.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ========== Global State ==========
+    let audioContext = null;
+    let audioBuffer = null;
+    let sourceNode = null;
+    let gainNode = null;
+    let isPlaying = false;
+    let playbackStartTime = 0;
+    let playbackStartOffset = 0;
+    let currentTime = 0;
+    let uploadedFilename = null;
+
+    // Visualization state
+    let zoomLevel = 1;
+    let scrollOffset = 0;
+    let amplitudeScale = 1;
+    let fftSize = 2048;
+    let colorScale = 'viridis';
+
+    // Annotations: array of {type, time, endTime?, freqMin?, freqMax?, label?}
+    let annotations = [];
+    let undoStack = [];
+    let redoStack = [];
+
+    // Drawing state
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartTime = 0;
+
+    // Cache for spectrogram to avoid recomputing
+    let spectrogramCache = null;
+    let spectrogramCacheSettings = null;
+    let isComputingSpectrogram = false;
+
+    // ========== DOM Elements ==========
+    const fileInput = document.getElementById('fileInput');
+    const playBtn = document.getElementById('playBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const speedSelect = document.getElementById('speedSelect');
+    const volumeSlider = document.getElementById('volumeSlider');
+    const volumeValue = document.getElementById('volumeValue');
+    const timeSlider = document.getElementById('timeSlider');
+    const currentTimeLabel = document.getElementById('currentTime');
+    const totalTimeLabel = document.getElementById('totalTime');
+    const zoomInBtn = document.getElementById('zoomInBtn');
+    const zoomOutBtn = document.getElementById('zoomOutBtn');
+    const zoomResetBtn = document.getElementById('zoomResetBtn');
+    const zoomLevelLabel = document.getElementById('zoomLevel');
+    const amplitudeSlider = document.getElementById('amplitudeSlider');
+    const amplitudeValue = document.getElementById('amplitudeValue');
+    const fftSizeSelect = document.getElementById('fftSizeSelect');
+    const colorScaleSelect = document.getElementById('colorScaleSelect');
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const importInput = document.getElementById('importInput');
+    const waveformCanvas = document.getElementById('waveformCanvas');
+    const spectrogramCanvas = document.getElementById('spectrogramCanvas');
+    const annotationsList = document.getElementById('annotationsList');
+    const annotationCount = document.getElementById('annotationCount');
+    const statsPanel = document.getElementById('statsPanel');
+    const statDuration = document.getElementById('statDuration');
+    const statSampleRate = document.getElementById('statSampleRate');
+    const statChannels = document.getElementById('statChannels');
+    const teachBtn = document.getElementById('teachBtn');
+    const teachContent = document.getElementById('teachContent');
+
+    const waveformCtx = waveformCanvas.getContext('2d');
+    const spectrogramCtx = spectrogramCanvas.getContext('2d');
+
+    // ========== Utility Functions ==========
+    function formatTime(seconds) {
+      if (!isFinite(seconds) || seconds < 0) seconds = 0;
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      const ms = Math.floor((seconds % 1) * 1000);
+      return `${mins}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+    }
+
+    function formatFrequency(hz) {
+      if (hz >= 1000) return (hz / 1000).toFixed(1) + ' kHz';
+      return Math.round(hz) + ' Hz';
+    }
+
+    // ========== Audio Loading ==========
+    async function loadAudioFile(file) {
+      uploadedFilename = file.name;
+      
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      // Update stats
+      statsPanel.style.display = 'block';
+      statDuration.textContent = formatTime(audioBuffer.duration);
+      statSampleRate.textContent = audioBuffer.sampleRate + ' Hz';
+      statChannels.textContent = audioBuffer.numberOfChannels;
+      totalTimeLabel.textContent = formatTime(audioBuffer.duration);
+
+      // Enable controls
+      playBtn.disabled = false;
+      pauseBtn.disabled = false;
+      stopBtn.disabled = false;
+      timeSlider.disabled = false;
+      timeSlider.max = audioBuffer.duration;
+
+      // Reset state
+      stopPlayback();
+      zoomLevel = 1;
+      scrollOffset = 0;
+      currentTime = 0;
+
+      // Clear spectrogram cache
+      spectrogramCache = null;
+      spectrogramCacheSettings = null;
+
+      // Render visualizations
+      renderWaveform();
+      computeAndRenderSpectrogram();
+      updateAnnotationsList();
+    }
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        await loadAudioFile(file);
+      } catch (err) {
+        console.error('Failed to load audio:', err);
+        alert('Failed to load audio file: ' + err.message);
+      }
+    });
+
+    // Drag & drop support
+    ['dragenter', 'dragover'].forEach(evt => {
+      document.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      });
+    });
+
+    document.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files || []);
+      if (!files.length) return;
+
+      // Handle audio files
+      const audioFile = files.find(f => f.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name));
+      if (audioFile) {
+        try {
+          await loadAudioFile(audioFile);
+        } catch (err) {
+          console.error('Failed to load audio:', err);
+          alert('Failed to load audio file: ' + err.message);
+        }
+      }
+
+      // Handle annotation files
+      const annoFiles = files.filter(f => /\.(json|csv)$/i.test(f.name) || /json|csv/.test(f.type));
+      if (annoFiles.length) {
+        const replace = confirm('Import annotations from dropped file(s). Replace existing annotations?\nOK = Replace, Cancel = Merge');
+        for (const f of annoFiles) {
+          await importAnnotationsFile(f, replace);
+        }
+      }
+    });
+
+    // ========== Playback Control ==========
+    function startPlayback() {
+      if (!audioBuffer || isPlaying) return;
+
+      stopPlayback(); // Clean up any existing source
+
+      sourceNode = audioContext.createBufferSource();
+      sourceNode.buffer = audioBuffer;
+      sourceNode.playbackRate.value = parseFloat(speedSelect.value);
+
+      gainNode = audioContext.createGain();
+      gainNode.gain.value = volumeSlider.value / 100;
+
+      sourceNode.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      sourceNode.onended = () => {
+        if (currentTime >= audioBuffer.duration) {
+          stopPlayback();
+        }
+      };
+
+      playbackStartTime = audioContext.currentTime;
+      playbackStartOffset = currentTime;
+      sourceNode.start(0, currentTime);
+      isPlaying = true;
+
+      updatePlaybackPosition();
+    }
+
+    function stopPlayback() {
+      if (sourceNode) {
+        try {
+          sourceNode.stop();
+          sourceNode.disconnect();
+        } catch (e) {}
+        sourceNode = null;
+      }
+      isPlaying = false;
+    }
+
+    function pausePlayback() {
+      if (isPlaying) {
+        currentTime = playbackStartOffset + (audioContext.currentTime - playbackStartTime) * parseFloat(speedSelect.value);
+        currentTime = Math.min(currentTime, audioBuffer.duration);
+        stopPlayback();
+      }
+    }
+
+    function updatePlaybackPosition() {
+      if (!isPlaying || !audioBuffer) return;
+
+      const elapsed = (audioContext.currentTime - playbackStartTime) * parseFloat(speedSelect.value);
+      currentTime = playbackStartOffset + elapsed;
+
+      if (currentTime >= audioBuffer.duration) {
+        currentTime = audioBuffer.duration;
+        stopPlayback();
+      }
+
+      currentTimeLabel.textContent = formatTime(currentTime);
+      timeSlider.value = currentTime;
+
+      // Only redraw playback position, not entire visualizations
+      drawPlaybackCursor();
+
+      if (isPlaying) {
+        requestAnimationFrame(updatePlaybackPosition);
+      }
+    }
+
+    playBtn.addEventListener('click', () => {
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+      startPlayback();
+    });
+
+    pauseBtn.addEventListener('click', pausePlayback);
+
+    stopBtn.addEventListener('click', () => {
+      stopPlayback();
+      currentTime = 0;
+      currentTimeLabel.textContent = formatTime(0);
+      timeSlider.value = 0;
+      renderWaveform();
+      renderSpectrogram();
+    });
+
+    speedSelect.addEventListener('change', () => {
+      if (isPlaying) {
+        pausePlayback();
+        startPlayback();
+      }
+    });
+
+    volumeSlider.addEventListener('input', () => {
+      const vol = volumeSlider.value;
+      volumeValue.textContent = vol + '%';
+      if (gainNode) {
+        gainNode.gain.value = vol / 100;
+      }
+    });
+
+    let timeSliderUpdateTimeout = null;
+    timeSlider.addEventListener('input', () => {
+      currentTime = parseFloat(timeSlider.value);
+      currentTimeLabel.textContent = formatTime(currentTime);
+      
+      // Debounce rendering during scrubbing
+      if (timeSliderUpdateTimeout) clearTimeout(timeSliderUpdateTimeout);
+      timeSliderUpdateTimeout = setTimeout(() => {
+        drawPlaybackCursor();
+      }, 16); // ~60fps
+    });
+
+    timeSlider.addEventListener('change', () => {
+      // Final update when scrubbing stops
+      drawPlaybackCursor();
+    });
+
+    // ========== Visualization ==========
+    function renderWaveform() {
+      if (!audioBuffer) return;
+
+      const width = waveformCanvas.width;
+      const height = waveformCanvas.height;
+      const ctx = waveformCtx;
+
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, width, height);
+
+      // Get channel data
+      const data = audioBuffer.getChannelData(0);
+      const duration = audioBuffer.duration;
+      const samplesPerPixel = Math.ceil((data.length / zoomLevel) / width);
+      const startSample = Math.floor((scrollOffset / duration) * data.length);
+
+      ctx.strokeStyle = '#0f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+
+      for (let x = 0; x < width; x++) {
+        const sampleIndex = startSample + x * samplesPerPixel;
+        if (sampleIndex >= data.length) break;
+
+        let min = 1;
+        let max = -1;
+        for (let i = 0; i < samplesPerPixel && sampleIndex + i < data.length; i++) {
+          const val = data[sampleIndex + i];
+          if (val < min) min = val;
+          if (val > max) max = val;
+        }
+
+        min *= amplitudeScale;
+        max *= amplitudeScale;
+        min = Math.max(-1, Math.min(1, min));
+        max = Math.max(-1, Math.min(1, max));
+
+        const y1 = ((1 - max) / 2) * height;
+        const y2 = ((1 - min) / 2) * height;
+
+        if (x === 0) {
+          ctx.moveTo(x, y1);
+        }
+        ctx.lineTo(x, y1);
+        ctx.lineTo(x, y2);
+      }
+
+      ctx.stroke();
+
+      // Draw center line
+      ctx.strokeStyle = '#333';
+      ctx.beginPath();
+      ctx.moveTo(0, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.stroke();
+
+      // Draw annotations
+      drawAnnotationsOnCanvas(ctx, width, height, 'waveform');
+      
+      // Draw playback position last
+      drawPlaybackCursorOnCanvas(ctx, waveformCanvas, 'waveform');
+    }
+
+    function drawPlaybackCursor() {
+      // Redraw both canvases with playback cursor
+      if (!audioBuffer) return;
+      
+      // Waveform
+      renderWaveform();
+      
+      // Spectrogram - just redraw from cache
+      if (spectrogramCache) {
+        spectrogramCtx.putImageData(spectrogramCache, 0, 0);
+        drawAnnotationsOnCanvas(spectrogramCtx, spectrogramCanvas.width, spectrogramCanvas.height, 'spectrogram');
+        drawPlaybackCursorOnCanvas(spectrogramCtx, spectrogramCanvas, 'spectrogram');
+      }
+    }
+
+    function drawPlaybackCursorOnCanvas(ctx, canvas, canvasType) {
+      if (!audioBuffer) return;
+      
+      const width = canvas.width;
+      const height = canvas.height;
+      const duration = audioBuffer.duration;
+      
+      const playbackX = ((currentTime - scrollOffset) / (duration / zoomLevel)) * width;
+      if (playbackX >= 0 && playbackX <= width) {
+        ctx.strokeStyle = '#ff0';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(playbackX, 0);
+        ctx.lineTo(playbackX, height);
+        ctx.stroke();
+      }
+    }
+
+    async function computeAndRenderSpectrogram() {
+      if (!audioBuffer || isComputingSpectrogram) return;
+
+      const width = spectrogramCanvas.width;
+      const height = spectrogramCanvas.height;
+      const ctx = spectrogramCtx;
+
+      // Check if we can use cached spectrogram
+      const cacheKey = `${fftSize}_${colorScale}_${zoomLevel}_${scrollOffset}`;
+      if (spectrogramCacheSettings === cacheKey && spectrogramCache) {
+        ctx.putImageData(spectrogramCache, 0, 0);
+        drawAnnotationsOnCanvas(ctx, width, height, 'spectrogram');
+        drawPlaybackCursorOnCanvas(ctx, spectrogramCanvas, 'spectrogram');
+        return;
+      }
+
+      isComputingSpectrogram = true;
+
+      // Show loading state
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = '#888';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('Computing spectrogram...', 10, height / 2);
+
+      // Use setTimeout to allow UI to update
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const data = audioBuffer.getChannelData(0);
+      const sampleRate = audioBuffer.sampleRate;
+      const duration = audioBuffer.duration;
+      const timePerPixel = (duration / zoomLevel) / width;
+
+      const imageData = ctx.createImageData(width, height);
+      const pixels = imageData.data;
+
+      const maxFreq = sampleRate / 2;
+      const numBins = fftSize / 2;
+
+      // Pre-compute Hann window
+      const hannWindow = new Float32Array(fftSize);
+      for (let i = 0; i < fftSize; i++) {
+        hannWindow[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+      }
+
+      // Compute spectrogram with reduced resolution for performance
+      const skipX = Math.max(1, Math.floor(width / 600)); // Max 600 columns
+      
+      for (let x = 0; x < width; x += skipX) {
+        const time = scrollOffset + x * timePerPixel;
+        const sampleIndex = Math.floor(time * sampleRate);
+        
+        if (sampleIndex + fftSize >= data.length) {
+          // Fill with black for out of range
+          for (let y = 0; y < height; y++) {
+            const pixelIndex = (y * width + x) * 4;
+            for (let dx = 0; dx < skipX && x + dx < width; dx++) {
+              const idx = pixelIndex + dx * 4;
+              pixels[idx] = 17;
+              pixels[idx + 1] = 17;
+              pixels[idx + 2] = 17;
+              pixels[idx + 3] = 255;
+            }
+          }
+          continue;
+        }
+
+        // Extract window and apply Hann window
+        const window = new Float32Array(fftSize);
+        for (let i = 0; i < fftSize; i++) {
+          window[i] = data[sampleIndex + i] * hannWindow[i];
+        }
+
+        // Compute FFT using simplified approach
+        const magnitudes = computeSimplifiedFFT(window);
+
+        // Map to pixels
+        for (let y = 0; y < height; y++) {
+          const freq = (1 - y / height) * maxFreq;
+          const bin = Math.floor((freq / maxFreq) * numBins);
+          
+          if (bin >= 0 && bin < magnitudes.length) {
+            const magnitude = magnitudes[bin];
+            const db = 20 * Math.log10(magnitude + 1e-10);
+            const normalizedDb = Math.max(0, Math.min(1, (db + 100) / 100));
+
+            const color = getColorForValue(normalizedDb, colorScale);
+            
+            // Fill skipped columns with same color
+            for (let dx = 0; dx < skipX && x + dx < width; dx++) {
+              const pixelIndex = (y * width + x + dx) * 4;
+              pixels[pixelIndex] = color.r;
+              pixels[pixelIndex + 1] = color.g;
+              pixels[pixelIndex + 2] = color.b;
+              pixels[pixelIndex + 3] = 255;
+            }
+          }
+        }
+
+        // Allow UI updates every 50 columns
+        if (x % 50 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      // Draw frequency labels
+      ctx.fillStyle = '#fff';
+      ctx.font = '10px monospace';
+      const freqLabels = [0, 1000, 2000, 5000, 10000, 15000, 20000];
+      for (const freq of freqLabels) {
+        if (freq > maxFreq) continue;
+        const y = height * (1 - freq / maxFreq);
+        ctx.fillText(formatFrequency(freq), 5, y - 2);
+      }
+
+      // Cache the result
+      spectrogramCache = ctx.getImageData(0, 0, width, height);
+      spectrogramCacheSettings = cacheKey;
+
+      // Draw annotations and cursor
+      drawAnnotationsOnCanvas(ctx, width, height, 'spectrogram');
+      drawPlaybackCursorOnCanvas(ctx, spectrogramCanvas, 'spectrogram');
+
+      isComputingSpectrogram = false;
+    }
+
+    // Simplified FFT - using decimation approach for better performance
+    function computeSimplifiedFFT(signal) {
+      const n = signal.length;
+      const numBins = n / 2;
+      const magnitudes = new Float32Array(numBins);
+      
+      // Simplified DFT for only the bins we need (every 4th for speed)
+      const binStep = Math.max(1, Math.floor(numBins / 256)); // Max 256 bins
+      
+      for (let k = 0; k < numBins; k += binStep) {
+        let real = 0;
+        let imag = 0;
+        
+        // Sample every few points for speed
+        const sampleStep = Math.max(1, Math.floor(n / 512));
+        
+        for (let t = 0; t < n; t += sampleStep) {
+          const angle = -2 * Math.PI * k * t / n;
+          real += signal[t] * Math.cos(angle);
+          imag += signal[t] * Math.sin(angle);
+        }
+        
+        const magnitude = Math.sqrt(real * real + imag * imag) / (n / sampleStep);
+        
+        // Fill adjacent bins with interpolated values
+        for (let dk = 0; dk < binStep && k + dk < numBins; dk++) {
+          magnitudes[k + dk] = magnitude;
+        }
+      }
+      
+      return magnitudes;
+    }
+
+    function getColorForValue(value, scale) {
+      // value is 0 to 1
+      value = Math.max(0, Math.min(1, value));
+
+      if (scale === 'grayscale') {
+        const v = Math.floor(value * 255);
+        return { r: v, g: v, b: v };
+      } else if (scale === 'hot') {
+        const r = Math.floor(Math.min(1, value * 3) * 255);
+        const g = Math.floor(Math.max(0, Math.min(1, value * 3 - 1)) * 255);
+        const b = Math.floor(Math.max(0, Math.min(1, value * 3 - 2)) * 255);
+        return { r, g, b };
+      } else if (scale === 'cool') {
+        const r = Math.floor(value * 255);
+        const g = Math.floor((1 - value) * 255);
+        const b = 255;
+        return { r, g, b };
+      } else { // viridis (approximation)
+        const r = Math.floor((0.267 + 0.533 * value) * 255);
+        const g = Math.floor((0.004 + 0.873 * value - 0.333 * value * value) * 255);
+        const b = Math.floor((0.329 + 0.184 * value + 0.487 * value * value) * 255);
+        return { r, g, b };
+      }
+    }
+
+    function drawAnnotationsOnCanvas(ctx, width, height, canvasType) {
+      if (!audioBuffer) return;
+
+      const duration = audioBuffer.duration;
+      const sampleRate = audioBuffer.sampleRate;
+      const maxFreq = sampleRate / 2;
+
+      annotations.forEach((anno, index) => {
+        const startX = ((anno.time - scrollOffset) / (duration / zoomLevel)) * width;
+        const endX = anno.endTime ? ((anno.endTime - scrollOffset) / (duration / zoomLevel)) * width : startX;
+
+        ctx.save();
+
+        if (anno.type === 'point') {
+          if (startX >= 0 && startX <= width) {
+            ctx.strokeStyle = '#0ff';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(startX, 0);
+            ctx.lineTo(startX, height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            ctx.fillStyle = '#0ff';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(`P${index + 1}`, startX + 3, 12);
+          }
+        } else if (anno.type === 'timeRange') {
+          if (endX >= 0 && startX <= width) {
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+            ctx.fillRect(Math.max(0, startX), 0, Math.min(width, endX) - Math.max(0, startX), height);
+            ctx.strokeStyle = '#0ff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(Math.max(0, startX), 0, Math.min(width, endX) - Math.max(0, startX), height);
+            
+            ctx.fillStyle = '#0ff';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(`T${index + 1}`, Math.max(2, startX + 3), 12);
+          }
+        } else if (anno.type === 'freqRange' && canvasType === 'spectrogram') {
+          if (endX >= 0 && startX <= width) {
+            const y1 = height * (1 - anno.freqMax / maxFreq);
+            const y2 = height * (1 - anno.freqMin / maxFreq);
+            
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.2)';
+            ctx.fillRect(Math.max(0, startX), y1, Math.min(width, endX) - Math.max(0, startX), y2 - y1);
+            ctx.strokeStyle = '#ff0';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(Math.max(0, startX), y1, Math.min(width, endX) - Math.max(0, startX), y2 - y1);
+            
+            ctx.fillStyle = '#ff0';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(`F${index + 1}`, Math.max(2, startX + 3), y1 + 12);
+          }
+        }
+
+        ctx.restore();
+      });
+    }
+
+    // ========== Canvas Interactions ==========
+    function getCanvasTime(canvas, clientX) {
+      if (!audioBuffer) return 0;
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const normalizedX = x / rect.width;
+      const duration = audioBuffer.duration;
+      return scrollOffset + normalizedX * (duration / zoomLevel);
+    }
+
+    function getCanvasFrequency(canvas, clientY) {
+      if (!audioBuffer) return 0;
+      const rect = canvas.getBoundingClientRect();
+      const y = clientY - rect.top;
+      const normalizedY = y / rect.height;
+      const sampleRate = audioBuffer.sampleRate;
+      const maxFreq = sampleRate / 2;
+      return maxFreq * (1 - normalizedY);
+    }
+
+    function setupCanvasInteractions(canvas, canvasType) {
+      canvas.addEventListener('mousedown', (e) => {
+        if (!audioBuffer) return;
+
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragStartTime = getCanvasTime(canvas, e.clientX);
+      });
+
+      canvas.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+
+        // Visual feedback during drag could be added here
+      });
+
+      canvas.addEventListener('mouseup', (e) => {
+        if (!isDragging) return;
+        isDragging = false;
+
+        const mode = document.querySelector('input[name="annotationMode"]:checked').value;
+        const endTime = getCanvasTime(canvas, e.clientX);
+        const dragDist = Math.abs(e.clientX - dragStartX);
+
+        if (mode === 'point') {
+          addAnnotation({
+            type: 'point',
+            time: dragStartTime
+          });
+        } else if (mode === 'timeRange') {
+          if (dragDist > 5) {
+            addAnnotation({
+              type: 'timeRange',
+              time: Math.min(dragStartTime, endTime),
+              endTime: Math.max(dragStartTime, endTime)
+            });
+          } else {
+            addAnnotation({
+              type: 'point',
+              time: dragStartTime
+            });
+          }
+        } else if (mode === 'freqRange' && canvasType === 'spectrogram') {
+          if (dragDist > 5) {
+            const startFreq = getCanvasFrequency(canvas, dragStartY);
+            const endFreq = getCanvasFrequency(canvas, e.clientY);
+            addAnnotation({
+              type: 'freqRange',
+              time: Math.min(dragStartTime, endTime),
+              endTime: Math.max(dragStartTime, endTime),
+              freqMin: Math.min(startFreq, endFreq),
+              freqMax: Math.max(startFreq, endFreq)
+            });
+          } else {
+            addAnnotation({
+              type: 'point',
+              time: dragStartTime
+            });
+          }
+        }
+
+        renderWaveform();
+        if (spectrogramCache) {
+          spectrogramCtx.putImageData(spectrogramCache, 0, 0);
+          drawAnnotationsOnCanvas(spectrogramCtx, spectrogramCanvas.width, spectrogramCanvas.height, 'spectrogram');
+          drawPlaybackCursorOnCanvas(spectrogramCtx, spectrogramCanvas, 'spectrogram');
+        }
+      });
+
+      let wheelTimeout = null;
+      canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = Math.sign(e.deltaY);
+        
+        if (delta < 0) {
+          zoomLevel = Math.min(zoomLevel * 1.2, 100);
+        } else {
+          zoomLevel = Math.max(zoomLevel / 1.2, 1);
+          if (zoomLevel === 1) scrollOffset = 0;
+        }
+        
+        zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+        renderWaveform();
+        
+        // Debounce spectrogram update
+        if (wheelTimeout) clearTimeout(wheelTimeout);
+        wheelTimeout = setTimeout(() => {
+          spectrogramCache = null;
+          computeAndRenderSpectrogram();
+        }, 300);
+      }, { passive: false });
+
+      // Click to jump to time
+      canvas.addEventListener('click', (e) => {
+        if (Math.abs(e.clientX - dragStartX) < 5 && !isDragging) {
+          const time = getCanvasTime(canvas, e.clientX);
+          seekToTime(time);
+        }
+      });
+    }
+
+    setupCanvasInteractions(waveformCanvas, 'waveform');
+    setupCanvasInteractions(spectrogramCanvas, 'spectrogram');
+
+    function seekToTime(time) {
+      const wasPlaying = isPlaying;
+      if (isPlaying) pausePlayback();
+      
+      currentTime = Math.max(0, Math.min(time, audioBuffer.duration));
+      currentTimeLabel.textContent = formatTime(currentTime);
+      timeSlider.value = currentTime;
+      drawPlaybackCursor();
+      
+      if (wasPlaying) {
+        setTimeout(() => startPlayback(), 50);
+      }
+    }
+
+    // ========== Zoom Controls ==========
+    function zoomIn() {
+      zoomLevel = Math.min(zoomLevel * 1.5, 100);
+      zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+      renderWaveform();
+    }
+
+    function zoomOut() {
+      zoomLevel = Math.max(zoomLevel / 1.5, 1);
+      if (zoomLevel === 1) scrollOffset = 0;
+      zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+      renderWaveform();
+    }
+
+    function zoomReset() {
+      zoomLevel = 1;
+      scrollOffset = 0;
+      zoomLevelLabel.textContent = '100%';
+      renderWaveform();
+    }
+
+    zoomInBtn.addEventListener('click', () => {
+      zoomIn();
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    });
+    
+    zoomOutBtn.addEventListener('click', () => {
+      zoomOut();
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    });
+    
+    zoomResetBtn.addEventListener('click', () => {
+      zoomReset();
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    });
+
+    let amplitudeUpdateTimeout = null;
+    amplitudeSlider.addEventListener('input', () => {
+      amplitudeScale = parseFloat(amplitudeSlider.value);
+      amplitudeValue.textContent = amplitudeScale.toFixed(1) + 'x';
+      
+      // Debounce waveform rendering
+      if (amplitudeUpdateTimeout) clearTimeout(amplitudeUpdateTimeout);
+      amplitudeUpdateTimeout = setTimeout(() => {
+        renderWaveform();
+      }, 100);
+    });
+
+    fftSizeSelect.addEventListener('change', () => {
+      fftSize = parseInt(fftSizeSelect.value);
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    });
+
+    colorScaleSelect.addEventListener('change', () => {
+      colorScale = colorScaleSelect.value;
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    });
+
+    // ========== Annotations ==========
+    function addAnnotation(annotation) {
+      annotations.push(annotation);
+      undoStack.push({ type: 'add', annotation });
+      redoStack.length = 0;
+      updateAnnotationsList();
+    }
+
+    function removeAnnotation(index) {
+      const removed = annotations.splice(index, 1)[0];
+      undoStack.push({ type: 'remove', annotation: removed, index });
+      redoStack.length = 0;
+      updateAnnotationsList();
+      drawPlaybackCursor();
+    }
+
+    function updateAnnotationsList() {
+      annotationCount.textContent = annotations.length;
+
+      if (annotations.length === 0) {
+        annotationsList.innerHTML = '<p class="hint">No annotations yet. Click or drag on the visualizations to add markers.</p>';
+        return;
+      }
+
+      annotationsList.innerHTML = '';
+      annotations.forEach((anno, index) => {
+        const div = document.createElement('div');
+        div.className = 'annotation-item';
+
+        let text = '';
+        if (anno.type === 'point') {
+          text = `Point at ${formatTime(anno.time)}`;
+        } else if (anno.type === 'timeRange') {
+          text = `Time Range: ${formatTime(anno.time)} - ${formatTime(anno.endTime)}`;
+        } else if (anno.type === 'freqRange') {
+          text = `Freq Range: ${formatTime(anno.time)} - ${formatTime(anno.endTime)}, ${formatFrequency(anno.freqMin)} - ${formatFrequency(anno.freqMax)}`;
+        }
+
+        const textSpan = document.createElement('span');
+        textSpan.textContent = text;
+        textSpan.style.cursor = 'pointer';
+        textSpan.addEventListener('click', () => {
+          seekToTime(anno.time);
+        });
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'annotation-delete';
+        deleteBtn.textContent = '×';
+        deleteBtn.addEventListener('click', () => removeAnnotation(index));
+
+        div.appendChild(textSpan);
+        div.appendChild(deleteBtn);
+        annotationsList.appendChild(div);
+      });
+    }
+
+    // ========== Undo/Redo ==========
+    undoBtn.addEventListener('click', () => {
+      const op = undoStack.pop();
+      if (!op) return;
+
+      if (op.type === 'add') {
+        const index = annotations.indexOf(op.annotation);
+        if (index >= 0) annotations.splice(index, 1);
+      } else if (op.type === 'remove') {
+        annotations.splice(op.index, 0, op.annotation);
+      } else if (op.type === 'clear') {
+        annotations = op.annotations.slice();
+      }
+
+      redoStack.push(op);
+      updateAnnotationsList();
+      drawPlaybackCursor();
+    });
+
+    redoBtn.addEventListener('click', () => {
+      const op = redoStack.pop();
+      if (!op) return;
+
+      if (op.type === 'add') {
+        annotations.push(op.annotation);
+      } else if (op.type === 'remove') {
+        const index = annotations.indexOf(op.annotation);
+        if (index >= 0) annotations.splice(index, 1);
+      } else if (op.type === 'clear') {
+        annotations = [];
+      }
+
+      undoStack.push(op);
+      updateAnnotationsList();
+      drawPlaybackCursor();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      if (annotations.length === 0) return;
+      if (!confirm('Clear all annotations?')) return;
+
+      undoStack.push({ type: 'clear', annotations: annotations.slice() });
+      redoStack.length = 0;
+      annotations = [];
+      updateAnnotationsList();
+      drawPlaybackCursor();
+    });
+
+    // ========== Export/Import ==========
+    exportBtn.addEventListener('click', () => {
+      if (!audioBuffer) return;
+
+      const format = document.querySelector('input[name="exportFormat"]:checked').value;
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const baseName = uploadedFilename ? uploadedFilename.replace(/\.[^.]+$/, '') : 'audio';
+      const filename = `${baseName}_annotations_${timestamp}`;
+
+      if (format === 'json') {
+        const data = {
+          meta: {
+            filename: uploadedFilename,
+            duration: audioBuffer.duration,
+            sampleRate: audioBuffer.sampleRate,
+            exported_at: new Date().toISOString()
+          },
+          annotations: annotations
+        };
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        downloadBlob(blob, filename + '.json');
+      } else {
+        // CSV format
+        const rows = ['type,time,end_time,freq_min,freq_max,label'];
+        annotations.forEach(anno => {
+          const endTime = anno.endTime || '';
+          const freqMin = anno.freqMin !== undefined ? anno.freqMin.toFixed(2) : '';
+          const freqMax = anno.freqMax !== undefined ? anno.freqMax.toFixed(2) : '';
+          const label = anno.label || '';
+          rows.push(`${anno.type},${anno.time.toFixed(4)},${endTime},${freqMin},${freqMax},${label}`);
+        });
+
+        const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+        downloadBlob(blob, filename + '.csv');
+      }
+    });
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    importBtn.addEventListener('click', async () => {
+      if (!importInput.files || !importInput.files[0]) {
+        alert('Please select a file to import.');
+        return;
+      }
+
+      const file = importInput.files[0];
+      const replace = confirm('Replace existing annotations?\nOK = Replace, Cancel = Merge');
+      await importAnnotationsFile(file, replace);
+    });
+
+    async function importAnnotationsFile(file, replace) {
+      try {
+        const text = await file.text();
+        const isJson = /\.json$/i.test(file.name) || /json/.test(file.type);
+
+        if (isJson) {
+          const data = JSON.parse(text);
+          const imported = data.annotations || data;
+          
+          if (replace) {
+            annotations = imported;
+          } else {
+            annotations = annotations.concat(imported);
+          }
+        } else {
+          // CSV
+          const lines = text.split(/\r?\n/).filter(l => l.trim());
+          const header = lines[0].split(',');
+          const rows = lines.slice(1);
+
+          const imported = rows.map(line => {
+            const cols = line.split(',');
+            const anno = {
+              type: cols[0] || 'point',
+              time: parseFloat(cols[1]) || 0
+            };
+
+            if (cols[2]) anno.endTime = parseFloat(cols[2]);
+            if (cols[3]) anno.freqMin = parseFloat(cols[3]);
+            if (cols[4]) anno.freqMax = parseFloat(cols[4]);
+            if (cols[5]) anno.label = cols[5];
+
+            return anno;
+          });
+
+          if (replace) {
+            annotations = imported;
+          } else {
+            annotations = annotations.concat(imported);
+          }
+        }
+
+        updateAnnotationsList();
+        drawPlaybackCursor();
+      } catch (err) {
+        console.error('Import failed:', err);
+        alert('Failed to import annotations: ' + err.message);
+      }
+    }
+
+    // ========== Keyboard Shortcuts ==========
+    document.addEventListener('keydown', (e) => {
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (isPlaying) pausePlayback();
+        else startPlayback();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        seekToTime(currentTime - 1);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        seekToTime(currentTime + 1);
+      } else if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === '-') {
+        e.preventDefault();
+        zoomOut();
+      } else if (e.key === '0') {
+        e.preventDefault();
+        zoomReset();
+      } else if (e.ctrlKey && e.key === 'z') {
+        e.preventDefault();
+        undoBtn.click();
+      } else if (e.ctrlKey && e.key === 'y') {
+        e.preventDefault();
+        redoBtn.click();
+      } else if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        exportBtn.click();
+      }
+    });
+
+    // ========== Tutorial Toggle ==========
+    teachBtn.addEventListener('click', () => {
+      if (teachContent.style.display === 'none') {
+        teachContent.style.display = 'block';
+        teachBtn.textContent = '📚 Hide Tutorial';
+      } else {
+        teachContent.style.display = 'none';
+        teachBtn.textContent = '📚 Teach Me!';
+      }
+    });
+
+    // ========== Initial State ==========
+    // Draw empty canvases
+    waveformCtx.fillStyle = '#111';
+    waveformCtx.fillRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+    waveformCtx.fillStyle = '#888';
+    waveformCtx.font = '14px sans-serif';
+    waveformCtx.fillText('Load an audio file to start', 10, waveformCanvas.height / 2);
+    
+    spectrogramCtx.fillStyle = '#111';
+    spectrogramCtx.fillRect(0, 0, spectrogramCanvas.width, spectrogramCanvas.height);
+    spectrogramCtx.fillStyle = '#888';
+    spectrogramCtx.font = '14px sans-serif';
+    spectrogramCtx.fillText('Load an audio file to start', 10, spectrogramCanvas.height / 2);
+  </script>
+</body>
+</html>
