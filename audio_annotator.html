@@ -400,6 +400,8 @@ Maintenance Notes:
           <li>Click on visualizations to jump to that time</li>
           <li>Drag on canvas to pan left/right when zoomed in</li>
           <li>Mouse wheel to zoom in/out</li>
+          <li><kbd>Shift</kbd> + Mouse wheel to pan left/right (horizontal scrolling)</li>
+          <li>View window slider for quick navigation through audio</li>
           <li>Timeline slider for quick navigation</li>
         </ul>
 
@@ -595,7 +597,9 @@ Maintenance Notes:
       // Update stats
       statsPanel.style.display = 'block';
       statDuration.textContent = formatTime(audioBuffer.duration);
-      statSampleRate.textContent = audioBuffer.sampleRate + ' Hz';
+      // Note: audioBuffer.sampleRate is the decoded buffer's rate (matches AudioContext)
+      // The Web Audio API resamples all audio to the AudioContext's native rate
+      statSampleRate.textContent = audioBuffer.sampleRate.toLocaleString() + ' Hz';
       statChannels.textContent = audioBuffer.numberOfChannels;
       totalTimeLabel.textContent = formatTime(audioBuffer.duration);
 
@@ -845,11 +849,57 @@ Maintenance Notes:
       ctx.lineTo(width, height / 2);
       ctx.stroke();
 
+      // Draw time axis
+      drawTimeAxis(ctx, width, height, duration, scrollOffset, zoomLevel);
+
       // Draw annotations
       drawAnnotationsOnCanvas(ctx, width, height, 'waveform');
       
       // Draw playback position last
       drawPlaybackCursorOnCanvas(ctx, waveformCanvas, 'waveform');
+    }
+
+    function drawTimeAxis(ctx, width, height, duration, scrollOffset, zoomLevel) {
+      const viewDuration = duration / zoomLevel;
+      const startTime = scrollOffset;
+      const endTime = scrollOffset + viewDuration;
+
+      ctx.strokeStyle = '#555';
+      ctx.fillStyle = '#aaa';
+      ctx.font = '10px monospace';
+      ctx.lineWidth = 1;
+
+      // Calculate appropriate time interval for labels
+      const targetLabels = 10;
+      const timeSpan = viewDuration;
+      const rawInterval = timeSpan / targetLabels;
+      
+      // Round to nice intervals: 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, etc.
+      const magnitude = Math.pow(10, Math.floor(Math.log10(rawInterval)));
+      const normalized = rawInterval / magnitude;
+      let niceInterval;
+      if (normalized <= 1) niceInterval = magnitude;
+      else if (normalized <= 2) niceInterval = 2 * magnitude;
+      else if (normalized <= 5) niceInterval = 5 * magnitude;
+      else niceInterval = 10 * magnitude;
+
+      // Draw tick marks and labels
+      const firstTick = Math.ceil(startTime / niceInterval) * niceInterval;
+      for (let time = firstTick; time <= endTime; time += niceInterval) {
+        const x = ((time - scrollOffset) / viewDuration) * width;
+        if (x < 0 || x > width) continue;
+
+        // Draw tick mark at bottom
+        ctx.beginPath();
+        ctx.moveTo(x, height - 10);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+
+        // Draw time label
+        const label = time.toFixed(Math.max(0, -Math.floor(Math.log10(niceInterval)))) + 's';
+        const textWidth = ctx.measureText(label).width;
+        ctx.fillText(label, Math.max(0, Math.min(width - textWidth, x - textWidth / 2)), height - 12);
+      }
     }
 
     function drawPlaybackCursor() {
@@ -1001,6 +1051,9 @@ Maintenance Notes:
         const y = height * (1 - freq / maxFreq);
         ctx.fillText(formatFrequency(freq), 5, y - 2);
       }
+
+      // Draw time axis
+      drawTimeAxis(ctx, width, height, duration, scrollOffset, zoomLevel);
 
       // Cache the result
       spectrogramCache = ctx.getImageData(0, 0, width, height);
@@ -1230,26 +1283,49 @@ Maintenance Notes:
       let wheelTimeout = null;
       canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const delta = Math.sign(e.deltaY);
         
-        if (delta < 0) {
-          zoomLevel = Math.min(zoomLevel * 1.2, 1000);
+        if (e.shiftKey) {
+          // Shift + wheel: pan left/right
+          if (!audioBuffer) return;
+          const duration = audioBuffer.duration;
+          const viewSpan = duration / zoomLevel;
+          const panAmount = viewSpan * 0.1; // Pan by 10% of view span
+          const delta = Math.sign(e.deltaY);
+          
+          scrollOffset -= delta * panAmount;
+          clampScrollOffset();
+          updateViewWindowControls();
+          renderWaveform();
+          
+          // Debounce spectrogram update
+          if (wheelTimeout) clearTimeout(wheelTimeout);
+          wheelTimeout = setTimeout(() => {
+            spectrogramCache = null;
+            computeAndRenderSpectrogram();
+          }, 300);
         } else {
-          zoomLevel = Math.max(zoomLevel / 1.2, 1);
-          if (zoomLevel === 1) scrollOffset = 0;
+          // Normal wheel: zoom in/out
+          const delta = Math.sign(e.deltaY);
+          
+          if (delta < 0) {
+            zoomLevel = Math.min(zoomLevel * 1.2, 1000);
+          } else {
+            zoomLevel = Math.max(zoomLevel / 1.2, 1);
+            if (zoomLevel === 1) scrollOffset = 0;
+          }
+          
+          zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+          clampScrollOffset();
+          updateViewWindowControls();
+          renderWaveform();
+          
+          // Debounce spectrogram update
+          if (wheelTimeout) clearTimeout(wheelTimeout);
+          wheelTimeout = setTimeout(() => {
+            spectrogramCache = null;
+            computeAndRenderSpectrogram();
+          }, 300);
         }
-        
-        zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
-        clampScrollOffset();
-        updateViewWindowControls();
-        renderWaveform();
-        
-        // Debounce spectrogram update
-        if (wheelTimeout) clearTimeout(wheelTimeout);
-        wheelTimeout = setTimeout(() => {
-          spectrogramCache = null;
-          computeAndRenderSpectrogram();
-        }, 300);
       }, { passive: false });
 
       // Click to jump to time (unless just created an annotation)
