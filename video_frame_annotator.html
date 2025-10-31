@@ -81,6 +81,10 @@ Maintenance Notes:
     <button id="gotoFrameBtn">Go</button>
     <button id="firstFrameBtn">First Frame</button>
   </div>
+  <div class="row">
+    <input id="scrubSlider" type="range" min="0" value="0" step="1" style="flex:1; max-width:520px" disabled>
+    <label>Time: <span id="currentTime">0:00.000</span> / <span id="totalTime">0:00.000</span></label>
+  </div>
 
   <div id="player">
     <div>
@@ -94,7 +98,7 @@ Maintenance Notes:
       </div>
       <div class="row">
         <label>Current frame markers: <span id="markerCount">0</span></label>
-        <span class="hint">(click/drag to add, shift+click to remove nearest)</span>
+        <span class="hint">(use slider or mouse wheel to scrub; click/drag to add, shift+click to remove nearest)</span>
       </div>
     </div>
 
@@ -134,6 +138,9 @@ Maintenance Notes:
   const modeCircle = document.getElementById('modeCircle');
   const importInput = document.getElementById('importInput');
   const importBtn = document.getElementById('importBtn');
+  const scrubSlider = document.getElementById('scrubSlider');
+  const currentTimeLabel = document.getElementById('currentTime');
+  const totalTimeLabel = document.getElementById('totalTime');
 
   // Data structure: map frameNumber -> array of markers
   // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius}
@@ -147,6 +154,8 @@ Maintenance Notes:
 
   let rafId = null;
   let playing = false;
+  let isScrubbing = false;
+  let wasPlayingOnScrub = false;
 
   // Drawing state for drag operations
   let isDragging = false;
@@ -325,6 +334,31 @@ Maintenance Notes:
     const totalFrames = Math.max(0, Math.round(video.duration * fps));
     frameCountLabel.textContent = totalFrames;
     frameIndexLabel.textContent = getCurrentFrameIndex();
+    // Update scrub slider and time labels
+    if (Number.isFinite(video.duration)) {
+      totalTimeLabel.textContent = formatTime(video.duration);
+    } else {
+      totalTimeLabel.textContent = '0:00.000';
+    }
+    currentTimeLabel.textContent = formatTime(video.currentTime || 0);
+    const maxFrame = Math.max(0, totalFrames - 1);
+    if (scrubSlider) {
+      scrubSlider.max = String(maxFrame);
+      scrubSlider.step = '1';
+      scrubSlider.disabled = !(video.readyState >= 1);
+      if (!isScrubbing) {
+        const cf = getCurrentFrameIndex();
+        scrubSlider.value = String(Math.min(Math.max(0, cf), maxFrame));
+      }
+    }
+  }
+
+  function formatTime(sec) {
+    if (!Number.isFinite(sec) || sec < 0) sec = 0;
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec - Math.floor(sec)) * 1000);
+    return `${m}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
   }
 
   // Navigation
@@ -357,6 +391,36 @@ Maintenance Notes:
     drawFrameOverlay();
     updateFrameLabels();
   });
+
+  // Scrubbing interactions
+  if (scrubSlider) {
+    scrubSlider.addEventListener('pointerdown', () => {
+      wasPlayingOnScrub = playing;
+      if (playing) video.pause();
+      isScrubbing = true;
+    });
+    scrubSlider.addEventListener('input', () => {
+      const f = parseInt(scrubSlider.value) || 0;
+      seekToFrame(f);
+      drawFrameOverlay();
+      updateFrameLabels();
+    });
+    const endScrub = () => {
+      if (!isScrubbing) return;
+      isScrubbing = false;
+      if (wasPlayingOnScrub) video.play();
+    };
+    scrubSlider.addEventListener('pointerup', endScrub);
+    scrubSlider.addEventListener('pointercancel', endScrub);
+    scrubSlider.addEventListener('change', () => {
+      // Ensure final position applied
+      const f = parseInt(scrubSlider.value) || 0;
+      seekToFrame(f);
+      drawFrameOverlay();
+      updateFrameLabels();
+      endScrub();
+    });
+  }
 
   // File input
   fileInput.addEventListener('change', (e) => {
@@ -650,6 +714,17 @@ Maintenance Notes:
     dragCurrentX = coords.x;
     dragCurrentY = coords.y;
   });
+
+  // Mouse wheel scrubbing over canvas: step frames up/down
+  canvas.addEventListener('wheel', (e) => {
+    if (!video.videoWidth) return;
+    e.preventDefault();
+    const step = parseInt(frameStepInput.value) || 1;
+    const delta = Math.sign(e.deltaY);
+    let idx = getCurrentFrameIndex() + (delta > 0 ? step : -step);
+    idx = Math.max(0, idx);
+    seekToFrame(idx);
+  }, { passive: false });
 
   canvas.addEventListener('mousemove', (ev) => {
     if (!isDragging) return;
@@ -951,6 +1026,7 @@ Maintenance Notes:
         <li>Click "Choose file" or drag & drop a video onto the page.</li>
         <li>Optionally import existing annotations (JSON/CSV) using the Import control or by dropping the file anywhere. You'll be asked to Replace or Merge.</li>
         <li><span style="color:red">Manually set the FPS (frames per seconds) of the video. Currently the FPS auto-detection is typically wrong.</span></li>
+        <li>Scrub the video with the timeline slider (pauses while dragging, resumes on release) or use the mouse wheel over the canvas to step frames by the configured step size.</li>
         <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, or <strong>Circle</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
         <li>Click or click-and-drag on the canvas to add markers. Shift+Click removes the nearest marker on that frame.</li>
@@ -979,6 +1055,7 @@ Maintenance Notes:
       <ul>
         <li>Video upload via file picker or drag & drop</li>
         <li>Import annotations from JSON/CSV (replace or merge)</li>
+        <li>Elegant scrubbing with a timeline slider and mouse wheel stepping</li>
         <li>Three annotation modes: Point, Bounding Box, and Circle</li>
         <li>Per-frame marking with pixel coordinates</li>
         <li>Visual preview while dragging boxes/circles</li>
