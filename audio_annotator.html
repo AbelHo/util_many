@@ -289,10 +289,10 @@ Maintenance Notes:
       <div class="control-group">
         <label>Color Scale:</label>
         <select id="colorScaleSelect">
-          <option value="viridis" selected>Viridis</option>
+          <option value="cool" selected>Cool</option>
+          <option value="viridis">Viridis</option>
           <option value="grayscale">Grayscale</option>
           <option value="hot">Hot</option>
-          <option value="cool">Cool</option>
         </select>
       </div>
     </div>
@@ -303,12 +303,21 @@ Maintenance Notes:
         <strong>Annotation Mode:</strong>
         <label><input type="radio" name="annotationMode" value="point" checked> Point</label>
         <label><input type="radio" name="annotationMode" value="timeRange"> Time Range</label>
-        <label><input type="radio" name="annotationMode" value="freqRange"> Frequency Range</label>
+        <span class="hint">Hold Shift on spectrogram to draw Time–Frequency box</span>
       </div>
       <div class="control-group">
         <button id="undoBtn">↶ Undo</button>
         <button id="redoBtn">↷ Redo</button>
         <button id="clearBtn" class="danger">Clear All</button>
+      </div>
+    </div>
+
+    <!-- View Window Controls -->
+    <div class="controls-row">
+      <div class="control-group" style="flex:1">
+        <label style="min-width:110px;">View Window:</label>
+        <input id="viewStartSlider" type="range" min="0" max="0" value="0" step="0.001" style="flex:1;">
+        <span id="viewWindowLabel" class="hint" style="min-width:220px; text-align:right;">start 0.000s · span 0.000s</span>
       </div>
     </div>
 
@@ -381,9 +390,9 @@ Maintenance Notes:
 
         <p><strong>Annotation Modes:</strong></p>
         <ul>
-          <li><strong>Point:</strong> Click to mark a specific time point</li>
-          <li><strong>Time Range:</strong> Click and drag horizontally to mark a time region</li>
-          <li><strong>Frequency Range:</strong> Click and drag on spectrogram to mark time and frequency region</li>
+          <li><strong>Point:</strong> Click on the spectrogram to mark a time–frequency point</li>
+          <li><strong>Time Range:</strong> Click and drag horizontally (on waveform or spectrogram) to mark a time region</li>
+          <li><strong>Time–Frequency Box:</strong> Hold <kbd>Shift</kbd> and drag on the spectrogram to mark a time–frequency bounding box</li>
         </ul>
 
         <p><strong>Navigation:</strong></p>
@@ -453,9 +462,12 @@ Maintenance Notes:
     let scrollOffset = 0;
     let amplitudeScale = 1;
     let fftSize = 2048;
-    let colorScale = 'viridis';
+    let colorScale = 'cool';
 
-    // Annotations: array of {type, time, endTime?, freqMin?, freqMax?, label?}
+  // Annotations: array of
+  //  - point: {type:'point', time, freq?}
+  //  - timeRange: {type:'timeRange', time, endTime}
+  //  - freqRange: {type:'freqRange', time, endTime, freqMin, freqMax}
     let annotations = [];
     let undoStack = [];
     let redoStack = [];
@@ -480,6 +492,7 @@ Maintenance Notes:
     const volumeSlider = document.getElementById('volumeSlider');
     const volumeValue = document.getElementById('volumeValue');
     const timeSlider = document.getElementById('timeSlider');
+  const viewStartSlider = document.getElementById('viewStartSlider');
     const currentTimeLabel = document.getElementById('currentTime');
     const totalTimeLabel = document.getElementById('totalTime');
     const zoomInBtn = document.getElementById('zoomInBtn');
@@ -500,6 +513,7 @@ Maintenance Notes:
     const spectrogramCanvas = document.getElementById('spectrogramCanvas');
     const annotationsList = document.getElementById('annotationsList');
     const annotationCount = document.getElementById('annotationCount');
+  const viewWindowLabel = document.getElementById('viewWindowLabel');
     const statsPanel = document.getElementById('statsPanel');
     const statDuration = document.getElementById('statDuration');
     const statSampleRate = document.getElementById('statSampleRate');
@@ -523,6 +537,49 @@ Maintenance Notes:
       if (hz >= 1000) return (hz / 1000).toFixed(1) + ' kHz';
       return Math.round(hz) + ' Hz';
     }
+
+    function clampScrollOffset() {
+      if (!audioBuffer) return 0;
+      const duration = audioBuffer.duration;
+      const span = duration / zoomLevel;
+      const maxStart = Math.max(0, duration - span);
+      scrollOffset = Math.max(0, Math.min(scrollOffset, maxStart));
+      return scrollOffset;
+    }
+
+    function updateViewWindowControls() {
+      if (!audioBuffer) {
+        viewStartSlider.disabled = true;
+        viewStartSlider.max = 0;
+        viewStartSlider.value = 0;
+        viewWindowLabel.textContent = 'start 0.000s · span 0.000s';
+        return;
+      }
+      const duration = audioBuffer.duration;
+      const span = duration / zoomLevel;
+      const maxStart = Math.max(0, duration - span);
+      viewStartSlider.disabled = maxStart <= 0.0005;
+      viewStartSlider.min = 0;
+      viewStartSlider.max = maxStart;
+      viewStartSlider.step = Math.max(0.001, span / 2000);
+      clampScrollOffset();
+      viewStartSlider.value = scrollOffset;
+      viewWindowLabel.textContent = `start ${scrollOffset.toFixed(3)}s · span ${span.toFixed(3)}s`;
+    }
+
+    let viewSliderDebounce;
+    viewStartSlider.addEventListener('input', () => {
+      if (!audioBuffer) return;
+      scrollOffset = parseFloat(viewStartSlider.value) || 0;
+      clampScrollOffset();
+      updateViewWindowControls();
+      renderWaveform();
+      if (viewSliderDebounce) clearTimeout(viewSliderDebounce);
+      viewSliderDebounce = setTimeout(() => {
+        spectrogramCache = null;
+        computeAndRenderSpectrogram();
+      }, 200);
+    });
 
     // ========== Audio Loading ==========
     async function loadAudioFile(file) {
@@ -563,6 +620,7 @@ Maintenance Notes:
       renderWaveform();
       computeAndRenderSpectrogram();
       updateAnnotationsList();
+      updateViewWindowControls();
     }
 
     fileInput.addEventListener('change', async (e) => {
@@ -695,8 +753,7 @@ Maintenance Notes:
       currentTime = 0;
       currentTimeLabel.textContent = formatTime(0);
       timeSlider.value = 0;
-      renderWaveform();
-      renderSpectrogram();
+      drawPlaybackCursor();
     });
 
     speedSelect.addEventListener('change', () => {
@@ -779,9 +836,9 @@ Maintenance Notes:
         ctx.lineTo(x, y2);
       }
 
-      ctx.stroke();
+  ctx.stroke();
 
-      // Draw center line
+  // Draw center line
       ctx.strokeStyle = '#333';
       ctx.beginPath();
       ctx.moveTo(0, height / 2);
@@ -1029,18 +1086,29 @@ Maintenance Notes:
 
         if (anno.type === 'point') {
           if (startX >= 0 && startX <= width) {
-            ctx.strokeStyle = '#0ff';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 5]);
-            ctx.beginPath();
-            ctx.moveTo(startX, 0);
-            ctx.lineTo(startX, height);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            
+            if (canvasType === 'waveform') {
+              // Show as time cursor on waveform
+              ctx.strokeStyle = '#0ff';
+              ctx.lineWidth = 2;
+              ctx.setLineDash([5, 5]);
+              ctx.beginPath();
+              ctx.moveTo(startX, 0);
+              ctx.lineTo(startX, height);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            } else if (canvasType === 'spectrogram') {
+              // Draw dot at (time,freq)
+              if (typeof anno.freq === 'number' && isFinite(anno.freq)) {
+                const y = height * (1 - Math.max(0, Math.min(anno.freq, maxFreq)) / maxFreq);
+                ctx.fillStyle = '#0ff';
+                ctx.beginPath();
+                ctx.arc(startX, y, 3, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            }
             ctx.fillStyle = '#0ff';
             ctx.font = '11px sans-serif';
-            ctx.fillText(`P${index + 1}`, startX + 3, 12);
+            ctx.fillText(`P${index + 1}` + (anno.freq != null ? ` @ ${formatFrequency(anno.freq)}` : ''), Math.max(2, startX + 3), 12);
           }
         } else if (anno.type === 'timeRange') {
           if (endX >= 0 && startX <= width) {
@@ -1103,6 +1171,7 @@ Maintenance Notes:
         dragStartX = e.clientX;
         dragStartY = e.clientY;
         dragStartTime = getCanvasTime(canvas, e.clientX);
+        canvas._dragShift = e.shiftKey === true;
       });
 
       canvas.addEventListener('mousemove', (e) => {
@@ -1119,40 +1188,34 @@ Maintenance Notes:
         const endTime = getCanvasTime(canvas, e.clientX);
         const dragDist = Math.abs(e.clientX - dragStartX);
 
-        if (mode === 'point') {
+        // Shift+drag on spectrogram => time-frequency box
+        if (canvas._dragShift && canvasType === 'spectrogram' && dragDist > 5) {
+          const startFreq = getCanvasFrequency(canvas, dragStartY);
+          const endFreq = getCanvasFrequency(canvas, e.clientY);
           addAnnotation({
-            type: 'point',
-            time: dragStartTime
+            type: 'freqRange',
+            time: Math.min(dragStartTime, endTime),
+            endTime: Math.max(dragStartTime, endTime),
+            freqMin: Math.min(startFreq, endFreq),
+            freqMax: Math.max(startFreq, endFreq)
           });
+          canvas._suppressClick = true;
         } else if (mode === 'timeRange') {
+          // Drag creates time range on either canvas
           if (dragDist > 5) {
             addAnnotation({
               type: 'timeRange',
               time: Math.min(dragStartTime, endTime),
               endTime: Math.max(dragStartTime, endTime)
             });
-          } else {
-            addAnnotation({
-              type: 'point',
-              time: dragStartTime
-            });
+            canvas._suppressClick = true;
           }
-        } else if (mode === 'freqRange' && canvasType === 'spectrogram') {
-          if (dragDist > 5) {
-            const startFreq = getCanvasFrequency(canvas, dragStartY);
-            const endFreq = getCanvasFrequency(canvas, e.clientY);
-            addAnnotation({
-              type: 'freqRange',
-              time: Math.min(dragStartTime, endTime),
-              endTime: Math.max(dragStartTime, endTime),
-              freqMin: Math.min(startFreq, endFreq),
-              freqMax: Math.max(startFreq, endFreq)
-            });
-          } else {
-            addAnnotation({
-              type: 'point',
-              time: dragStartTime
-            });
+        } else if (mode === 'point' && canvasType === 'spectrogram') {
+          // Click creates point with time+freq on spectrogram
+          if (dragDist <= 5) {
+            const freq = getCanvasFrequency(canvas, e.clientY);
+            addAnnotation({ type: 'point', time: dragStartTime, freq });
+            canvas._suppressClick = true;
           }
         }
 
@@ -1170,13 +1233,15 @@ Maintenance Notes:
         const delta = Math.sign(e.deltaY);
         
         if (delta < 0) {
-          zoomLevel = Math.min(zoomLevel * 1.2, 100);
+          zoomLevel = Math.min(zoomLevel * 1.2, 1000);
         } else {
           zoomLevel = Math.max(zoomLevel / 1.2, 1);
           if (zoomLevel === 1) scrollOffset = 0;
         }
         
         zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+        clampScrollOffset();
+        updateViewWindowControls();
         renderWaveform();
         
         // Debounce spectrogram update
@@ -1187,8 +1252,9 @@ Maintenance Notes:
         }, 300);
       }, { passive: false });
 
-      // Click to jump to time
+      // Click to jump to time (unless just created an annotation)
       canvas.addEventListener('click', (e) => {
+        if (canvas._suppressClick) { canvas._suppressClick = false; return; }
         if (Math.abs(e.clientX - dragStartX) < 5 && !isDragging) {
           const time = getCanvasTime(canvas, e.clientX);
           seekToTime(time);
@@ -1215,8 +1281,10 @@ Maintenance Notes:
 
     // ========== Zoom Controls ==========
     function zoomIn() {
-      zoomLevel = Math.min(zoomLevel * 1.5, 100);
+      zoomLevel = Math.min(zoomLevel * 1.5, 1000);
       zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+      clampScrollOffset();
+      updateViewWindowControls();
       renderWaveform();
     }
 
@@ -1224,6 +1292,8 @@ Maintenance Notes:
       zoomLevel = Math.max(zoomLevel / 1.5, 1);
       if (zoomLevel === 1) scrollOffset = 0;
       zoomLevelLabel.textContent = Math.round(zoomLevel * 100) + '%';
+      clampScrollOffset();
+      updateViewWindowControls();
       renderWaveform();
     }
 
@@ -1231,6 +1301,7 @@ Maintenance Notes:
       zoomLevel = 1;
       scrollOffset = 0;
       zoomLevelLabel.textContent = '100%';
+      updateViewWindowControls();
       renderWaveform();
     }
 
@@ -1307,7 +1378,7 @@ Maintenance Notes:
 
         let text = '';
         if (anno.type === 'point') {
-          text = `Point at ${formatTime(anno.time)}`;
+          text = `Point at ${formatTime(anno.time)}` + (anno.freq != null ? `, ${formatFrequency(anno.freq)}` : '');
         } else if (anno.type === 'timeRange') {
           text = `Time Range: ${formatTime(anno.time)} - ${formatTime(anno.endTime)}`;
         } else if (anno.type === 'freqRange') {
@@ -1404,13 +1475,23 @@ Maintenance Notes:
         downloadBlob(blob, filename + '.json');
       } else {
         // CSV format
+        // Columns: type,time,end_time,freq_min,freq_max,label
+        // For point: put frequency (if any) in freq_min, leave end_time and freq_max empty
         const rows = ['type,time,end_time,freq_min,freq_max,label'];
         annotations.forEach(anno => {
-          const endTime = anno.endTime || '';
-          const freqMin = anno.freqMin !== undefined ? anno.freqMin.toFixed(2) : '';
-          const freqMax = anno.freqMax !== undefined ? anno.freqMax.toFixed(2) : '';
           const label = anno.label || '';
-          rows.push(`${anno.type},${anno.time.toFixed(4)},${endTime},${freqMin},${freqMax},${label}`);
+          if (anno.type === 'point') {
+            const freqVal = (typeof anno.freq === 'number' && isFinite(anno.freq)) ? anno.freq.toFixed(2) : '';
+            rows.push(`point,${anno.time.toFixed(4)},,${freqVal},,${label}`);
+          } else if (anno.type === 'timeRange') {
+            const endTime = anno.endTime != null ? Number(anno.endTime).toFixed(4) : '';
+            rows.push(`timeRange,${anno.time.toFixed(4)},${endTime},,,${label}`);
+          } else if (anno.type === 'freqRange') {
+            const endTime = anno.endTime != null ? Number(anno.endTime).toFixed(4) : '';
+            const freqMin = anno.freqMin !== undefined ? anno.freqMin.toFixed(2) : '';
+            const freqMax = anno.freqMax !== undefined ? anno.freqMax.toFixed(2) : '';
+            rows.push(`freqRange,${anno.time.toFixed(4)},${endTime},${freqMin},${freqMax},${label}`);
+          }
         });
 
         const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
@@ -1467,10 +1548,19 @@ Maintenance Notes:
               time: parseFloat(cols[1]) || 0
             };
 
-            if (cols[2]) anno.endTime = parseFloat(cols[2]);
-            if (cols[3]) anno.freqMin = parseFloat(cols[3]);
-            if (cols[4]) anno.freqMax = parseFloat(cols[4]);
-            if (cols[5]) anno.label = cols[5];
+            if (anno.type === 'point') {
+              // For point, we store optional frequency in freq_min column (index 3)
+              if (cols[3]) anno.freq = parseFloat(cols[3]);
+              if (cols[5]) anno.label = cols[5];
+            } else if (anno.type === 'timeRange') {
+              if (cols[2]) anno.endTime = parseFloat(cols[2]);
+              if (cols[5]) anno.label = cols[5];
+            } else if (anno.type === 'freqRange') {
+              if (cols[2]) anno.endTime = parseFloat(cols[2]);
+              if (cols[3]) anno.freqMin = parseFloat(cols[3]);
+              if (cols[4]) anno.freqMax = parseFloat(cols[4]);
+              if (cols[5]) anno.label = cols[5];
+            }
 
             return anno;
           });
