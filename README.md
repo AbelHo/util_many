@@ -3,6 +3,7 @@ Simple Utility Websites
 
 ## Available Utilities
 
+- [Audio Annotator](https://AbelHo.github.io/util_many/audio_annotator.html)
 - [Camera Calibration FOV Calculator](https://AbelHo.github.io/util_many/camera_fov.html)
 - [CSV Table Viewer & Editor](https://AbelHo.github.io/util_many/csv_to_chart.html)
 - [CSV/XLSX to SRT Converter](https://AbelHo.github.io/util_many/csv_to_srt.html)
