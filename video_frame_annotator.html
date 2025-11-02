@@ -545,7 +545,7 @@ Maintenance Notes:
     const incoming = {};
     if (Array.isArray(data)) {
       data.forEach(fr => {
-        const frame = Number(fr.frame);
+        const frame = Math.round(Number(fr.frame));
         if (!isFinite(frame)) return;
         if (!incoming[frame]) incoming[frame] = [];
         const arr = fr.markers || fr.points || [];
@@ -555,7 +555,7 @@ Maintenance Notes:
       });
     } else if (data && Array.isArray(data.markers)) {
       data.markers.forEach(fr => {
-        const frame = Number(fr.frame);
+        const frame = Math.round(Number(fr.frame));
         if (!isFinite(frame)) return;
         if (!incoming[frame]) incoming[frame] = [];
         const arr = fr.markers || fr.points || [];
@@ -569,7 +569,7 @@ Maintenance Notes:
       }
     } else if (data && typeof data === 'object') {
       Object.keys(data).forEach(k => {
-        const frame = Number(k);
+        const frame = Math.round(Number(k));
         if (!isFinite(frame)) return;
         if (!incoming[frame]) incoming[frame] = [];
         const arr = data[k] || [];
@@ -590,6 +590,9 @@ Maintenance Notes:
     // Detect format: new has 'type' in header; old has 'point_index' without 'type'
     const idx = (name) => header.indexOf(name);
     const hasType = idx('type') !== -1;
+    // support alternative px/py column names when x/y are missing
+    const xIndexFallback = idx('x') !== -1 ? idx('x') : idx('px');
+    const yIndexFallback = idx('y') !== -1 ? idx('y') : idx('py');
 
     if (hasType) {
       const fi = idx('frame');
@@ -605,12 +608,14 @@ Maintenance Notes:
       const rad = idx('radius');
       rows.forEach(line => {
         const cols = line.split(',');
-        const frame = Number(cols[fi]);
+        const frame = Math.round(Number(cols[fi]));
         if (!isFinite(frame)) return;
         const type = (cols[ty] || 'point').trim();
         if (!incoming[frame]) incoming[frame] = [];
         if (type === 'point') {
-          incoming[frame].push({ type: 'point', x: num(cols[x]), y: num(cols[y]) });
+          const xi = (x !== -1) ? x : xIndexFallback;
+          const yi = (y !== -1) ? y : yIndexFallback;
+          incoming[frame].push({ type: 'point', x: num(cols[xi]), y: num(cols[yi]) });
         } else if (type === 'box') {
           incoming[frame].push({ type: 'box', x1: num(cols[x]), y1: num(cols[y]), x2: num(cols[x2]), y2: num(cols[y2]) });
         } else if (type === 'circle') {
@@ -620,11 +625,11 @@ Maintenance Notes:
     } else {
       // Old format: frame,time_seconds,point_index,x,y
       const fi = idx('frame');
-      const x = idx('x');
-      const y = idx('y');
+      const x = idx('x') !== -1 ? idx('x') : idx('px');
+      const y = idx('y') !== -1 ? idx('y') : idx('py');
       rows.forEach(line => {
         const cols = line.split(',');
-        const frame = Number(cols[fi]);
+        const frame = Math.round(Number(cols[fi]));
         if (!isFinite(frame)) return;
         if (!incoming[frame]) incoming[frame] = [];
         incoming[frame].push({ type: 'point', x: num(cols[x]), y: num(cols[y]) });
@@ -639,11 +644,18 @@ Maintenance Notes:
   function normalizeMarker(m) {
     if (!m) return null;
     if (!m.type) {
-      if (isFinite(m.x) && isFinite(m.y)) return { type: 'point', x: num(m.x), y: num(m.y) };
+      // accept alternative px/py fields when x/y missing
+      const xVal = (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined));
+      const yVal = (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined));
+      if (isFinite(xVal) && isFinite(yVal)) return { type: 'point', x: num(xVal), y: num(yVal) };
       // otherwise ignore
       return null;
     }
-    if (m.type === 'point') return { type: 'point', x: num(m.x), y: num(m.y) };
+    if (m.type === 'point') {
+      const xVal = (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined));
+      const yVal = (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined));
+      return { type: 'point', x: num(xVal), y: num(yVal) };
+    }
     if (m.type === 'box') return { type: 'box', x1: num(m.x1), y1: num(m.y1), x2: num(m.x2), y2: num(m.y2) };
     if (m.type === 'circle') return { type: 'circle', cx: num(m.cx), cy: num(m.cy), radius: num(m.radius) };
     return null;
@@ -879,13 +891,27 @@ Maintenance Notes:
 
   function performUndo() {
     const op = undoStack.pop(); if (!op) return;
+    // helper to compare markers by type/props when reference match fails
+    const markersEqual = (a, b) => {
+      if (!a || !b) return false;
+      if ((a.type || 'point') !== (b.type || 'point')) return false;
+      const t = a.type || 'point';
+      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y);
+      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2);
+      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius);
+      return false;
+    };
+
     if (op.type === 'add') {
       const arr = markers[op.frame] || [];
-      const idx = arr.findIndex(p => p.x === op.point.x && p.y === op.point.y);
+      // prefer reference equality (exact object), fallback to property match
+      let idx = arr.indexOf(op.point);
+      if (idx === -1) idx = arr.findIndex(p => markersEqual(p, op.point));
       if (idx >= 0) arr.splice(idx,1);
       redoStack.push(op);
     } else if (op.type === 'remove') {
       if (!markers[op.frame]) markers[op.frame] = [];
+      // restore at end of array to preserve original ordering roughly
       markers[op.frame].push(op.point);
       redoStack.push(op);
     } else if (op.type === 'clear-frame') {
@@ -902,13 +928,24 @@ Maintenance Notes:
 
   function performRedo() {
     const op = redoStack.pop(); if (!op) return;
+    const markersEqual = (a, b) => {
+      if (!a || !b) return false;
+      if ((a.type || 'point') !== (b.type || 'point')) return false;
+      const t = a.type || 'point';
+      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y);
+      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2);
+      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius);
+      return false;
+    };
+
     if (op.type === 'add') {
       if (!markers[op.frame]) markers[op.frame] = [];
       markers[op.frame].push(op.point);
       undoStack.push(op);
     } else if (op.type === 'remove') {
       const arr = markers[op.frame] || [];
-      const idx = arr.findIndex(p => p.x === op.point.x && p.y === op.point.y);
+      let idx = arr.indexOf(op.point);
+      if (idx === -1) idx = arr.findIndex(p => markersEqual(p, op.point));
       if (idx >= 0) arr.splice(idx,1);
       undoStack.push(op);
     } else if (op.type === 'clear-frame') {
