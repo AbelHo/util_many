@@ -584,6 +584,79 @@ Maintenance Notes:
     });
 
     // ========== Audio Loading ==========
+    function getOriginalSampleRate(arrayBuffer) {
+      const view = new DataView(arrayBuffer);
+      
+      // Check for WAV format (RIFF header)
+      if (view.byteLength >= 44) {
+        const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+        const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+        if (riff === 'RIFF' && wave === 'WAVE') {
+          // Sample rate is at byte offset 24 (little-endian 32-bit)
+          return view.getUint32(24, true);
+        }
+      }
+      
+      // Check for MP3 format (ID3 or direct frame)
+      if (view.byteLength >= 4) {
+        // Look for MP3 frame sync (11 bits set)
+        for (let offset = 0; offset < Math.min(view.byteLength - 4, 1024); offset++) {
+          if (view.getUint8(offset) === 0xFF && (view.getUint8(offset + 1) & 0xE0) === 0xE0) {
+            // Found potential MP3 frame header
+            const header = view.getUint32(offset, false);
+            const version = (header >> 19) & 0x3;
+            const sampleRateIndex = (header >> 10) & 0x3;
+            
+            const sampleRates = {
+              0: [44100, 22050, 11025], // MPEG 1
+              2: [22050, 24000, 16000], // MPEG 2
+              3: [11025, 12000, 8000]   // MPEG 2.5
+            };
+            
+            if (sampleRates[version] && sampleRateIndex < 3) {
+              return sampleRates[version][sampleRateIndex];
+            }
+          }
+        }
+      }
+      
+      // Check for FLAC format
+      if (view.byteLength >= 8) {
+        const flac = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+        if (flac === 'fLaC') {
+          // STREAMINFO block starts at byte 8
+          // Sample rate is in bits 48-67 (20 bits)
+          if (view.byteLength >= 22) {
+            const byte1 = view.getUint8(18);
+            const byte2 = view.getUint8(19);
+            const byte3 = view.getUint8(20);
+            return ((byte1 << 12) | (byte2 << 4) | (byte3 >> 4));
+          }
+        }
+      }
+      
+      // Check for OGG format
+      if (view.byteLength >= 4) {
+        const ogg = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+        if (ogg === 'OggS') {
+          // Look for Vorbis header
+          for (let offset = 0; offset < Math.min(view.byteLength - 20, 500); offset++) {
+            if (view.getUint8(offset) === 0x01 && 
+                view.byteLength >= offset + 15 &&
+                String.fromCharCode(view.getUint8(offset + 1), view.getUint8(offset + 2), 
+                                   view.getUint8(offset + 3), view.getUint8(offset + 4),
+                                   view.getUint8(offset + 5), view.getUint8(offset + 6)) === 'vorbis') {
+              // Sample rate is at offset + 11 (little-endian 32-bit)
+              return view.getUint32(offset + 11, true);
+            }
+          }
+        }
+      }
+      
+      // Couldn't determine, return null
+      return null;
+    }
+
     async function loadAudioFile(file) {
       uploadedFilename = file.name;
       
@@ -592,14 +665,21 @@ Maintenance Notes:
       }
 
       const arrayBuffer = await file.arrayBuffer();
+      
+      // Try to get original sample rate from file headers
+      const originalSampleRate = getOriginalSampleRate(arrayBuffer);
+      
       audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
       // Update stats
       statsPanel.style.display = 'block';
       statDuration.textContent = formatTime(audioBuffer.duration);
-      // Note: audioBuffer.sampleRate is the decoded buffer's rate (matches AudioContext)
-      // The Web Audio API resamples all audio to the AudioContext's native rate
-      statSampleRate.textContent = audioBuffer.sampleRate.toLocaleString() + ' Hz';
+      // Display original sample rate if we could detect it, otherwise show buffer rate
+      if (originalSampleRate) {
+        statSampleRate.textContent = originalSampleRate.toLocaleString() + ' Hz';
+      } else {
+        statSampleRate.textContent = audioBuffer.sampleRate.toLocaleString() + ' Hz (decoded)';
+      }
       statChannels.textContent = audioBuffer.numberOfChannels;
       totalTimeLabel.textContent = formatTime(audioBuffer.duration);
 
