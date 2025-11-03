@@ -8,9 +8,13 @@ Key Features:
 - Frame navigation: step, jump, play/pause, go to frame
 - Annotation modes: Point (click), Bounding Box (click-drag), Circle (click-drag)
 - Markers are stored per-frame, with undo/redo support for all actions
-- Remove markers with shift+click or keyboard shortcut (D)
-- Export annotations as JSON (with metadata and all marker types) or CSV (one row per marker, type and coordinates)
-- Import annotations from JSON or CSV files, with option to merge or replace existing
+- Remove markers with shift+click or keyboard shortcut (Backspace)
+- Tagging: hold any alphanumeric key (case-sensitive) while clicking to assign a tag to a marker
+- Tag mapping UI: click "Tags" to show a list of all tags; each row has a color picker (leftmost), tag key, editable tag name, and alpha input
+- Edit tag color and alpha: changing these updates all markers with that tag (RGB and alpha fields)
+- Tag names (tag_name) are editable and exported/imported in both JSON and CSV; tag keys are case-sensitive
+- Export annotations as JSON (with metadata and all marker types) or CSV (one row per marker, type, coordinates, color, tag, tag_name)
+- Import annotations from JSON or CSV files, with option to merge or replace existing; tag_name and color are preserved if present
 - FPS is estimated but user-editable; accurate FPS is critical for correct frame mapping
 - Minimal CSS, no dependencies, no build step
 
@@ -19,12 +23,14 @@ Usage Instructions:
 - Load a video, set FPS if needed
 - Select annotation mode, annotate frames as needed
 - Use Undo/Redo, clear, and export as required
+- Use the Tags UI to edit tag names, colors, and alpha; changes apply to all markers with that tag
 
 Maintenance Notes:
 - All logic is in this file (no external JS)
-- Markers data structure: { [frameNumber]: [ {type, ...coords} ] }
+- Markers data structure: { [frameNumber]: [ {type, ...coords, r,g,b,a,tag,tag_name?} ] }
 - Undo/redo stacks store operation objects for all marker types
-- UI and instructions are updated to reflect all annotation modes
+- TagMap: { [tag]: { tag_name, color: {r,g,b,a} } } — updated on import/export and via UI
+- UI and instructions are updated to reflect all annotation modes and tag features
 - See README.md for project-wide conventions
 -->
 <!doctype html>
@@ -1434,15 +1440,17 @@ Maintenance Notes:
         <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, or <strong>Circle</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
         <li>Click or click-and-drag on the canvas to add markers. Shift+Click removes the nearest marker on that frame.</li>
-  <li>Use Undo / Redo to revert changes. Click Export (choose JSON or CSV).</li>
+        <li><strong>Tagging:</strong> Hold any alphanumeric key (case-sensitive) while clicking to assign a tag to a marker. Tags are case-sensitive.</li>
+        <li><strong>Tag mapping:</strong> Click "Tags" to open the tag mapping UI. For each tag, you can edit the color (leftmost color picker), alpha, and tag name. The color picker acts as the swatch and reflects alpha via opacity. Changes update all markers with that tag. Tag names and colors are exported/imported in both JSON and CSV.</li>
+        <li>Use Undo / Redo to revert changes. Click Export (choose JSON or CSV).</li>
       </ol>
 
       <h3>Detailed instructions</h3>
   <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
-  <p><strong>Importing annotations:</strong> You can import annotations from JSON or CSV either via the Import control (next to Export) or by dropping the file anywhere on the page. You'll be prompted to <em>Replace</em> existing annotations or <em>Merge</em> into them. Supported formats:
-  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle', ...coords} ] } ] }
+    <p><strong>Importing annotations:</strong> You can import annotations from JSON or CSV either via the Import control (next to Export) or by dropping the file anywhere on the page. You'll be prompted to <em>Replace</em> existing annotations or <em>Merge</em> into them. Supported formats:
+  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle', ...coords, r,g,b,a,tag,tag_name?} ] } ] }
   <br>• Legacy JSON: [ { frame, time, points: [ {x,y} ] } ] or { [frame]: [ {x,y} ] }
-  <br>• CSV (this tool's export): frame,time_seconds,marker_index,type,x,y,x2,y2,cx,cy,radius
+  <br>• CSV (this tool's export): frame,time_seconds,marker_index,type,x,y,x1,y1,x2,y2,radius,r,g,b,a,tag,tag_name
   <br>• Legacy CSV: frame,time_seconds,point_index,x,y (points only)</p>
       <p><strong>Navigating frames:</strong> Click "Prev" / "Next" or use the Left/Right arrow keys. The "frames per step" input controls how many frames are skipped when stepping. You can also jump to a specific frame number using the "Go to frame" input and button, or return to the first frame with "First Frame".</p>
       <p><strong>Annotation Modes:</strong></p>
@@ -1451,9 +1459,16 @@ Maintenance Notes:
         <li><strong>Bounding Box:</strong> Click and drag to draw a rectangular box. If you only click (drag less than 5 pixels), a point will be added instead.</li>
         <li><strong>Circle:</strong> Click and drag to draw a circle. The click location becomes the center, and the drag distance becomes the radius. Small drags (less than 5 pixels) create a point instead.</li>
       </ul>
+      <p><strong>Tagging and Tag Mapping:</strong></p>
+      <ul>
+        <li><strong>Assign tags:</strong> Hold any alphanumeric key (case-sensitive) while clicking to assign a tag to a marker. Tags are case-sensitive and can be any single letter or digit.</li>
+        <li><strong>Tag mapping UI:</strong> Click "Tags" to open the tag mapping panel. Each tag row shows: color picker (leftmost), tag key, editable tag name, and alpha input (0–1). The color picker acts as the swatch and reflects alpha via opacity.</li>
+        <li><strong>Edit tag color/alpha:</strong> Changing these updates all markers with that tag. Editing the tag name updates the human-readable name for that tag (exported as tag_name).</li>
+        <li><strong>Export/import:</strong> Tag color and tag_name are preserved in both JSON and CSV import/export. Tag keys are case-sensitive.</li>
+      </ul>
   <p><strong>Removing markers:</strong> Shift+Click near a marker to remove it. Press <kbd>Backspace</kbd> to delete the nearest marker to the mouse cursor (or center if cursor is not over the canvas). Press <kbd>Esc</kbd> to clear all markers on the current frame.</p>
       <p><strong>Undo / Redo:</strong> Use the Undo and Redo buttons to step through recent add/remove/clear actions. Clearing the current frame or all markers is also undoable.</p>
-      <p><strong>Exporting:</strong> Choose JSON or CSV format. JSON exports include metadata (filename, export timestamp, fps) plus markers grouped by frame with time in seconds and full marker data (type and coordinates). CSV exports one row per marker with columns: frame, time_seconds, marker_index, type, x, y, x2, y2, cx, cy, radius (with empty fields for inapplicable coordinates). Filenames are based on the original filename plus a local timestamp.</p>
+  <p><strong>Exporting:</strong> Choose JSON or CSV format. JSON exports include metadata (filename, export timestamp, fps) plus markers grouped by frame with time in seconds and full marker data (type, coordinates, color, tag, tag_name). CSV exports one row per marker with columns: frame, time_seconds, marker_index, type, x, y, x1, y1, x2, y2, radius, r, g, b, a, tag, tag_name (with empty fields for inapplicable coordinates). Filenames are based on the original filename plus a local timestamp.</p>
 
       <h3>Features (at a glance)</h3>
       <ul>
