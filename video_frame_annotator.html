@@ -105,6 +105,10 @@ Maintenance Notes:
     <div class="controls">
       <div><strong>Markers per frame</strong></div>
       <div id="pointsList">No frame loaded.</div>
+      <div id="tagMappingContainer" style="margin-top:10px;">
+        <button id="toggleTagMap" style="padding:6px 8px;">Tags ▼</button>
+        <div id="tagMapList" style="display:none; margin-top:8px; border:1px solid #eee; padding:8px; background:#fff;"></div>
+      </div>
     </div>
   </div>
 
@@ -151,6 +155,75 @@ Maintenance Notes:
   // Undo/redo stacks: store simple operations {type:'add'|'remove'|'clear-frame'|'clear-all', frame, point, prevState}
   const undoStack = [];
   const redoStack = [];
+
+  // Tagging and color support
+  // tagMap: { [tag]: { tag_name: string, color: {r,g,b,a} } }
+  const tagMap = {};
+  let tagCounter = 0;
+  let lastKeyPressed = null; // stores last alnum key while mouse down
+  const DEFAULT_ALPHA = 0.7;
+
+  function hashStringToHue(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+    return h;
+  }
+
+  function hslToRgb(h, s, l) {
+    // h in [0,360], s,l in [0,1]
+    h /= 360;
+    let r, g, b;
+    if (s === 0) r = g = b = l;
+    else {
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q - p) * 6 * t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+      };
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1/3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1/3);
+    }
+    return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  }
+
+  function assignColorForTag(tag) {
+    // Use golden-angle spacing to pick distinct hues for successive tags,
+    // then add a small offset based on the tag hash so the mapping is deterministic
+    const GOLDEN_ANGLE = 137.508; // degrees
+    const base = (tagCounter * GOLDEN_ANGLE) % 360;
+    const offset = hashStringToHue(tag) % 25; // small deterministic perturbation
+    const hue = (base + offset) % 360;
+    tagCounter = (tagCounter + 1) % 3600;
+    const rgb = hslToRgb(hue, 0.85, 0.45);
+    return { r: rgb.r, g: rgb.g, b: rgb.b, a: DEFAULT_ALPHA };
+  }
+
+  function attachTagAndColor(marker) {
+    if (!marker) return;
+    if (lastKeyPressed && /^[A-Za-z0-9]$/.test(lastKeyPressed)) {
+      const tag = String(lastKeyPressed); // preserve case sensitivity for tag keys
+      marker.tag = tag;
+      if (!tagMap[tag]) tagMap[tag] = { tag_name: tag, color: assignColorForTag(tag) };
+      const c = tagMap[tag].color;
+      marker.r = Number.isFinite(marker.r) ? marker.r : c.r;
+      marker.g = Number.isFinite(marker.g) ? marker.g : c.g;
+      marker.b = Number.isFinite(marker.b) ? marker.b : c.b;
+      marker.a = Number.isFinite(marker.a) ? marker.a : c.a;
+    } else {
+      // default green
+      marker.r = Number.isFinite(marker.r) ? marker.r : 0;
+      marker.g = Number.isFinite(marker.g) ? marker.g : 255;
+      marker.b = Number.isFinite(marker.b) ? marker.b : 0;
+      marker.a = Number.isFinite(marker.a) ? marker.a : DEFAULT_ALPHA;
+    }
+    updateTagMappingUI();
+  }
 
   let rafId = null;
   let playing = false;
@@ -203,9 +276,17 @@ Maintenance Notes:
 
   function drawMarker(marker, index) {
     ctx.save();
-    ctx.strokeStyle = 'lime';
-    ctx.fillStyle = 'rgba(0,255,0,0.7)';
     ctx.lineWidth = 2;
+    // color from marker or defaults
+    const mr = (marker && Number.isFinite(marker.r)) ? marker.r : 0;
+    const mg = (marker && Number.isFinite(marker.g)) ? marker.g : 255;
+    const mb = (marker && Number.isFinite(marker.b)) ? marker.b : 0;
+    const ma = (marker && Number.isFinite(marker.a)) ? marker.a : DEFAULT_ALPHA;
+    const strokeCss = `rgba(${mr},${mg},${mb},${ma})`;
+    const fillCss = `rgba(${mr},${mg},${mb},${Math.max(0.12, ma*0.35)})`;
+
+    ctx.strokeStyle = strokeCss;
+    ctx.fillStyle = fillCss;
 
     if (!marker.type || marker.type === 'point') {
       // Draw point marker
@@ -222,20 +303,18 @@ Maintenance Notes:
       const y = Math.min(marker.y1, marker.y2);
       const w = Math.abs(marker.x2 - marker.x1);
       const h = Math.abs(marker.y2 - marker.y1);
-      ctx.fillStyle = 'rgba(0,255,0,0.2)';
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
-      ctx.fillStyle = 'lime';
+      ctx.fillStyle = strokeCss;
       ctx.font = '12px sans-serif';
       ctx.fillText(String(index), x+4, y+14);
     } else if (marker.type === 'circle') {
       // Draw circle
       ctx.beginPath();
       ctx.arc(marker.cx, marker.cy, marker.radius, 0, Math.PI*2);
-      ctx.fillStyle = 'rgba(0,255,0,0.2)';
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = 'lime';
+      ctx.fillStyle = strokeCss;
       ctx.font = '12px sans-serif';
       ctx.fillText(String(index), marker.cx+marker.radius+4, marker.cy);
     }
@@ -285,12 +364,31 @@ Maintenance Notes:
     arr.forEach((m, i) => {
       const d = document.createElement('div');
       d.className = 'point-item';
+      // show color swatch and tag name if present
+      const sw = document.createElement('span');
+      const rr = Number.isFinite(m.r) ? m.r : 0;
+      const gg = Number.isFinite(m.g) ? m.g : 255;
+      const bb = Number.isFinite(m.b) ? m.b : 0;
+      sw.style.display = 'inline-block';
+      sw.style.width = '12px'; sw.style.height = '12px';
+      sw.style.marginRight = '8px';
+      sw.style.verticalAlign = 'middle';
+      sw.style.background = `rgba(${rr},${gg},${bb},${Number.isFinite(m.a)?m.a:DEFAULT_ALPHA})`;
+      d.appendChild(sw);
       if (!m.type || m.type === 'point') {
-        d.textContent = `${i+1}: Point (${Math.round(m.x)}, ${Math.round(m.y)})`;
+        d.appendChild(document.createTextNode(`${i+1}: Point (${Math.round(m.x)}, ${Math.round(m.y)})`));
       } else if (m.type === 'box') {
-        d.textContent = `${i+1}: Box (${Math.round(m.x1)}, ${Math.round(m.y1)}) to (${Math.round(m.x2)}, ${Math.round(m.y2)})`;
+        d.appendChild(document.createTextNode(`${i+1}: Box (${Math.round(m.x1)}, ${Math.round(m.y1)}) to (${Math.round(m.x2)}, ${Math.round(m.y2)})`));
       } else if (m.type === 'circle') {
-        d.textContent = `${i+1}: Circle center (${Math.round(m.cx)}, ${Math.round(m.cy)}) radius ${Math.round(m.radius)}`;
+        d.appendChild(document.createTextNode(`${i+1}: Circle center (${Math.round(m.cx)}, ${Math.round(m.cy)}) radius ${Math.round(m.radius)}`));
+      }
+      if (m.tag) {
+        const tn = (tagMap[m.tag] && tagMap[m.tag].tag_name) ? tagMap[m.tag].tag_name : m.tag;
+        const tagSpan = document.createElement('span');
+        tagSpan.style.marginLeft = '8px';
+        tagSpan.style.fontWeight = '600';
+        tagSpan.textContent = `[${m.tag}: ${tn}]`;
+        d.appendChild(tagSpan);
       }
       pointsList.appendChild(d);
     });
@@ -588,24 +686,39 @@ Maintenance Notes:
     const incoming = {};
 
     // Detect format: new has 'type' in header; old has 'point_index' without 'type'
-    const idx = (name) => header.indexOf(name);
-    const hasType = idx('type') !== -1;
-    // support alternative px/py column names when x/y are missing
-    const xIndexFallback = idx('x') !== -1 ? idx('x') : idx('px');
-    const yIndexFallback = idx('y') !== -1 ? idx('y') : idx('py');
+  const idx = (name) => header.indexOf(name);
+  const hasType = idx('type') !== -1;
+  // support alternative px/py column names when x/y are missing
+  const xIndexFallback = idx('x') !== -1 ? idx('x') : idx('px');
+  const yIndexFallback = idx('y') !== -1 ? idx('y') : idx('py');
+  // color and tag indices (available for both formats if present)
+  const rIdxAny = idx('r') !== -1 ? idx('r') : idx('red');
+  const gIdxAny = idx('g') !== -1 ? idx('g') : idx('green');
+  const bIdxAny = idx('b') !== -1 ? idx('b') : idx('blue');
+  const aIdxAny = idx('a') !== -1 ? idx('a') : idx('alpha');
+  const tagIdxAny = idx('tag') !== -1 ? idx('tag') : idx('label');
+  const tagNameIdxAny = idx('tag_name') !== -1 ? idx('tag_name') : -1;
 
     if (hasType) {
       const fi = idx('frame');
       const ti = idx('time_seconds');
       const mi = idx('marker_index');
       const ty = idx('type');
-      const x = idx('x');
-      const y = idx('y');
-      const x2 = idx('x2');
-      const y2 = idx('y2');
-      const cx = idx('cx');
-      const cy = idx('cy');
-      const rad = idx('radius');
+  const x = idx('x');
+  const y = idx('y');
+  const x1 = idx('x1');
+  const y1 = idx('y1');
+  const x2 = idx('x2');
+  const y2 = idx('y2');
+  const cx = idx('cx');
+  const cy = idx('cy');
+  const rad = idx('radius');
+      const rIdx = idx('r') !== -1 ? idx('r') : idx('red');
+      const gIdx = idx('g') !== -1 ? idx('g') : idx('green');
+      const bIdx = idx('b') !== -1 ? idx('b') : idx('blue');
+      const aIdx = idx('a') !== -1 ? idx('a') : idx('alpha');
+  const tagIdx = idx('tag') !== -1 ? idx('tag') : idx('label');
+  const tagNameIdx = idx('tag_name') !== -1 ? idx('tag_name') : -1;
       rows.forEach(line => {
         const cols = line.split(',');
         const frame = Math.round(Number(cols[fi]));
@@ -615,11 +728,38 @@ Maintenance Notes:
         if (type === 'point') {
           const xi = (x !== -1) ? x : xIndexFallback;
           const yi = (y !== -1) ? y : yIndexFallback;
-          incoming[frame].push({ type: 'point', x: num(cols[xi]), y: num(cols[yi]) });
+          const m = { type: 'point', x: num(cols[xi]), y: num(cols[yi]) };
+          if (rIdx !== -1) m.r = num(cols[rIdx]);
+          if (gIdx !== -1) m.g = num(cols[gIdx]);
+          if (bIdx !== -1) m.b = num(cols[bIdx]);
+          m.a = (aIdx !== -1 && cols[aIdx] !== undefined && cols[aIdx] !== '') ? Number(cols[aIdx]) : DEFAULT_ALPHA;
+          if (tagIdx !== -1 && cols[tagIdx]) m.tag = cols[tagIdx];
+          if (tagNameIdx !== -1 && cols[tagNameIdx]) m.tag_name = cols[tagNameIdx];
+          incoming[frame].push(m);
         } else if (type === 'box') {
-          incoming[frame].push({ type: 'box', x1: num(cols[x]), y1: num(cols[y]), x2: num(cols[x2]), y2: num(cols[y2]) });
+          // Prefer explicit x1/y1 columns if present, fallback to x/y
+          const x1i = (x1 !== -1) ? x1 : x;
+          const y1i = (y1 !== -1) ? y1 : y;
+          const m = { type: 'box', x1: num(cols[x1i]), y1: num(cols[y1i]), x2: num(cols[x2]), y2: num(cols[y2]) };
+          if (rIdx !== -1) m.r = num(cols[rIdx]);
+          if (gIdx !== -1) m.g = num(cols[gIdx]);
+          if (bIdx !== -1) m.b = num(cols[bIdx]);
+          m.a = (aIdx !== -1 && cols[aIdx] !== undefined && cols[aIdx] !== '') ? Number(cols[aIdx]) : DEFAULT_ALPHA;
+          if (tagIdx !== -1 && cols[tagIdx]) m.tag = cols[tagIdx];
+          if (tagNameIdx !== -1 && cols[tagNameIdx]) m.tag_name = cols[tagNameIdx];
+          incoming[frame].push(m);
         } else if (type === 'circle') {
-          incoming[frame].push({ type: 'circle', cx: num(cols[cx]), cy: num(cols[cy]), radius: num(cols[rad]) });
+          // Circle centers may be exported into x,y (preferred) or cx,cy (legacy); also accept px/py
+          const centerXIndex = (x !== -1) ? x : ((cx !== -1) ? cx : xIndexFallback);
+          const centerYIndex = (y !== -1) ? y : ((cy !== -1) ? cy : yIndexFallback);
+          const m = { type: 'circle', cx: num(cols[centerXIndex]), cy: num(cols[centerYIndex]), radius: num(cols[rad]) };
+          if (rIdx !== -1) m.r = num(cols[rIdx]);
+          if (gIdx !== -1) m.g = num(cols[gIdx]);
+          if (bIdx !== -1) m.b = num(cols[bIdx]);
+          m.a = (aIdx !== -1 && cols[aIdx] !== undefined && cols[aIdx] !== '') ? Number(cols[aIdx]) : DEFAULT_ALPHA;
+          if (tagIdx !== -1 && cols[tagIdx]) m.tag = cols[tagIdx];
+          if (tagNameIdx !== -1 && cols[tagNameIdx]) m.tag_name = cols[tagNameIdx];
+          incoming[frame].push(m);
         }
       });
     } else {
@@ -632,7 +772,14 @@ Maintenance Notes:
         const frame = Math.round(Number(cols[fi]));
         if (!isFinite(frame)) return;
         if (!incoming[frame]) incoming[frame] = [];
-        incoming[frame].push({ type: 'point', x: num(cols[x]), y: num(cols[y]) });
+        const m = { type: 'point', x: num(cols[x]), y: num(cols[y]) };
+        if (rIdxAny !== -1) m.r = num(cols[rIdxAny]);
+        if (gIdxAny !== -1) m.g = num(cols[gIdxAny]);
+        if (bIdxAny !== -1) m.b = num(cols[bIdxAny]);
+        m.a = (aIdxAny !== -1 && cols[aIdxAny] !== undefined && cols[aIdxAny] !== '') ? Number(cols[aIdxAny]) : DEFAULT_ALPHA;
+        if (tagIdxAny !== -1 && cols[tagIdxAny]) m.tag = cols[tagIdxAny];
+        if (tagNameIdxAny !== -1 && cols[tagNameIdxAny]) m.tag_name = cols[tagNameIdxAny];
+        incoming[frame].push(m);
       });
     }
 
@@ -654,10 +801,43 @@ Maintenance Notes:
     if (m.type === 'point') {
       const xVal = (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined));
       const yVal = (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined));
-      return { type: 'point', x: num(xVal), y: num(yVal) };
+      const point = { type: 'point', x: num(xVal), y: num(yVal) };
+      // color and tag support
+      if (isFinite(m.r)) point.r = num(m.r);
+      if (isFinite(m.g)) point.g = num(m.g);
+      if (isFinite(m.b)) point.b = num(m.b);
+      point.a = isFinite(m.a) ? Number(m.a) : DEFAULT_ALPHA;
+      if (m.tag) point.tag = String(m.tag);
+      if (m.tag_name) point.tag_name = String(m.tag_name);
+      return point;
     }
-    if (m.type === 'box') return { type: 'box', x1: num(m.x1), y1: num(m.y1), x2: num(m.x2), y2: num(m.y2) };
-    if (m.type === 'circle') return { type: 'circle', cx: num(m.cx), cy: num(m.cy), radius: num(m.radius) };
+    if (m.type === 'box') {
+      // Accept explicit x1/y1 or legacy x/y/px/py for the first corner
+      const x1v = (isFinite(m.x1) ? m.x1 : (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined)));
+      const y1v = (isFinite(m.y1) ? m.y1 : (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined)));
+      const box = { type: 'box', x1: num(x1v), y1: num(y1v), x2: num(m.x2), y2: num(m.y2) };
+      // preserve explicit color if present
+      if (isFinite(m.r)) box.r = num(m.r);
+      if (isFinite(m.g)) box.g = num(m.g);
+      if (isFinite(m.b)) box.b = num(m.b);
+      box.a = isFinite(m.a) ? Number(m.a) : DEFAULT_ALPHA;
+      if (m.tag) box.tag = String(m.tag);
+      if (m.tag_name) box.tag_name = String(m.tag_name);
+      return box;
+    }
+    if (m.type === 'circle') {
+      // accept either cx/cy or x/y (or px/py) in imported data
+      const cxv = (isFinite(m.cx) ? m.cx : (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined)));
+      const cyv = (isFinite(m.cy) ? m.cy : (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined)));
+      const c = { type: 'circle', cx: num(cxv), cy: num(cyv), radius: num(m.radius) };
+      if (isFinite(m.r)) c.r = num(m.r);
+      if (isFinite(m.g)) c.g = num(m.g);
+      if (isFinite(m.b)) c.b = num(m.b);
+      c.a = isFinite(m.a) ? Number(m.a) : DEFAULT_ALPHA;
+      if (m.tag) c.tag = String(m.tag);
+      if (m.tag_name) c.tag_name = String(m.tag_name);
+      return c;
+    }
     return null;
   }
 
@@ -668,10 +848,34 @@ Maintenance Notes:
     Object.keys(incoming).forEach(k => {
       const frame = Number(k);
       if (!markers[frame]) markers[frame] = [];
-      incoming[frame].forEach(m => { if (m) markers[frame].push(m); });
+      incoming[frame].forEach(m => {
+        if (!m) return;
+        // ensure color and tag mapping
+        if (m.tag) {
+          const tag = String(m.tag);
+          if (!tagMap[tag]) {
+            tagMap[tag] = { tag_name: tag, color: assignColorForTag(tag) };
+          }
+          // If incoming marker provided a human-readable tag_name, preserve it
+          if (m.tag_name) tagMap[tag].tag_name = String(m.tag_name);
+          const c = tagMap[tag].color;
+          if (!Number.isFinite(m.r)) m.r = c.r;
+          if (!Number.isFinite(m.g)) m.g = c.g;
+          if (!Number.isFinite(m.b)) m.b = c.b;
+          m.a = Number.isFinite(m.a) ? m.a : c.a;
+        } else {
+          // assign default green color if none provided
+          if (!Number.isFinite(m.r)) m.r = 0;
+          if (!Number.isFinite(m.g)) m.g = 255;
+          if (!Number.isFinite(m.b)) m.b = 0;
+          m.a = Number.isFinite(m.a) ? m.a : DEFAULT_ALPHA;
+        }
+        markers[frame].push(m);
+      });
     });
     drawFrameOverlay();
     updateFrameLabels();
+    updateTagMappingUI();
   }
 
   // Canvas mouse handlers for drawing markers
@@ -761,6 +965,7 @@ Maintenance Notes:
     if (mode === 'point') {
       // Simple click adds a point
       const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+      attachTagAndColor(pt);
       markers[frame].push(pt);
       undoStack.push({ type: 'add', frame, point: pt });
       redoStack.length = 0;
@@ -774,12 +979,14 @@ Maintenance Notes:
           x2: Math.round(coords.x), 
           y2: Math.round(coords.y) 
         };
+        attachTagAndColor(box);
         markers[frame].push(box);
         undoStack.push({ type: 'add', frame, point: box });
         redoStack.length = 0;
       } else {
         // Small drag, treat as point click
         const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+        attachTagAndColor(pt);
         markers[frame].push(pt);
         undoStack.push({ type: 'add', frame, point: pt });
         redoStack.length = 0;
@@ -793,12 +1000,14 @@ Maintenance Notes:
           cy: Math.round(dragStartY), 
           radius: Math.round(dragDist) 
         };
+        attachTagAndColor(circle);
         markers[frame].push(circle);
         undoStack.push({ type: 'add', frame, point: circle });
         redoStack.length = 0;
       } else {
         // Small drag, treat as point click
         const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+        attachTagAndColor(pt);
         markers[frame].push(pt);
         undoStack.push({ type: 'add', frame, point: pt });
         redoStack.length = 0;
@@ -847,18 +1056,52 @@ Maintenance Notes:
     const outNameBase = `${base}_${tsForName}`;
     
     if (wantCsv) {
-      // CSV columns: frame,time_seconds,marker_index,type,x,y,x2,y2,cx,cy,radius
-      let rows = ['frame,time_seconds,marker_index,type,x,y,x2,y2,cx,cy,radius'];
+  // CSV columns: frame,time_seconds,marker_index,type,x,y,x1,y1,x2,y2,radius,r,g,b,a,tag,tag_name
+  let rows = ['frame,time_seconds,marker_index,type,x,y,x1,y1,x2,y2,radius,r,g,b,a,tag,tag_name'];
       out.forEach(item => {
         item.markers.forEach((m, i) => {
           const idx = i + 1;
-          if (!m.type || m.type === 'point') {
-            rows.push(`${item.frame},${item.time},${idx},point,${m.x},${m.y},,,,,`);
-          } else if (m.type === 'box') {
-            rows.push(`${item.frame},${item.time},${idx},box,${m.x1},${m.y1},${m.x2},${m.y2},,,`);
-          } else if (m.type === 'circle') {
-            rows.push(`${item.frame},${item.time},${idx},circle,,,,,${m.cx},${m.cy},${m.radius}`);
+          const type = m.type || 'point';
+          const cxVal = (m.cx !== undefined) ? m.cx : m.x;
+          const cyVal = (m.cy !== undefined) ? m.cy : m.y;
+          const rVal = (m.r !== undefined) ? m.r : 0;
+          const gVal = (m.g !== undefined) ? m.g : 255;
+          const bVal = (m.b !== undefined) ? m.b : 0;
+          const aVal = (m.a !== undefined) ? m.a : DEFAULT_ALPHA;
+          const tagVal = m.tag || '';
+          const cols = [];
+          cols.push(item.frame);
+          cols.push(item.time);
+          cols.push(idx);
+          cols.push(type);
+          if (type === 'point') {
+            // point: x,y
+            cols.push(m.x);
+            cols.push(m.y);
+            // x1,y1,x2,y2,radius empty
+            cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push('');
+          } else if (type === 'box') {
+            // box: x1,y1,x2,y2 (place them in x1,y1,x2,y2 columns)
+            // leave x,y empty for box
+            cols.push(''); cols.push('');
+            cols.push(m.x1); cols.push(m.y1); cols.push(m.x2); cols.push(m.y2);
+            cols.push(''); // radius
+          } else if (type === 'circle') {
+            // circle: center in x,y, radius in radius col
+            cols.push(cxVal); cols.push(cyVal);
+            // x1,y1,x2,y2 empty
+            cols.push(''); cols.push(''); cols.push(''); cols.push('');
+            cols.push(m.radius || '');
+          } else {
+            // unknown type: leave geometry fields empty
+            cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push('');
           }
+          // append color and tag fields
+          cols.push(rVal); cols.push(gVal); cols.push(bVal); cols.push(aVal); cols.push(tagVal);
+          // include tag_name if available (user-editable); leave empty if not edited
+          const tagNameVal = (tagVal && tagMap[tagVal] && tagMap[tagVal].tag_name && tagMap[tagVal].tag_name !== String(tagVal)) ? tagMap[tagVal].tag_name : '';
+          cols.push(tagNameVal);
+          rows.push(cols.join(','));
         });
       });
       const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
@@ -870,12 +1113,37 @@ Maintenance Notes:
       a.remove();
     } else {
       // JSON: include metadata and full marker data
-      const exportMeta = { 
-        filename: uploadedFilename || null, 
-        exported_at: new Date().toISOString(), 
-        fps: estimateFPS() 
+      const exportMeta = {
+        filename: uploadedFilename || null,
+        exported_at: new Date().toISOString(),
+        fps: estimateFPS()
       };
-      const blob = new Blob([JSON.stringify({ meta: exportMeta, markers: out }, null, 2)], { type: 'application/json' });
+      // Normalize markers so circle uses x,y center (not cx/cy) and box uses x1,y1,x2,y2
+      const normalized = out.map(item => ({
+        frame: item.frame,
+        time: item.time,
+        markers: (item.markers || []).map(m => {
+          const type = m.type || 'point';
+          if (type === 'point') {
+            const obj = { type: 'point', x: m.x, y: m.y, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
+            if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
+            return obj;
+          } else if (type === 'box') {
+            const obj = { type: 'box', x1: m.x1, y1: m.y1, x2: m.x2, y2: m.y2, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
+            if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
+            return obj;
+          } else if (type === 'circle') {
+            // use x,y for center in exports
+            const cx = (m.cx !== undefined) ? m.cx : m.x;
+            const cy = (m.cy !== undefined) ? m.cy : m.y;
+            const obj = { type: 'circle', x: cx, y: cy, radius: m.radius, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
+            if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
+            return obj;
+          }
+          return m;
+        })
+      }));
+      const blob = new Blob([JSON.stringify({ meta: exportMeta, markers: normalized }, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = outNameBase + '.json';
@@ -896,9 +1164,11 @@ Maintenance Notes:
       if (!a || !b) return false;
       if ((a.type || 'point') !== (b.type || 'point')) return false;
       const t = a.type || 'point';
-      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y);
-      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2);
-      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius);
+      const tagEq = String(a.tag || '') === String(b.tag || '');
+      const colorEq = (Number(a.r||0) === Number(b.r||0)) && (Number(a.g||0) === Number(b.g||0)) && (Number(a.b||0) === Number(b.b||0)) && (Number((a.a!==undefined?a.a:DEFAULT_ALPHA)) === Number((b.a!==undefined?b.a:DEFAULT_ALPHA)));
+      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
+      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
+      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
       return false;
     };
 
@@ -932,9 +1202,11 @@ Maintenance Notes:
       if (!a || !b) return false;
       if ((a.type || 'point') !== (b.type || 'point')) return false;
       const t = a.type || 'point';
-      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y);
-      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2);
-      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius);
+      const tagEq = String(a.tag || '') === String(b.tag || '');
+      const colorEq = (Number(a.r||0) === Number(b.r||0)) && (Number(a.g||0) === Number(b.g||0)) && (Number(a.b||0) === Number(b.b||0)) && (Number((a.a!==undefined?a.a:DEFAULT_ALPHA)) === Number((b.a!==undefined?b.a:DEFAULT_ALPHA)));
+      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
+      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
+      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
       return false;
     };
 
@@ -963,25 +1235,21 @@ Maintenance Notes:
   }
 
   // Keyboard shortcuts
-  // Left/Right: prev/next frame, Space: play/pause, C: clear markers for current frame, D: delete nearest (same as shift+click), S: export
+  // Left/Right: prev/next frame, Space: play/pause, Backspace: delete nearest, Escape: clear markers for current frame
   document.addEventListener('keydown', (e) => {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return; // don't hijack typing
+
+    // track alnum keys for tagging while clicking
+    if (/^[A-Za-z0-9]$/.test(e.key)) {
+      lastKeyPressed = e.key;
+      return;
+    }
+
     if (e.key === 'ArrowLeft') { e.preventDefault(); prevBtn.click(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
     else if (e.key === ' ') { e.preventDefault(); playPauseBtn.click(); }
-    else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); // clear current frame markers
-      const f = getCurrentFrameIndex(); 
-      if (markers[f]) { 
-        const prev = markers[f].slice(); 
-        undoStack.push({ type:'clear-frame', frame:f, prevState: prev }); 
-        redoStack.length = 0;
-        delete markers[f]; 
-        drawFrameOverlay(); 
-      }
-    }
-    else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); // delete nearest marker to center (user can move mouse then press D)
-      // find mouse position over canvas; if none, use center
+    else if (e.key === 'Backspace') { e.preventDefault(); // delete nearest marker to mouse (or center)
       const rect = canvas.getBoundingClientRect();
       const mx = (lastMousePos.x !== undefined) ? lastMousePos.x : rect.left + rect.width/2;
       const my = (lastMousePos.y !== undefined) ? lastMousePos.y : rect.top + rect.height/2;
@@ -1006,15 +1274,29 @@ Maintenance Notes:
         }
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
-      if (bestDist < 40) { 
+      if (bestDist < 40) {
         const removed = arr.splice(bestIdx, 1)[0];
-        markers[frame] = arr; 
-        undoStack.push({ type: 'remove', frame, point: removed }); 
+        markers[frame] = arr;
+        undoStack.push({ type: 'remove', frame, point: removed });
         redoStack.length = 0;
-        drawFrameOverlay(); 
+        drawFrameOverlay();
       }
     }
-    else if (e.key === 's' || e.key === 'S') { e.preventDefault(); exportBtn.click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); // clear current frame markers
+      const f = getCurrentFrameIndex();
+      if (markers[f]) {
+        const prev = markers[f].slice();
+        undoStack.push({ type:'clear-frame', frame:f, prevState: prev });
+        redoStack.length = 0;
+        delete markers[f];
+        drawFrameOverlay();
+      }
+    }
+  });
+
+  // clear lastKeyPressed on keyup
+  document.addEventListener('keyup', (e) => {
+    if (/^[A-Za-z0-9]$/.test(e.key)) lastKeyPressed = null;
   });
 
   // track last mouse pos over canvas for keyboard delete
@@ -1048,6 +1330,45 @@ Maintenance Notes:
     }
   }, 250);
 
+  // Tag mapping UI
+  const toggleTagMapBtn = document.getElementById('toggleTagMap');
+  const tagMapList = document.getElementById('tagMapList');
+  function updateTagMappingUI() {
+    const keys = Object.keys(tagMap);
+    if (!keys.length) {
+      document.getElementById('tagMappingContainer').style.display = 'none';
+      return;
+    }
+    document.getElementById('tagMappingContainer').style.display = 'block';
+    tagMapList.innerHTML = '';
+    keys.forEach(tag => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+      const sw = document.createElement('div');
+      const c = tagMap[tag].color;
+      sw.style.width = '18px'; sw.style.height = '18px'; sw.style.border = '1px solid #ccc';
+      sw.style.background = `rgba(${c.r},${c.g},${c.b},${c.a})`;
+      const keySpan = document.createElement('div'); keySpan.textContent = tag; keySpan.style.width = '24px';
+      const nameInput = document.createElement('input');
+      nameInput.value = tagMap[tag].tag_name || tag;
+      nameInput.style.flex = '1';
+      nameInput.addEventListener('input', () => { tagMap[tag].tag_name = nameInput.value; drawFrameOverlay(); renderPointsList(getCurrentFrameIndex(), markers[getCurrentFrameIndex()] || []); });
+      row.appendChild(sw); row.appendChild(keySpan); row.appendChild(nameInput);
+      tagMapList.appendChild(row);
+    });
+  }
+  toggleTagMapBtn.addEventListener('click', () => {
+    if (tagMapList.style.display === 'none' || tagMapList.style.display === '') {
+      tagMapList.style.display = 'block';
+      toggleTagMapBtn.textContent = 'Tags ▲';
+    } else {
+      tagMapList.style.display = 'none';
+      toggleTagMapBtn.textContent = 'Tags ▼';
+    }
+  });
+
   // Initial placeholder canvas size
   canvas.width = 640; canvas.height = 360;
   ctx.fillStyle = '#222'; ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -1067,7 +1388,7 @@ Maintenance Notes:
         <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, or <strong>Circle</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
         <li>Click or click-and-drag on the canvas to add markers. Shift+Click removes the nearest marker on that frame.</li>
-        <li>Use Undo / Redo to revert changes. Press <kbd>S</kbd> to export, or click Export (choose JSON or CSV).</li>
+  <li>Use Undo / Redo to revert changes. Click Export (choose JSON or CSV).</li>
       </ol>
 
       <h3>Detailed instructions</h3>
@@ -1084,7 +1405,7 @@ Maintenance Notes:
         <li><strong>Bounding Box:</strong> Click and drag to draw a rectangular box. If you only click (drag less than 5 pixels), a point will be added instead.</li>
         <li><strong>Circle:</strong> Click and drag to draw a circle. The click location becomes the center, and the drag distance becomes the radius. Small drags (less than 5 pixels) create a point instead.</li>
       </ul>
-      <p><strong>Removing markers:</strong> Shift+Click near a marker to remove it. Press <kbd>D</kbd> to delete the nearest marker to the mouse cursor (or center if cursor is not over the canvas). Press <kbd>C</kbd> to clear all markers on the current frame.</p>
+  <p><strong>Removing markers:</strong> Shift+Click near a marker to remove it. Press <kbd>Backspace</kbd> to delete the nearest marker to the mouse cursor (or center if cursor is not over the canvas). Press <kbd>Esc</kbd> to clear all markers on the current frame.</p>
       <p><strong>Undo / Redo:</strong> Use the Undo and Redo buttons to step through recent add/remove/clear actions. Clearing the current frame or all markers is also undoable.</p>
       <p><strong>Exporting:</strong> Choose JSON or CSV format. JSON exports include metadata (filename, export timestamp, fps) plus markers grouped by frame with time in seconds and full marker data (type and coordinates). CSV exports one row per marker with columns: frame, time_seconds, marker_index, type, x, y, x2, y2, cx, cy, radius (with empty fields for inapplicable coordinates). Filenames are based on the original filename plus a local timestamp.</p>
 
@@ -1100,7 +1421,7 @@ Maintenance Notes:
         <li>Frame navigation (Prev/Next, keyboard arrows, jump to frame, first frame)</li>
         <li>Undo / Redo for all marker operations</li>
         <li>Export JSON (with metadata and full marker data) or CSV (with type column and all coordinate fields)</li>
-        <li>Keyboard shortcuts: ← → (frame), Space (play/pause), C (clear frame), D (delete nearest), S (export)</li>
+  <li>Keyboard shortcuts: ← → (frame), Space (play/pause), Esc (clear frame), Backspace (delete nearest)</li>
       </ul>
       <p class="hint">Click "Teach Me!" again to hide this tutorial.</p>
     </div>
