@@ -192,6 +192,20 @@ Maintenance Notes:
     return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
   }
 
+  function rgbToHex(r,g,b){
+    const toHex = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2,'0');
+    return '#'+toHex(r)+toHex(g)+toHex(b);
+  }
+
+  function hexToRgb(hex){
+    if (!hex) return null;
+    hex = String(hex).replace('#','');
+    if (hex.length === 3) hex = hex.split('').map(c=>c+c).join('');
+    const v = parseInt(hex,16);
+    if (!isFinite(v)) return null;
+    return { r: (v>>16)&255, g: (v>>8)&255, b: v&255 };
+  }
+
   function assignColorForTag(tag) {
     // Use golden-angle spacing to pick distinct hues for successive tags,
     // then add a small offset based on the tag hash so the mapping is deterministic
@@ -1346,16 +1360,48 @@ Maintenance Notes:
       row.style.display = 'flex';
       row.style.alignItems = 'center';
       row.style.gap = '8px';
-      const sw = document.createElement('div');
       const c = tagMap[tag].color;
-      sw.style.width = '18px'; sw.style.height = '18px'; sw.style.border = '1px solid #ccc';
-      sw.style.background = `rgba(${c.r},${c.g},${c.b},${c.a})`;
       const keySpan = document.createElement('div'); keySpan.textContent = tag; keySpan.style.width = '24px';
       const nameInput = document.createElement('input');
       nameInput.value = tagMap[tag].tag_name || tag;
       nameInput.style.flex = '1';
       nameInput.addEventListener('input', () => { tagMap[tag].tag_name = nameInput.value; drawFrameOverlay(); renderPointsList(getCurrentFrameIndex(), markers[getCurrentFrameIndex()] || []); });
-      row.appendChild(sw); row.appendChild(keySpan); row.appendChild(nameInput);
+      // color input (hex) and alpha input — use color input as the swatch
+      const colorInput = document.createElement('input');
+      colorInput.type = 'color';
+      colorInput.value = rgbToHex(c.r,c.g,c.b);
+      colorInput.title = 'Edit tag color';
+      colorInput.style.width = '24px'; colorInput.style.height = '24px'; colorInput.style.padding = '0'; colorInput.style.border = '1px solid #ccc'; colorInput.style.marginRight = '6px';
+      colorInput.style.verticalAlign = 'middle';
+      // reflect alpha by adjusting opacity of the control (color input can't carry alpha)
+      colorInput.style.opacity = String(typeof c.a === 'number' ? c.a : DEFAULT_ALPHA);
+      colorInput.addEventListener('input', () => {
+        const rgb = hexToRgb(colorInput.value);
+        if (!rgb) return;
+        tagMap[tag].color.r = rgb.r; tagMap[tag].color.g = rgb.g; tagMap[tag].color.b = rgb.b;
+        // update markers with this tag to new color
+        for (const f in markers) {
+          (markers[f] || []).forEach(m => { if (m.tag === tag) { m.r = rgb.r; m.g = rgb.g; m.b = rgb.b; } });
+        }
+        drawFrameOverlay(); renderPointsList(getCurrentFrameIndex(), markers[getCurrentFrameIndex()] || []);
+      });
+
+      const alphaInput = document.createElement('input');
+      alphaInput.type = 'number'; alphaInput.step = '0.01'; alphaInput.min = '0'; alphaInput.max = '1'; alphaInput.value = String(typeof c.a === 'number' ? c.a : DEFAULT_ALPHA);
+      alphaInput.style.width = '64px'; alphaInput.title = 'Alpha (0-1)';
+      alphaInput.addEventListener('input', () => {
+        const v = parseFloat(alphaInput.value);
+        if (!isFinite(v)) return;
+        tagMap[tag].color.a = v;
+        for (const f in markers) {
+          (markers[f] || []).forEach(m => { if (m.tag === tag) { m.a = v; } });
+        }
+        drawFrameOverlay(); renderPointsList(getCurrentFrameIndex(), markers[getCurrentFrameIndex()] || []);
+        // reflect alpha in color input opacity
+        colorInput.style.opacity = String(v);
+      });
+
+      row.appendChild(colorInput); row.appendChild(keySpan); row.appendChild(nameInput); row.appendChild(alphaInput);
       tagMapList.appendChild(row);
     });
   }
