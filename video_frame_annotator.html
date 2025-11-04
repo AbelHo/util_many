@@ -66,7 +66,8 @@ Maintenance Notes:
     <strong>Annotation Mode:</strong>
     <label><input id="modePoint" type="radio" name="annotationMode" value="point" checked> Point</label>
     <label><input id="modeBox" type="radio" name="annotationMode" value="box"> Bounding Box</label>
-    <label><input id="modeCircle" type="radio" name="annotationMode" value="circle"> Circle</label>
+  <label><input id="modeCircle" type="radio" name="annotationMode" value="circle"> Circle</label>
+  <label><input id="modeSquare" type="radio" name="annotationMode" value="square"> Square</label>
   </div>
   <div class="row">
     <strong>Export Format:</strong>
@@ -337,6 +338,17 @@ Maintenance Notes:
       ctx.fillStyle = strokeCss;
       ctx.font = '12px sans-serif';
       ctx.fillText(String(index), marker.cx+marker.radius+4, marker.cy);
+    } else if (marker.type === 'square') {
+      // Draw centered square: radius is half-side
+      const r = Number(marker.radius) || 0;
+      const x = (marker.cx || marker.x) - r;
+      const y = (marker.cy || marker.y) - r;
+      const side = r * 2;
+      ctx.fillRect(x, y, side, side);
+      ctx.strokeRect(x, y, side, side);
+      ctx.fillStyle = strokeCss;
+      ctx.font = '12px sans-serif';
+      ctx.fillText(String(index), (marker.cx || marker.x) + r + 4, (marker.cy || marker.y));
     }
 
     ctx.restore();
@@ -363,6 +375,13 @@ Maintenance Notes:
       ctx.arc(dragStartX, dragStartY, radius, 0, Math.PI*2);
       ctx.fill();
       ctx.stroke();
+    } else if (mode === 'square') {
+      const radius = Math.hypot(dragCurrentX - dragStartX, dragCurrentY - dragStartY);
+      const side = radius * 2;
+      const x = dragStartX - radius;
+      const y = dragStartY - radius;
+      ctx.fillRect(x, y, side, side);
+      ctx.strokeRect(x, y, side, side);
     }
 
     ctx.restore();
@@ -401,6 +420,8 @@ Maintenance Notes:
         d.appendChild(document.createTextNode(`${i+1}: Box (${Math.round(m.x1)}, ${Math.round(m.y1)}) to (${Math.round(m.x2)}, ${Math.round(m.y2)})`));
       } else if (m.type === 'circle') {
         d.appendChild(document.createTextNode(`${i+1}: Circle center (${Math.round(m.cx)}, ${Math.round(m.cy)}) radius ${Math.round(m.radius)}`));
+      } else if (m.type === 'square') {
+        d.appendChild(document.createTextNode(`${i+1}: Square center (${Math.round(m.cx||m.x)}, ${Math.round(m.cy||m.y)}) half-side ${Math.round(m.radius)}`));
       }
       if (m.tag) {
         const tn = (tagMap[m.tag] && tagMap[m.tag].tag_name) ? tagMap[m.tag].tag_name : m.tag;
@@ -780,6 +801,18 @@ Maintenance Notes:
           if (tagIdx !== -1 && cols[tagIdx]) m.tag = cols[tagIdx];
           if (tagNameIdx !== -1 && cols[tagNameIdx]) m.tag_name = cols[tagNameIdx];
           incoming[frame].push(m);
+        } else if (type === 'square') {
+          // Square: center in x,y (or cx,cy) and radius is half-side
+          const centerXIndexS = (x !== -1) ? x : ((cx !== -1) ? cx : xIndexFallback);
+          const centerYIndexS = (y !== -1) ? y : ((cy !== -1) ? cy : yIndexFallback);
+          const ms = { type: 'square', cx: num(cols[centerXIndexS]), cy: num(cols[centerYIndexS]), radius: num(cols[rad]) };
+          if (rIdx !== -1) ms.r = num(cols[rIdx]);
+          if (gIdx !== -1) ms.g = num(cols[gIdx]);
+          if (bIdx !== -1) ms.b = num(cols[bIdx]);
+          ms.a = (aIdx !== -1 && cols[aIdx] !== undefined && cols[aIdx] !== '') ? Number(cols[aIdx]) : DEFAULT_ALPHA;
+          if (tagIdx !== -1 && cols[tagIdx]) ms.tag = cols[tagIdx];
+          if (tagNameIdx !== -1 && cols[tagNameIdx]) ms.tag_name = cols[tagNameIdx];
+          incoming[frame].push(ms);
         }
       });
     } else {
@@ -858,6 +891,19 @@ Maintenance Notes:
       if (m.tag_name) c.tag_name = String(m.tag_name);
       return c;
     }
+    if (m.type === 'square') {
+      // accept either cx/cy or x/y (or px/py) in imported data
+      const cxv = (isFinite(m.cx) ? m.cx : (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined)));
+      const cyv = (isFinite(m.cy) ? m.cy : (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined)));
+      const s = { type: 'square', cx: num(cxv), cy: num(cyv), radius: num(m.radius) };
+      if (isFinite(m.r)) s.r = num(m.r);
+      if (isFinite(m.g)) s.g = num(m.g);
+      if (isFinite(m.b)) s.b = num(m.b);
+      s.a = isFinite(m.a) ? Number(m.a) : DEFAULT_ALPHA;
+      if (m.tag) s.tag = String(m.tag);
+      if (m.tag_name) s.tag_name = String(m.tag_name);
+      return s;
+    }
     return null;
   }
 
@@ -928,8 +974,11 @@ Maintenance Notes:
           const cx = (m.x1 + m.x2) / 2;
           const cy = (m.y1 + m.y2) / 2;
           d = Math.hypot(cx - coords.x, cy - coords.y);
-        } else if (m.type === 'circle') {
-          d = Math.hypot(m.cx - coords.x, m.cy - coords.y);
+        } else if (m.type === 'circle' || m.type === 'square') {
+          // For both circle and square use center distance for proximity tests
+          const cx = (m.cx !== undefined) ? m.cx : m.x;
+          const cy = (m.cy !== undefined) ? m.cy : m.y;
+          d = Math.hypot(cx - coords.x, cy - coords.y);
         }
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
@@ -1032,6 +1081,27 @@ Maintenance Notes:
         undoStack.push({ type: 'add', frame, point: pt });
         redoStack.length = 0;
       }
+    } else if (mode === 'square') {
+      // Only create square if dragged significantly
+      if (dragDist > 5) {
+        const square = {
+          type: 'square',
+          cx: Math.round(dragStartX),
+          cy: Math.round(dragStartY),
+          radius: Math.round(dragDist)
+        };
+        attachTagAndColor(square);
+        markers[frame].push(square);
+        undoStack.push({ type: 'add', frame, point: square });
+        redoStack.length = 0;
+      } else {
+        // Small drag, treat as point click
+        const pt = { type: 'point', x: Math.round(dragStartX), y: Math.round(dragStartY) };
+        attachTagAndColor(pt);
+        markers[frame].push(pt);
+        undoStack.push({ type: 'add', frame, point: pt });
+        redoStack.length = 0;
+      }
     }
 
     drawFrameOverlay();
@@ -1112,6 +1182,12 @@ Maintenance Notes:
             // x1,y1,x2,y2 empty
             cols.push(''); cols.push(''); cols.push(''); cols.push('');
             cols.push(m.radius || '');
+          } else if (type === 'square') {
+            // square: center in x,y, radius is half-side
+            cols.push(cxVal); cols.push(cyVal);
+            // x1,y1,x2,y2 empty
+            cols.push(''); cols.push(''); cols.push(''); cols.push('');
+            cols.push(m.radius || '');
           } else {
             // unknown type: leave geometry fields empty
             cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push(''); cols.push('');
@@ -1159,6 +1235,12 @@ Maintenance Notes:
             const obj = { type: 'circle', x: cx, y: cy, radius: m.radius, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
             if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
             return obj;
+          } else if (type === 'square') {
+            const cx = (m.cx !== undefined) ? m.cx : m.x;
+            const cy = (m.cy !== undefined) ? m.cy : m.y;
+            const obj = { type: 'square', x: cx, y: cy, radius: m.radius, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
+            if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
+            return obj;
           }
           return m;
         })
@@ -1186,9 +1268,10 @@ Maintenance Notes:
       const t = a.type || 'point';
       const tagEq = String(a.tag || '') === String(b.tag || '');
       const colorEq = (Number(a.r||0) === Number(b.r||0)) && (Number(a.g||0) === Number(b.g||0)) && (Number(a.b||0) === Number(b.b||0)) && (Number((a.a!==undefined?a.a:DEFAULT_ALPHA)) === Number((b.a!==undefined?b.a:DEFAULT_ALPHA)));
-      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
-      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
-      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
+  if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
+  if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
+  if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
+  if (t === 'square') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
       return false;
     };
 
@@ -1224,9 +1307,10 @@ Maintenance Notes:
       const t = a.type || 'point';
       const tagEq = String(a.tag || '') === String(b.tag || '');
       const colorEq = (Number(a.r||0) === Number(b.r||0)) && (Number(a.g||0) === Number(b.g||0)) && (Number(a.b||0) === Number(b.b||0)) && (Number((a.a!==undefined?a.a:DEFAULT_ALPHA)) === Number((b.a!==undefined?b.a:DEFAULT_ALPHA)));
-      if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
-      if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
-      if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
+  if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
+  if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
+  if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
+  if (t === 'square') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
       return false;
     };
 
@@ -1289,8 +1373,10 @@ Maintenance Notes:
           const cx = (m.x1 + m.x2) / 2;
           const cy = (m.y1 + m.y2) / 2;
           d = Math.hypot(cx - x, cy - y);
-        } else if (m.type === 'circle') {
-          d = Math.hypot(m.cx - x, m.cy - y);
+        } else if (m.type === 'circle' || m.type === 'square') {
+          const cx = (m.cx !== undefined) ? m.cx : m.x;
+          const cy = (m.cy !== undefined) ? m.cy : m.y;
+          d = Math.hypot(cx - x, cy - y);
         }
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
