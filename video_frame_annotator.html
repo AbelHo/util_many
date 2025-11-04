@@ -1,12 +1,12 @@
 <!--
 Programmer Reference Summary
 ---------------------------
-Video Frame Annotator: A browser-based tool for annotating video frames with points, bounding boxes, and circles.
+Video Frame Annotator: A browser-based tool for annotating video frames with points, bounding boxes, circles, and squares.
 
 Key Features:
 - Upload video via file input or drag & drop (no server, all client-side)
 - Frame navigation: step, jump, play/pause, go to frame
-- Annotation modes: Point (click), Bounding Box (click-drag), Circle (click-drag)
+- Annotation modes: Point (click), Bounding Box (click-drag), Circle (click-drag), Square (click-drag)
 - Markers are stored per-frame, with undo/redo support for all actions
 - Remove markers with shift+click or keyboard shortcut (Backspace)
 - Tagging: hold any alphanumeric key (case-sensitive) while clicking to assign a tag to a marker
@@ -38,7 +38,7 @@ Maintenance Notes:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="description" content="Video Frame Annotator - A browser-based tool for annotating video frames with points, bounding boxes, and circles. Navigate frame-by-frame, draw annotations with drag-and-drop, and export to JSON or CSV. Perfect for video analysis, object tracking, and dataset creation. No installation required." />
+  <meta name="description" content="Video Frame Annotator - A browser-based tool for annotating video frames with points, bounding boxes, circles, and squares. Navigate frame-by-frame, draw annotations with drag-and-drop, and export to JSON or CSV. Perfect for video analysis, object tracking, and dataset creation. No installation required." />
   <meta name="keywords" content="video annotation, frame annotator, bounding box, video labeling, object detection, computer vision, video analysis, dataset creation, frame-by-frame annotation, point annotation, circle annotation" />
   <title>Video Frame Annotator</title>
   <style>
@@ -55,7 +55,7 @@ Maintenance Notes:
 </head>
 <body>
   <h2>Video Frame Annotator</h2>
-  <p class="hint">Upload a video, navigate frames, and annotate with points, bounding boxes, or circles. Click/drag to add markers (shift+click to remove nearest). Export as JSON or CSV.</p>
+  <p class="hint">Upload a video, navigate frames, and annotate with points, bounding boxes, circles, or squares. Click/drag to add markers (shift+click to remove nearest). Export as JSON or CSV.</p>
 
   <div class="row">
     <input id="fileInput" type="file" accept="video/*" />
@@ -154,7 +154,7 @@ Maintenance Notes:
   const totalTimeLabel = document.getElementById('totalTime');
 
   // Data structure: map frameNumber -> array of markers
-  // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius}
+  // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius} OR {type:'square', cx, cy, radius}
   const markers = {};
   let detectedFPS = null; // will hold detected fps when available
   let uploadedFilename = null;
@@ -1523,7 +1523,7 @@ Maintenance Notes:
         <li>Optionally import existing annotations (JSON/CSV) using the Import control or by dropping the file anywhere. You'll be asked to Replace or Merge.</li>
         <li><span style="color:red">Manually set the FPS (frames per seconds) of the video. Currently the FPS auto-detection is typically wrong.</span></li>
         <li>Scrub the video with the timeline slider (pauses while dragging, resumes on release) or use the mouse wheel over the canvas to step frames by the configured step size.</li>
-        <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, or <strong>Circle</strong>.</li>
+        <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, <strong>Circle</strong>, or <strong>Square</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
         <li>Click or click-and-drag on the canvas to add markers. Shift+Click removes the nearest marker on that frame.</li>
         <li><strong>Tagging:</strong> Hold any alphanumeric key (case-sensitive) while clicking to assign a tag to a marker. Tags are case-sensitive.</li>
@@ -1534,7 +1534,7 @@ Maintenance Notes:
       <h3>Detailed instructions</h3>
   <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
     <p><strong>Importing annotations:</strong> You can import annotations from JSON or CSV either via the Import control (next to Export) or by dropping the file anywhere on the page. You'll be prompted to <em>Replace</em> existing annotations or <em>Merge</em> into them. Supported formats:
-  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle', ...coords, r,g,b,a,tag,tag_name?} ] } ] }
+  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle'|'square', ...coords, r,g,b,a,tag,tag_name?} ] } ] }
   <br>• Legacy JSON: [ { frame, time, points: [ {x,y} ] } ] or { [frame]: [ {x,y} ] }
   <br>• CSV (this tool's export): frame,time_seconds,marker_index,type,x,y,x1,y1,x2,y2,radius,r,g,b,a,tag,tag_name
   <br>• Legacy CSV: frame,time_seconds,point_index,x,y (points only)</p>
@@ -1544,6 +1544,7 @@ Maintenance Notes:
         <li><strong>Point:</strong> Click to place a single point marker at that location.</li>
         <li><strong>Bounding Box:</strong> Click and drag to draw a rectangular box. If you only click (drag less than 5 pixels), a point will be added instead.</li>
         <li><strong>Circle:</strong> Click and drag to draw a circle. The click location becomes the center, and the drag distance becomes the radius. Small drags (less than 5 pixels) create a point instead.</li>
+        <li><strong>Square:</strong> Click and drag to draw a square centered at the click location. The drag distance defines the half-side (stored as <code>radius</code>), so the full side length is 2×radius. Small drags (less than 5 pixels) create a point instead.</li>
       </ul>
       <p><strong>Tagging and Tag Mapping:</strong></p>
       <ul>
@@ -1561,9 +1562,9 @@ Maintenance Notes:
         <li>Video upload via file picker or drag & drop</li>
         <li>Import annotations from JSON/CSV (replace or merge)</li>
         <li>Elegant scrubbing with a timeline slider and mouse wheel stepping</li>
-        <li>Three annotation modes: Point, Bounding Box, and Circle</li>
+        <li>Annotation modes: Point, Bounding Box, Circle, and Square</li>
         <li>Per-frame marking with pixel coordinates</li>
-        <li>Visual preview while dragging boxes/circles</li>
+        <li>Visual preview while dragging boxes, circles, and squares</li>
         <li>Estimated FPS detection; editable FPS override</li>
         <li>Frame navigation (Prev/Next, keyboard arrows, jump to frame, first frame)</li>
         <li>Undo / Redo for all marker operations</li>
