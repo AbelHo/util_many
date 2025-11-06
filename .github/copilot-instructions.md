@@ -38,7 +38,7 @@ This repository contains small, self-contained web utilities, primarily implemen
 - **Minimal CSS** for clarity and usability.
 - **Project Description Meta Tag**: Write a description of this project in detail. It will be in the `<meta name="description" content="...">` tag in the `head` section of the HTML files.
 - **Meta Keywords Tag**: Include relevant keywords in a `<meta name="keywords" content="...">` tag in the `head` section of the HTML files. This will help improve searchability and categorization of the utilities within the project.
-- **Programmer Reference Summary Comment**: At the top of each HTML file in a hidden section, include a multi-line comment summarizing the utility's purpose, key features, and usage instructions for developers who may work on or maintain the code in the future. 
+- **Programmer Reference Summary Comment**: At the top of each HTML file in a hidden section, include a multi-line comment summarizing the utility's purpose, key features, and usage instructions for developers who may work on or maintain the code in the future. For every important changes, update this comment to reflect the current state of the utility.
 
 ## Example: Adding a Utility
 ```html
