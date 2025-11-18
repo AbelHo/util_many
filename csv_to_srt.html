@@ -1,4 +1,11 @@
 <!DOCTYPE html>
+<!--
+Utility: CSV/XLSX (Boris) to SRT (Video Subtitle) Converter
+Purpose: Convert CSV or XLSX files to SRT subtitle files.
+Key features: Drag & drop or browse file, supports Start (s)/Stop (s)/Behavior columns,
+              and appends a Modifiers column value at the end of the subtitle line in square brackets
+              if the 'Modifiers' column is present and non-empty.
+-->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -127,6 +134,7 @@ function processCsv(text, filename) {
     const typeIdx = headers.indexOf('Behavior type');
     const behIdx = headers.indexOf('Behavior');
     const subjIdx = headers.indexOf('Subject');
+    const modIdx = headers.indexOf('Modifiers');
     // If only Start (s) and Stop (s) are present, proceed and fill missing columns with empty string
     if ((startIdx !== -1 && stopIdx !== -1) && (typeIdx === -1 || behIdx === -1 || subjIdx === -1)) {
         let srt = '';
@@ -139,8 +147,10 @@ function processCsv(text, filename) {
             const type = typeIdx !== -1 ? row[typeIdx].trim().toUpperCase() : '';
             const beh = behIdx !== -1 ? row[behIdx].trim() : '';
             const subj = subjIdx !== -1 ? row[subjIdx].trim() : '';
+            const mod = modIdx !== -1 ? (row[modIdx] || '').trim() : '';
             const text = `${type}: ${beh}(${subj})`;
-            srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+            const appended = mod ? `${text} [${mod}]` : text;
+            srt += `${idx}\n${start} --> ${stop}\n${appended}\n\n`;
         }
         downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
         document.getElementById('result').innerText = 'Conversion complete!';
@@ -157,8 +167,10 @@ function processCsv(text, filename) {
         const idx = i - headerLine;
         const start = secondsToSrtTime(row[startIdx]);
         const stop = secondsToSrtTime(row[stopIdx]);
-        const text = `${row[typeIdx].trim().toUpperCase()}: ${row[behIdx].trim()}(${row[subjIdx].trim()})`;
-        srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+    const mod = modIdx !== -1 ? (row[modIdx] || '').trim() : '';
+    const text = `${row[typeIdx].trim().toUpperCase()}: ${row[behIdx].trim()}(${row[subjIdx].trim()})`;
+    const appended = mod ? `${text} [${mod}]` : text;
+        srt += `${idx}\n${start} --> ${stop}\n${appended}\n\n`;
     }
     downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
     document.getElementById('result').innerText = 'Conversion complete!';
@@ -186,10 +198,12 @@ function processXlsx(json, filename) {
             const type = ('Behavior type' in row) ? row['Behavior type'].toString().trim().toUpperCase() : '';
             const beh = ('Behavior' in row) ? row['Behavior'].toString().trim() : '';
             const subj = ('Subject' in row) ? row['Subject'].toString().trim() : '';
+            const mod = ('Modifiers' in row) ? row['Modifiers'].toString().trim() : '';
             const start = secondsToSrtTime(row['Start (s)']);
             const stop = secondsToSrtTime(row['Stop (s)']);
             const text = `${type}: ${beh}(${subj})`;
-            srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+            const appended = mod ? `${text} [${mod}]` : text;
+            srt += `${idx}\n${start} --> ${stop}\n${appended}\n\n`;
         }
         downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
         document.getElementById('result').innerText = 'Conversion complete!';
@@ -205,8 +219,10 @@ function processXlsx(json, filename) {
         const idx = i - headerRow + 1;
         const start = secondsToSrtTime(row['Start (s)']);
         const stop = secondsToSrtTime(row['Stop (s)']);
-        const text = `${row['Behavior type'].toString().trim().toUpperCase()}: ${row['Behavior'].toString().trim()}(${row['Subject'].toString().trim()})`;
-        srt += `${idx}\n${start} --> ${stop}\n${text}\n\n`;
+    const mod = ('Modifiers' in row) ? row['Modifiers'].toString().trim() : '';
+    const text = `${row['Behavior type'].toString().trim().toUpperCase()}: ${row['Behavior'].toString().trim()}(${row['Subject'].toString().trim()})`;
+    const appended = mod ? `${text} [${mod}]` : text;
+    srt += `${idx}\n${start} --> ${stop}\n${appended}\n\n`;
     }
     downloadSrt(srt, filename.replace(/\.(csv|xlsx)$/i, '.srt'));
     document.getElementById('result').innerText = 'Conversion complete!';
