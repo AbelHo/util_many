@@ -10,5 +10,6 @@ Simple Utility Websites
 - [JSON Graph Visualizer](https://AbelHo.github.io/util_many/json_graph_visualizer.html)
 - [SQLite Database Viewer](https://AbelHo.github.io/util_many/sqlite_viewer.html)
 - [Sound Sync Maximum Valid Distance Calculator](https://AbelHo.github.io/util_many/sync_max_distance.html)
+- [USearch Database Viewer](https://AbelHo.github.io/util_many/usearch_viewer.html)
 - [Video Frame Annotator](https://AbelHo.github.io/util_many/video_frame_annotator.html)
 
