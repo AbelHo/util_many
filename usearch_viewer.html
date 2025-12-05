@@ -8,6 +8,7 @@ USearch Database Viewer - Programmer Reference
 PURPOSE:
   A standalone web utility to inspect USearch vector database files (.usearch/.index).
   Displays summary information, embedding heatmaps, and UMAP 2D visualizations.
+  Supports loading class labels from CSV files or SQLite databases.
 
 KEY FEATURES:
   1. Drag-and-drop file upload for .usearch or .index files
@@ -15,36 +16,52 @@ KEY FEATURES:
   3. Summary display: number of vectors, dimensions, file size, vector data size
   4. Embedding heatmap visualization using Canvas API with Viridis colormap
   5. UMAP 2D projection using actual embedding vectors
-  6. Optional class coloring from CSV upload for UMAP visualization
-  7. Client-side only - no server required
+  6. Optional class coloring from CSV or SQLite database
+  7. SQLite database viewer with configurable table/column mapping
+  8. Interactive tooltips showing labels on heatmap and UMAP hover
+  9. Client-side only - no server required
 
 FILE FORMAT (USearch v2.x Memory-Mapped):
   The USearch index file stores vector embeddings in a memory-mapped format.
   
-  Format structure:
-    * Header: 8 bytes (contains metadata)
+  Format structure (two variants):
+    * Header: 8 bytes
+      - Variant 1 (small files): uint16 count at offset 0, uint16 dimBytes at offset 4
+      - Variant 2 (large files): uint32 count at offset 0, uint32 dimBytes at offset 4
+    * dimBytes = dimensions × 2 (float16 = 2 bytes per value)
     * Vector data: float16 (IEEE half-precision, 2 bytes per value)
     * Vectors stored contiguously: numVectors × dimensions × 2 bytes
   
   The viewer parses the binary format directly in JavaScript:
+  - Auto-detects uint16 vs uint32 header format based on reasonableness
   - Auto-detects dimensions from common embedding sizes (128-4096)
   - Converts float16 to float32 for JavaScript processing
   - Handles large files with vector sampling for performance
 
+SQLITE LABEL SUPPORT:
+  Upload SQLite database files (.sqlite, .db, .sqlite3) for label data.
+  Default configuration (for hoplite databases):
+    - Table: hoplite_labels
+    - Index column: embedding_id
+    - Label column: label
+  Users can configure table name and column mappings via dropdown menus.
+
 DEPENDENCIES:
   - UMAP-js (CDN): For dimensionality reduction
   - Plotly.js (CDN): For interactive 2D scatter plots
+  - sql.js (CDN): For SQLite database parsing in browser
 
 USAGE:
   1. Drag/drop or select a .usearch or .index file
   2. View the summary information (vectors, dimensions, file size)
   3. (Optional) Upload a CSV with 'index,class' columns for class coloring
-  4. Click "Show Heatmap" to visualize embedding values
-  5. Click "Generate UMAP" for 2D projection of vectors
+  4. (Optional) Upload SQLite database and configure label table/columns
+  5. Click "Show Heatmap" to visualize embedding values (hover for labels)
+  6. Click "Generate UMAP" for 2D projection of vectors (hover for labels)
 
 LIMITATIONS:
   - Assumes memory-mapped format with float16 vectors at offset 8
-  - Heatmap limited to 500 vectors × 500 dimensions for performance
+  - Heatmap limited to 5000 vectors × 500 dimensions for performance
   - UMAP limited to 3000 vectors (samples uniformly if larger)
   - Large files may be slow to process in browser
 
@@ -53,16 +70,21 @@ CHANGELOG:
   - v1.1 (2024-12-06): Updated to parse actual float16 embeddings
                        Heatmap shows embedding values with Viridis colormap
                        UMAP uses actual vectors instead of graph approximation
+  - v1.2 (2025-12-06): Added uint32 header support for larger index files
+                       Added SQLite database upload with table/column config
+                       Added interactive tooltips showing labels on hover
+                       Fixed vector count detection for large files
 ================================================================================
 -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="A browser-based viewer for USearch vector database files. Upload .usearch or .index files to view summary information, embedding heatmaps, and UMAP 2D visualizations. Supports optional CSV class labels for colored scatter plots.">
-    <meta name="keywords" content="usearch, vector database, embedding viewer, HNSW, heatmap, UMAP, visualization, similarity search, machine learning, embeddings, ANN, approximate nearest neighbors">
+    <meta name="description" content="A browser-based viewer for USearch vector database files. Upload .usearch or .index files to view summary information, embedding heatmaps, and UMAP 2D visualizations. Supports CSV and SQLite class labels for colored scatter plots with interactive tooltips.">
+    <meta name="keywords" content="usearch, vector database, embedding viewer, HNSW, heatmap, UMAP, visualization, similarity search, machine learning, embeddings, ANN, approximate nearest neighbors, sqlite, labels">
     <title>USearch Database Viewer</title>
     <script src="https://cdn.jsdelivr.net/npm/umap-js@1.4.0/lib/umap-js.min.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -319,6 +341,73 @@ CHANGELOG:
             background: linear-gradient(90deg, #440154, #31688e, #35b779, #fde725);
             border-radius: 3px;
         }
+        .sqlite-config {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f0f4f8;
+            border-radius: 6px;
+            border: 1px solid #e0e4e8;
+        }
+        .sqlite-config h4 {
+            margin: 0 0 12px 0;
+            color: #2c3e50;
+            font-size: 14px;
+        }
+        .config-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .config-row label {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 12px;
+            color: #555;
+        }
+        .config-row input, .config-row select {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            min-width: 140px;
+        }
+        .sqlite-summary {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e3f2fd;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .sqlite-summary table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+        }
+        .sqlite-summary th, .sqlite-summary td {
+            padding: 6px 10px;
+            text-align: left;
+            border-bottom: 1px solid #bbdefb;
+            font-size: 12px;
+        }
+        .sqlite-summary th {
+            background: #bbdefb;
+            font-weight: 600;
+        }
+        .heatmap-label-axis {
+            position: absolute;
+            right: 0;
+            top: 0;
+            display: flex;
+            flex-direction: column;
+            font-size: 10px;
+            color: #666;
+        }
+        #heatmapWrapper {
+            position: relative;
+            display: inline-block;
+        }
     </style>
 </head>
 <body>
@@ -352,6 +441,38 @@ CHANGELOG:
             </div>
         </div>
         
+        <div class="card full-width">
+            <h2>🗄️ Optional: SQLite Database Labels</h2>
+            <div class="csv-upload">
+                <label>Upload SQLite database with label information:</label>
+                <div class="drop-zone" id="sqliteDropZone" style="padding: 20px;">
+                    <p><strong>Drag & drop .sqlite or .db file</strong></p>
+                    <p style="font-size: 12px;">e.g., hoplite.sqlite with labels table</p>
+                    <input type="file" id="sqliteFile" accept=".sqlite,.db,.sqlite3">
+                </div>
+                <div id="sqliteInfo"></div>
+                <div class="sqlite-config" id="sqliteConfig" style="display: none;">
+                    <h4>⚙️ Label Table Configuration</h4>
+                    <div class="config-row">
+                        <label>
+                            Table Name
+                            <select id="sqliteTable"></select>
+                        </label>
+                        <label>
+                            Index Column (embedding_id)
+                            <select id="sqliteIndexCol"></select>
+                        </label>
+                        <label>
+                            Label Column (class)
+                            <select id="sqliteLabelCol"></select>
+                        </label>
+                    </div>
+                    <button id="applyLabelConfig" style="margin-top: 10px;">Apply Labels</button>
+                </div>
+                <div class="sqlite-summary" id="sqliteSummary" style="display: none;"></div>
+            </div>
+        </div>
+        
         <div class="card full-width" id="summarySection" style="display: none;">
             <h2>📊 Index Summary</h2>
             <div class="summary-grid" id="summaryGrid"></div>
@@ -369,8 +490,9 @@ CHANGELOG:
                 </label>
                 <button id="refreshHeatmap">Refresh Heatmap</button>
             </div>
-            <div id="heatmapContainer">
+            <div id="heatmapContainer" style="position: relative;">
                 <canvas id="heatmapCanvas"></canvas>
+                <div id="heatmapTooltip" style="display: none; position: absolute; background: rgba(0,0,0,0.85); color: white; padding: 6px 10px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 100; max-width: 300px; word-wrap: break-word;"></div>
             </div>
             <div class="heatmap-colorbar">
                 <span>Low</span>
@@ -395,12 +517,16 @@ CHANGELOG:
         // Global state
         let indexData = null;
         let classLabels = null;
+        let sqliteDb = null;
+        let sqliteDbInfo = null;
         
         // DOM elements
         const indexDropZone = document.getElementById('indexDropZone');
         const indexFileInput = document.getElementById('indexFile');
         const csvDropZone = document.getElementById('csvDropZone');
         const csvFileInput = document.getElementById('csvFile');
+        const sqliteDropZone = document.getElementById('sqliteDropZone');
+        const sqliteFileInput = document.getElementById('sqliteFile');
         const loadProgress = document.getElementById('loadProgress');
         const progressFill = document.getElementById('progressFill');
         const loadStatus = document.getElementById('loadStatus');
@@ -413,12 +539,20 @@ CHANGELOG:
         const umapSection = document.getElementById('umapSection');
         const umapPlot = document.getElementById('umapPlot');
         const csvInfo = document.getElementById('csvInfo');
+        const sqliteInfo = document.getElementById('sqliteInfo');
+        const sqliteConfig = document.getElementById('sqliteConfig');
+        const sqliteSummary = document.getElementById('sqliteSummary');
+        const sqliteTableSelect = document.getElementById('sqliteTable');
+        const sqliteIndexColSelect = document.getElementById('sqliteIndexCol');
+        const sqliteLabelColSelect = document.getElementById('sqliteLabelCol');
+        const applyLabelConfigBtn = document.getElementById('applyLabelConfig');
         const maxVectorsInput = document.getElementById('maxVectors');
         const refreshHeatmapBtn = document.getElementById('refreshHeatmap');
         
         // Setup drag and drop for index file
         setupDropZone(indexDropZone, indexFileInput, handleIndexFile);
         setupDropZone(csvDropZone, csvFileInput, handleCsvFile);
+        setupDropZone(sqliteDropZone, sqliteFileInput, handleSqliteFile);
         
         function setupDropZone(dropZone, fileInput, handler) {
             dropZone.addEventListener('click', () => fileInput.click());
@@ -516,6 +650,152 @@ CHANGELOG:
             return labels;
         }
         
+        // SQLite handling
+        async function handleSqliteFile(file) {
+            try {
+                sqliteInfo.innerHTML = '<div class="file-info">Loading SQLite database...</div>';
+                
+                // Initialize sql.js
+                const SQL = await initSqlJs({
+                    locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+                });
+                
+                const arrayBuffer = await readFileAsArrayBuffer(file);
+                sqliteDb = new SQL.Database(new Uint8Array(arrayBuffer));
+                
+                // Get table information
+                const tables = sqliteDb.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+                if (tables.length === 0 || tables[0].values.length === 0) {
+                    throw new Error('No tables found in database');
+                }
+                
+                const tableNames = tables[0].values.map(row => row[0]);
+                sqliteDbInfo = { tables: {} };
+                
+                // Get info for each table
+                for (const tableName of tableNames) {
+                    const pragma = sqliteDb.exec(`PRAGMA table_info("${tableName}")`);
+                    const columns = pragma.length > 0 ? pragma[0].values.map(row => row[1]) : [];
+                    const countResult = sqliteDb.exec(`SELECT COUNT(*) FROM "${tableName}"`);
+                    const count = countResult.length > 0 ? countResult[0].values[0][0] : 0;
+                    sqliteDbInfo.tables[tableName] = { columns, count };
+                }
+                
+                // Populate table select
+                sqliteTableSelect.innerHTML = tableNames.map(t => 
+                    `<option value="${t}" ${t === 'hoplite_labels' ? 'selected' : ''}>${t}</option>`
+                ).join('');
+                
+                // Update column selects
+                updateColumnSelects();
+                
+                // Show config and summary
+                sqliteConfig.style.display = 'block';
+                displaySqliteSummary();
+                
+                sqliteInfo.innerHTML = `<div class="file-info">✓ Loaded: ${file.name} (${formatBytes(arrayBuffer.byteLength)})</div>`;
+                
+            } catch (error) {
+                sqliteInfo.innerHTML = `<div class="warning">Error loading SQLite: ${error.message}</div>`;
+                console.error('Error loading SQLite:', error);
+            }
+        }
+        
+        function updateColumnSelects() {
+            const selectedTable = sqliteTableSelect.value;
+            const tableInfo = sqliteDbInfo?.tables[selectedTable];
+            
+            if (!tableInfo) return;
+            
+            const columns = tableInfo.columns;
+            
+            // Index column - prefer 'embedding_id' or 'id' or 'index'
+            const indexColOptions = columns.map(c => {
+                const selected = (c === 'embedding_id' || c === 'id' || c === 'index') ? 'selected' : '';
+                return `<option value="${c}" ${selected}>${c}</option>`;
+            }).join('');
+            sqliteIndexColSelect.innerHTML = indexColOptions;
+            
+            // Set best match for index column
+            if (columns.includes('embedding_id')) {
+                sqliteIndexColSelect.value = 'embedding_id';
+            } else if (columns.includes('id')) {
+                sqliteIndexColSelect.value = 'id';
+            }
+            
+            // Label column - prefer 'label' or 'class'
+            const labelColOptions = columns.map(c => {
+                const selected = (c === 'label' || c === 'class') ? 'selected' : '';
+                return `<option value="${c}" ${selected}>${c}</option>`;
+            }).join('');
+            sqliteLabelColSelect.innerHTML = labelColOptions;
+            
+            // Set best match for label column
+            if (columns.includes('label')) {
+                sqliteLabelColSelect.value = 'label';
+            } else if (columns.includes('class')) {
+                sqliteLabelColSelect.value = 'class';
+            }
+        }
+        
+        function displaySqliteSummary() {
+            if (!sqliteDbInfo) return;
+            
+            let html = '<strong>📊 Database Summary:</strong><table><tr><th>Table</th><th>Rows</th><th>Columns</th></tr>';
+            for (const [tableName, info] of Object.entries(sqliteDbInfo.tables)) {
+                html += `<tr><td>${tableName}</td><td>${info.count.toLocaleString()}</td><td>${info.columns.join(', ')}</td></tr>`;
+            }
+            html += '</table>';
+            sqliteSummary.innerHTML = html;
+            sqliteSummary.style.display = 'block';
+        }
+        
+        function applyLabelsFromSqlite() {
+            if (!sqliteDb) {
+                alert('No SQLite database loaded');
+                return;
+            }
+            
+            const tableName = sqliteTableSelect.value;
+            const indexCol = sqliteIndexColSelect.value;
+            const labelCol = sqliteLabelColSelect.value;
+            
+            try {
+                const result = sqliteDb.exec(`SELECT "${indexCol}", "${labelCol}" FROM "${tableName}"`);
+                if (result.length === 0) {
+                    throw new Error('No data found');
+                }
+                
+                classLabels = {};
+                for (const row of result[0].values) {
+                    const idx = parseInt(row[0]);
+                    const label = String(row[1]);
+                    if (!isNaN(idx)) {
+                        // Handle multiple labels per index by concatenating
+                        if (classLabels[idx]) {
+                            if (!classLabels[idx].includes(label)) {
+                                classLabels[idx] += ', ' + label;
+                            }
+                        } else {
+                            classLabels[idx] = label;
+                        }
+                    }
+                }
+                
+                const numLabels = Object.keys(classLabels).length;
+                const numClasses = new Set(Object.values(classLabels)).size;
+                sqliteInfo.innerHTML = `<div class="file-info">✓ Applied ${numLabels.toLocaleString()} labels with ${numClasses} unique classes from ${tableName}</div>`;
+                
+            } catch (error) {
+                sqliteInfo.innerHTML = `<div class="warning">Error applying labels: ${error.message}</div>`;
+                console.error('Error applying labels:', error);
+            }
+        }
+        
+        // Event listeners for SQLite config
+        sqliteTableSelect.addEventListener('change', updateColumnSelects);
+        applyLabelConfigBtn.addEventListener('click', applyLabelsFromSqlite);
+        
         // Convert float16 bytes to float32
         function float16ToFloat32(uint16) {
             const sign = (uint16 >> 15) & 0x1;
@@ -544,47 +824,68 @@ CHANGELOG:
             const uint8Array = new Uint8Array(arrayBuffer);
             
             // USearch memory-mapped format analysis:
-            // Bytes 0-1: Contains vector count info (as uint16 little-endian)
-            // Bytes 4-5: Contains dimension * 2 info (as uint16 little-endian)  
-            // Bytes 8+: Vector data in float16 format
+            // Format 1 (smaller files): uint16 count at offset 0, uint16 dimBytes at offset 4
+            // Format 2 (larger files): uint32 count at offset 0, uint32 dimBytes at offset 4
+            // Both formats: Vector data in float16 format after header
             
-            // Parse header
-            const size = view.getUint16(0, true);
-            const dimBytes = view.getUint16(4, true);
-            const dimensions = dimBytes > 0 ? Math.round(dimBytes / 2) : 0;
+            // Try uint32 first (handles larger files), then fallback to uint16
+            let detectedSize = view.getUint32(0, true);
+            let dimBytes = view.getUint32(4, true);
+            let headerSize = 8;
             
-            // Validate and try to auto-detect parameters
-            let detectedSize = size;
-            let detectedDims = dimensions;
+            // If uint32 gives unreasonable dimensions, try uint16
+            if (dimBytes > 100000 || dimBytes === 0) {
+                detectedSize = view.getUint16(0, true);
+                dimBytes = view.getUint16(4, true);
+            }
+            
+            // dimBytes is dimensions * 2 (float16 = 2 bytes per value)
+            let detectedDims = dimBytes > 0 ? Math.round(dimBytes / 2) : 0;
             
             // Calculate expected vector data size
-            const headerSize = 8; // First 8 bytes are header
             const vectorDataSize = arrayBuffer.byteLength - headerSize;
             
-            // If detected dimensions seem wrong, try to infer from file size
-            const commonDims = [128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096];
+            // Validate: check if dimensions and count match file size
+            const expectedDataSize = detectedSize * detectedDims * 2;
+            const tolerance = 0.1; // Allow 10% tolerance
             
-            if (detectedDims === 0 || detectedDims > 10000) {
-                // Try to find a dimension that makes sense
+            if (Math.abs(expectedDataSize - vectorDataSize) > vectorDataSize * tolerance) {
+                // Try to auto-detect dimensions from common embedding sizes
+                const commonDims = [128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096];
+                
                 for (const dim of commonDims) {
                     const possibleVectors = Math.floor(vectorDataSize / (dim * 2));
-                    if (possibleVectors > 0 && possibleVectors === detectedSize) {
+                    // Check if this makes sense with the header count
+                    if (possibleVectors > 0 && Math.abs(possibleVectors - detectedSize) < detectedSize * tolerance) {
                         detectedDims = dim;
                         break;
                     }
                 }
                 
-                // If still not found, estimate based on file size
+                // If still not found, estimate based on file size and header count
                 if (detectedDims === 0 || detectedDims > 10000) {
-                    // Assume 1536 dimensions (common for embeddings) if file supports it
-                    if (Math.floor(vectorDataSize / (1536 * 2)) > 1000) {
+                    if (detectedSize > 0) {
+                        // Calculate dimensions from file size and count
+                        detectedDims = Math.round(vectorDataSize / (detectedSize * 2));
+                        // Round to nearest common dimension
+                        const nearest = commonDims.reduce((prev, curr) => 
+                            Math.abs(curr - detectedDims) < Math.abs(prev - detectedDims) ? curr : prev
+                        );
+                        if (Math.abs(nearest - detectedDims) < detectedDims * 0.1) {
+                            detectedDims = nearest;
+                        }
+                    } else {
+                        // Last resort: assume 1536 dimensions
                         detectedDims = 1536;
                         detectedSize = Math.floor(vectorDataSize / (1536 * 2));
-                    } else {
-                        detectedDims = 768;
-                        detectedSize = Math.floor(vectorDataSize / (768 * 2));
                     }
                 }
+            }
+            
+            // Recalculate count based on actual dimensions if needed
+            const actualMaxVectors = Math.floor(vectorDataSize / (detectedDims * 2));
+            if (detectedSize > actualMaxVectors) {
+                detectedSize = actualMaxVectors;
             }
             
             // Read vectors
@@ -755,8 +1056,40 @@ CHANGELOG:
             ctx.putImageData(imageData, 0, 0);
             
             // Update info text
+            const labelInfo = classLabels && Object.keys(classLabels).length > 0 
+                ? ` Labels available for ${Object.keys(classLabels).length} vectors.` 
+                : '';
             document.querySelector('#heatmapSection .info-text').textContent = 
-                `Showing ${maxVectors} vectors × ${maxDims} dimensions. Value range: [${minVal.toFixed(3)}, ${maxVal.toFixed(3)}]`;
+                `Showing ${maxVectors} vectors × ${maxDims} dimensions. Value range: [${minVal.toFixed(3)}, ${maxVal.toFixed(3)}].${labelInfo}`;
+            
+            // Setup hover tooltip for labels
+            const tooltip = document.getElementById('heatmapTooltip');
+            const heatmapContainer = document.getElementById('heatmapContainer');
+            
+            // Store heatmap info for hover
+            heatmapCanvas.dataset.maxVectors = maxVectors;
+            heatmapCanvas.dataset.cellHeight = cellHeight;
+            
+            heatmapCanvas.onmousemove = (e) => {
+                const rect = heatmapCanvas.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const vectorIdx = Math.floor(y / cellHeight);
+                
+                if (vectorIdx >= 0 && vectorIdx < maxVectors) {
+                    const label = classLabels ? classLabels[vectorIdx + 1] : null; // +1 because embedding IDs are 1-indexed
+                    const labelText = label || 'No label';
+                    tooltip.innerHTML = `<strong>Vector ${vectorIdx + 1}</strong><br>Label: ${labelText}`;
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
+                    tooltip.style.top = (e.clientY - rect.top + 15) + 'px';
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            };
+            
+            heatmapCanvas.onmouseleave = () => {
+                tooltip.style.display = 'none';
+            };
         }
         
         // UMAP visualization
@@ -820,16 +1153,18 @@ CHANGELOG:
                 
                 let traces;
                 if (classLabels && Object.keys(classLabels).length > 0) {
-                    // Group by class
+                    // Group by class - note: embedding IDs are typically 1-indexed
                     const classGroups = {};
                     sampleIndices.forEach((origIdx, i) => {
-                        const cls = classLabels[origIdx] || 'Unknown';
+                        // Try both 0-indexed and 1-indexed lookup
+                        const cls = classLabels[origIdx + 1] || classLabels[origIdx] || 'Unknown';
                         if (!classGroups[cls]) {
-                            classGroups[cls] = { x: [], y: [], indices: [] };
+                            classGroups[cls] = { x: [], y: [], indices: [], labels: [] };
                         }
                         classGroups[cls].x.push(x[i]);
                         classGroups[cls].y.push(y[i]);
-                        classGroups[cls].indices.push(origIdx);
+                        classGroups[cls].indices.push(origIdx + 1); // Display as 1-indexed
+                        classGroups[cls].labels.push(cls);
                     });
                     
                     const colors = generateColors(Object.keys(classGroups).length);
@@ -839,7 +1174,9 @@ CHANGELOG:
                         mode: 'markers',
                         type: 'scatter',
                         name: cls,
-                        text: classGroups[cls].indices.map(i => `Index: ${i}<br>Class: ${cls}`),
+                        text: classGroups[cls].indices.map((embId, j) => 
+                            `Index: ${embId}<br>Label: ${classGroups[cls].labels[j]}`
+                        ),
                         hoverinfo: 'text',
                         marker: {
                             size: 6,
@@ -864,7 +1201,7 @@ CHANGELOG:
                         mode: 'markers',
                         type: 'scatter',
                         name: 'Vectors',
-                        text: sampleIndices.map(i => `Index: ${i}`),
+                        text: sampleIndices.map(i => `Index: ${i + 1}`), // Display as 1-indexed
                         hoverinfo: 'text',
                         marker: {
                             size: 6,
