@@ -61,7 +61,7 @@ USAGE:
 
 LIMITATIONS:
   - Assumes memory-mapped format with float16 vectors at offset 8
-  - Heatmap limited to 5000 vectors × 500 dimensions for performance
+  - Heatmap limited to 5000 vectors × 2000 dimensions for performance
   - UMAP limited to 3000 vectors (samples uniformly if larger)
   - Large files may be slow to process in browser
 
@@ -892,7 +892,7 @@ CHANGELOG:
             const vectors = [];
             let offset = headerSize;
             
-            const maxVectorsToRead = Math.min(detectedSize, 50000); // Limit for browser performance
+            const maxVectorsToRead = Math.min(detectedSize, 500000); // Limit for browser performance
             
             for (let i = 0; i < maxVectorsToRead && offset + detectedDims * 2 <= arrayBuffer.byteLength; i++) {
                 const vector = new Float32Array(detectedDims);
@@ -978,7 +978,7 @@ CHANGELOG:
             }
             
             const maxVectors = Math.min(parseInt(maxVectorsInput.value) || 500, indexData.vectors.length);
-            const maxDims = Math.min(500, indexData.dimensions); // Limit dimensions for display
+            const maxDims = Math.min(2000, indexData.dimensions); // Limit dimensions for display
             
             const cellWidth = Math.max(1, Math.min(3, Math.floor(800 / maxDims)));
             const cellHeight = Math.max(1, Math.min(3, Math.floor(600 / maxVectors)));
