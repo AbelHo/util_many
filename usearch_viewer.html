@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+================================================================================
+USearch Database Viewer - Programmer Reference
+================================================================================
+
+PURPOSE:
+  A standalone web utility to inspect USearch vector database files (.usearch/.index).
+  Displays summary information, embedding heatmaps, and UMAP 2D visualizations.
+
+KEY FEATURES:
+  1. Drag-and-drop file upload for .usearch or .index files
+  2. Binary file parsing of USearch memory-mapped format (float16 vectors)
+  3. Summary display: number of vectors, dimensions, file size, vector data size
+  4. Embedding heatmap visualization using Canvas API with Viridis colormap
+  5. UMAP 2D projection using actual embedding vectors
+  6. Optional class coloring from CSV upload for UMAP visualization
+  7. Client-side only - no server required
+
+FILE FORMAT (USearch v2.x Memory-Mapped):
+  The USearch index file stores vector embeddings in a memory-mapped format.
+  
+  Format structure:
+    * Header: 8 bytes (contains metadata)
+    * Vector data: float16 (IEEE half-precision, 2 bytes per value)
+    * Vectors stored contiguously: numVectors × dimensions × 2 bytes
+  
+  The viewer parses the binary format directly in JavaScript:
+  - Auto-detects dimensions from common embedding sizes (128-4096)
+  - Converts float16 to float32 for JavaScript processing
+  - Handles large files with vector sampling for performance
+
+DEPENDENCIES:
+  - UMAP-js (CDN): For dimensionality reduction
+  - Plotly.js (CDN): For interactive 2D scatter plots
+
+USAGE:
+  1. Drag/drop or select a .usearch or .index file
+  2. View the summary information (vectors, dimensions, file size)
+  3. (Optional) Upload a CSV with 'index,class' columns for class coloring
+  4. Click "Show Heatmap" to visualize embedding values
+  5. Click "Generate UMAP" for 2D projection of vectors
+
+LIMITATIONS:
+  - Assumes memory-mapped format with float16 vectors at offset 8
+  - Heatmap limited to 500 vectors × 500 dimensions for performance
+  - UMAP limited to 3000 vectors (samples uniformly if larger)
+  - Large files may be slow to process in browser
+
+CHANGELOG:
+  - v1.0 (2024-12-06): Initial implementation with graph-based visualization
+  - v1.1 (2024-12-06): Updated to parse actual float16 embeddings
+                       Heatmap shows embedding values with Viridis colormap
+                       UMAP uses actual vectors instead of graph approximation
+================================================================================
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A browser-based viewer for USearch vector database files. Upload .usearch or .index files to view summary information, embedding heatmaps, and UMAP 2D visualizations. Supports optional CSV class labels for colored scatter plots.">
+    <meta name="keywords" content="usearch, vector database, embedding viewer, HNSW, heatmap, UMAP, visualization, similarity search, machine learning, embeddings, ANN, approximate nearest neighbors">
+    <title>USearch Database Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/umap-js@1.4.0/lib/umap-js.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: #34495e;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 900px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        .drop-zone {
+            border: 3px dashed #3498db;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #ecf0f1;
+        }
+        .drop-zone:hover, .drop-zone.drag-over {
+            background: #d5e8f7;
+            border-color: #2980b9;
+        }
+        .drop-zone input {
+            display: none;
+        }
+        .drop-zone p {
+            margin: 10px 0;
+            color: #7f8c8d;
+        }
+        .drop-zone .icon {
+            font-size: 48px;
+            color: #3498db;
+        }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-box .value {
+            font-size: 28px;
+            font-weight: bold;
+            display: block;
+        }
+        .stat-box .label {
+            font-size: 12px;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-box:nth-child(2) {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .stat-box:nth-child(3) {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+        .stat-box:nth-child(4) {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+        .stat-box:nth-child(5) {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+        button:hover:not(:disabled) {
+            background: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4);
+        }
+        button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+        button.secondary {
+            background: #9b59b6;
+        }
+        button.secondary:hover:not(:disabled) {
+            background: #8e44ad;
+            box-shadow: 0 4px 12px rgba(155, 89, 182, 0.4);
+        }
+        .button-group {
+            margin-top: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        #heatmapContainer {
+            width: 100%;
+            overflow-x: auto;
+            margin-top: 20px;
+        }
+        #heatmapCanvas {
+            display: block;
+            margin: 0 auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #umapPlot {
+            width: 100%;
+            height: 600px;
+            margin-top: 20px;
+        }
+        .info-text {
+            color: #7f8c8d;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #ecf0f1;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 15px;
+            display: none;
+        }
+        .progress-bar .fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2ecc71);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .status {
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+        }
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+        .csv-upload {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        .csv-upload label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+        .file-info {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e8f5e9;
+            border-radius: 4px;
+            color: #2e7d32;
+            font-size: 13px;
+        }
+        .warning {
+            background: #fff3e0;
+            color: #e65100;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 13px;
+        }
+        .heatmap-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .heatmap-controls label {
+            font-size: 14px;
+            color: #555;
+        }
+        .heatmap-controls input[type="number"] {
+            width: 80px;
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .heatmap-colorbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+        .colorbar-gradient {
+            width: 200px;
+            height: 20px;
+            background: linear-gradient(90deg, #440154, #31688e, #35b779, #fde725);
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 USearch Database Viewer</h1>
+    
+    <div class="container">
+        <div class="card">
+            <h2>📁 Upload USearch Index</h2>
+            <div class="drop-zone" id="indexDropZone">
+                <div class="icon">📦</div>
+                <p><strong>Drag & drop your .usearch or .index file here</strong></p>
+                <p>or click to browse</p>
+                <input type="file" id="indexFile" accept=".usearch,.index">
+            </div>
+            <div class="progress-bar" id="loadProgress">
+                <div class="fill" id="progressFill"></div>
+            </div>
+            <div class="status" id="loadStatus"></div>
+        </div>
+        
+        <div class="card">
+            <h2>🏷️ Optional: Class Labels (CSV)</h2>
+            <div class="csv-upload">
+                <label>Upload CSV with index and class columns for UMAP coloring:</label>
+                <div class="drop-zone" id="csvDropZone" style="padding: 20px;">
+                    <p><strong>Drag & drop CSV or click to browse</strong></p>
+                    <p style="font-size: 12px;">Format: index,class (header required)</p>
+                    <input type="file" id="csvFile" accept=".csv">
+                </div>
+                <div id="csvInfo"></div>
+            </div>
+        </div>
+        
+        <div class="card full-width" id="summarySection" style="display: none;">
+            <h2>📊 Index Summary</h2>
+            <div class="summary-grid" id="summaryGrid"></div>
+            <div class="button-group">
+                <button id="showHeatmapBtn" disabled>🔥 Show Heatmap</button>
+                <button id="generateUmapBtn" class="secondary" disabled>🗺️ Generate UMAP</button>
+            </div>
+        </div>
+        
+        <div class="card full-width" id="heatmapSection" style="display: none;">
+            <h2>🔥 Embedding Heatmap</h2>
+            <div class="heatmap-controls">
+                <label>Max vectors to display: 
+                    <input type="number" id="maxVectors" value="500" min="10" max="5000">
+                </label>
+                <button id="refreshHeatmap">Refresh Heatmap</button>
+            </div>
+            <div id="heatmapContainer">
+                <canvas id="heatmapCanvas"></canvas>
+            </div>
+            <div class="heatmap-colorbar">
+                <span>Low</span>
+                <div class="colorbar-gradient"></div>
+                <span>High</span>
+            </div>
+            <p class="info-text">Heatmap shows embedding values (rows = vectors, columns = dimensions). Colors indicate value magnitude.</p>
+        </div>
+        
+        <div class="card full-width" id="umapSection" style="display: none;">
+            <h2>🗺️ UMAP 2D Projection</h2>
+            <div class="warning" id="umapWarning" style="display: none;">
+                ⚠️ Note: This visualization uses the graph structure for UMAP projection, not the original vector embeddings.
+            </div>
+            <div id="umapPlot"></div>
+            <div id="umapLegend" class="legend" style="display: none;"></div>
+            <p class="info-text">UMAP projection of the embedding vectors. Points represent vectors in reduced 2D space.</p>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let indexData = null;
+        let classLabels = null;
+        
+        // DOM elements
+        const indexDropZone = document.getElementById('indexDropZone');
+        const indexFileInput = document.getElementById('indexFile');
+        const csvDropZone = document.getElementById('csvDropZone');
+        const csvFileInput = document.getElementById('csvFile');
+        const loadProgress = document.getElementById('loadProgress');
+        const progressFill = document.getElementById('progressFill');
+        const loadStatus = document.getElementById('loadStatus');
+        const summarySection = document.getElementById('summarySection');
+        const summaryGrid = document.getElementById('summaryGrid');
+        const showHeatmapBtn = document.getElementById('showHeatmapBtn');
+        const generateUmapBtn = document.getElementById('generateUmapBtn');
+        const heatmapSection = document.getElementById('heatmapSection');
+        const heatmapCanvas = document.getElementById('heatmapCanvas');
+        const umapSection = document.getElementById('umapSection');
+        const umapPlot = document.getElementById('umapPlot');
+        const csvInfo = document.getElementById('csvInfo');
+        const maxVectorsInput = document.getElementById('maxVectors');
+        const refreshHeatmapBtn = document.getElementById('refreshHeatmap');
+        
+        // Setup drag and drop for index file
+        setupDropZone(indexDropZone, indexFileInput, handleIndexFile);
+        setupDropZone(csvDropZone, csvFileInput, handleCsvFile);
+        
+        function setupDropZone(dropZone, fileInput, handler) {
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('drag-over');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('drag-over');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('drag-over');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handler(files[0]);
+                }
+            });
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handler(e.target.files[0]);
+                }
+            });
+        }
+        
+        async function handleIndexFile(file) {
+            loadProgress.style.display = 'block';
+            progressFill.style.width = '0%';
+            loadStatus.textContent = 'Reading file...';
+            
+            try {
+                const arrayBuffer = await readFileAsArrayBuffer(file);
+                progressFill.style.width = '30%';
+                loadStatus.textContent = 'Parsing index structure...';
+                
+                indexData = parseUSearchIndex(arrayBuffer);
+                progressFill.style.width = '100%';
+                loadStatus.textContent = `Loaded: ${file.name} (${formatBytes(file.size)})`;
+                
+                displaySummary(indexData);
+                showHeatmapBtn.disabled = false;
+                generateUmapBtn.disabled = false;
+                summarySection.style.display = 'block';
+            } catch (error) {
+                loadStatus.textContent = `Error: ${error.message}`;
+                console.error('Error parsing index:', error);
+            }
+        }
+        
+        async function handleCsvFile(file) {
+            try {
+                const text = await readFileAsText(file);
+                classLabels = parseCsv(text);
+                const numClasses = new Set(Object.values(classLabels)).size;
+                csvInfo.innerHTML = `<div class="file-info">✓ Loaded ${Object.keys(classLabels).length} labels with ${numClasses} unique classes</div>`;
+            } catch (error) {
+                csvInfo.innerHTML = `<div class="warning">Error parsing CSV: ${error.message}</div>`;
+                console.error('Error parsing CSV:', error);
+            }
+        }
+        
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error('Failed to read file'));
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error('Failed to read file'));
+                reader.readAsText(file);
+            });
+        }
+        
+        function parseCsv(text) {
+            const lines = text.trim().split('\n');
+            const labels = {};
+            
+            // Skip header
+            for (let i = 1; i < lines.length; i++) {
+                const parts = lines[i].split(',');
+                if (parts.length >= 2) {
+                    const index = parseInt(parts[0].trim());
+                    const cls = parts[1].trim();
+                    if (!isNaN(index)) {
+                        labels[index] = cls;
+                    }
+                }
+            }
+            return labels;
+        }
+        
+        // Convert float16 bytes to float32
+        function float16ToFloat32(uint16) {
+            const sign = (uint16 >> 15) & 0x1;
+            const exponent = (uint16 >> 10) & 0x1f;
+            const mantissa = uint16 & 0x3ff;
+            
+            let value;
+            if (exponent === 0) {
+                if (mantissa === 0) {
+                    value = 0;
+                } else {
+                    // Subnormal
+                    value = Math.pow(2, -14) * (mantissa / 1024);
+                }
+            } else if (exponent === 31) {
+                value = mantissa === 0 ? Infinity : NaN;
+            } else {
+                value = Math.pow(2, exponent - 15) * (1 + mantissa / 1024);
+            }
+            
+            return sign ? -value : value;
+        }
+        
+        function parseUSearchIndex(arrayBuffer) {
+            const view = new DataView(arrayBuffer);
+            const uint8Array = new Uint8Array(arrayBuffer);
+            
+            // USearch memory-mapped format analysis:
+            // Bytes 0-1: Contains vector count info (as uint16 little-endian)
+            // Bytes 4-5: Contains dimension * 2 info (as uint16 little-endian)  
+            // Bytes 8+: Vector data in float16 format
+            
+            // Parse header
+            const size = view.getUint16(0, true);
+            const dimBytes = view.getUint16(4, true);
+            const dimensions = dimBytes > 0 ? Math.round(dimBytes / 2) : 0;
+            
+            // Validate and try to auto-detect parameters
+            let detectedSize = size;
+            let detectedDims = dimensions;
+            
+            // Calculate expected vector data size
+            const headerSize = 8; // First 8 bytes are header
+            const vectorDataSize = arrayBuffer.byteLength - headerSize;
+            
+            // If detected dimensions seem wrong, try to infer from file size
+            const commonDims = [128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096];
+            
+            if (detectedDims === 0 || detectedDims > 10000) {
+                // Try to find a dimension that makes sense
+                for (const dim of commonDims) {
+                    const possibleVectors = Math.floor(vectorDataSize / (dim * 2));
+                    if (possibleVectors > 0 && possibleVectors === detectedSize) {
+                        detectedDims = dim;
+                        break;
+                    }
+                }
+                
+                // If still not found, estimate based on file size
+                if (detectedDims === 0 || detectedDims > 10000) {
+                    // Assume 1536 dimensions (common for embeddings) if file supports it
+                    if (Math.floor(vectorDataSize / (1536 * 2)) > 1000) {
+                        detectedDims = 1536;
+                        detectedSize = Math.floor(vectorDataSize / (1536 * 2));
+                    } else {
+                        detectedDims = 768;
+                        detectedSize = Math.floor(vectorDataSize / (768 * 2));
+                    }
+                }
+            }
+            
+            // Read vectors
+            const vectors = [];
+            let offset = headerSize;
+            
+            const maxVectorsToRead = Math.min(detectedSize, 50000); // Limit for browser performance
+            
+            for (let i = 0; i < maxVectorsToRead && offset + detectedDims * 2 <= arrayBuffer.byteLength; i++) {
+                const vector = new Float32Array(detectedDims);
+                for (let j = 0; j < detectedDims; j++) {
+                    const uint16 = view.getUint16(offset + j * 2, true);
+                    vector[j] = float16ToFloat32(uint16);
+                }
+                vectors.push(vector);
+                offset += detectedDims * 2;
+            }
+            
+            // Build simple adjacency based on vector proximity (for visualization)
+            // Since we don't have actual graph structure, create approximate neighbors
+            const adjacencyList = new Map();
+            const connectivity = 16; // Typical HNSW connectivity
+            
+            // For large datasets, we'll compute neighbors on-demand for heatmap
+            // Here just initialize empty adjacency
+            for (let i = 0; i < vectors.length; i++) {
+                adjacencyList.set(i, []);
+            }
+            
+            return {
+                size: vectors.length,
+                dimensions: detectedDims,
+                connectivity: connectivity,
+                connectivity_base: connectivity * 2,
+                max_level: Math.floor(Math.log(vectors.length) / Math.log(connectivity)),
+                entry_slot: 0,
+                vectors: vectors,
+                adjacencyList: adjacencyList,
+                totalEdges: 0,
+                maxNeighbors: connectivity,
+                fileSize: arrayBuffer.byteLength
+            };
+        }
+        
+        function displaySummary(data) {
+            summaryGrid.innerHTML = `
+                <div class="stat-box">
+                    <span class="value">${data.size.toLocaleString()}</span>
+                    <span class="label">Vectors</span>
+                </div>
+                <div class="stat-box">
+                    <span class="value">${data.dimensions}</span>
+                    <span class="label">Dimensions</span>
+                </div>
+                <div class="stat-box">
+                    <span class="value">${data.connectivity}</span>
+                    <span class="label">Est. Connectivity</span>
+                </div>
+                <div class="stat-box">
+                    <span class="value">${formatBytes(data.fileSize)}</span>
+                    <span class="label">File Size</span>
+                </div>
+                <div class="stat-box">
+                    <span class="value">${(data.size * data.dimensions * 2 / 1024 / 1024).toFixed(1)} MB</span>
+                    <span class="label">Vector Data</span>
+                </div>
+            `;
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        }
+        
+        // Heatmap visualization
+        showHeatmapBtn.addEventListener('click', () => {
+            drawHeatmap();
+            heatmapSection.style.display = 'block';
+            heatmapSection.scrollIntoView({ behavior: 'smooth' });
+        });
+        
+        refreshHeatmapBtn.addEventListener('click', drawHeatmap);
+        
+        function drawHeatmap() {
+            if (!indexData || !indexData.vectors || indexData.vectors.length === 0) {
+                console.error('No vector data available');
+                return;
+            }
+            
+            const maxVectors = Math.min(parseInt(maxVectorsInput.value) || 500, indexData.vectors.length);
+            const maxDims = Math.min(500, indexData.dimensions); // Limit dimensions for display
+            
+            const cellWidth = Math.max(1, Math.min(3, Math.floor(800 / maxDims)));
+            const cellHeight = Math.max(1, Math.min(3, Math.floor(600 / maxVectors)));
+            const canvasWidth = maxDims * cellWidth;
+            const canvasHeight = maxVectors * cellHeight;
+            
+            heatmapCanvas.width = canvasWidth;
+            heatmapCanvas.height = canvasHeight;
+            
+            const ctx = heatmapCanvas.getContext('2d');
+            
+            // Find min/max values for normalization
+            let minVal = Infinity, maxVal = -Infinity;
+            for (let i = 0; i < maxVectors; i++) {
+                const vec = indexData.vectors[i];
+                for (let j = 0; j < maxDims; j++) {
+                    const val = vec[j];
+                    if (isFinite(val)) {
+                        minVal = Math.min(minVal, val);
+                        maxVal = Math.max(maxVal, val);
+                    }
+                }
+            }
+            
+            const range = maxVal - minVal || 1;
+            
+            // Create ImageData for faster rendering
+            const imageData = ctx.createImageData(canvasWidth, canvasHeight);
+            
+            for (let row = 0; row < maxVectors; row++) {
+                const vec = indexData.vectors[row];
+                for (let col = 0; col < maxDims; col++) {
+                    const value = vec[col];
+                    const normalized = (value - minVal) / range;
+                    
+                    // Viridis-like colormap
+                    let r, g, b;
+                    if (normalized < 0.25) {
+                        const t = normalized * 4;
+                        r = Math.floor(68 + t * (49 - 68));
+                        g = Math.floor(1 + t * (54 - 1));
+                        b = Math.floor(84 + t * (149 - 84));
+                    } else if (normalized < 0.5) {
+                        const t = (normalized - 0.25) * 4;
+                        r = Math.floor(49 + t * (53 - 49));
+                        g = Math.floor(54 + t * (183 - 54));
+                        b = Math.floor(149 + t * (121 - 149));
+                    } else if (normalized < 0.75) {
+                        const t = (normalized - 0.5) * 4;
+                        r = Math.floor(53 + t * (253 - 53));
+                        g = Math.floor(183 + t * (231 - 183));
+                        b = Math.floor(121 + t * (37 - 121));
+                    } else {
+                        const t = (normalized - 0.75) * 4;
+                        r = Math.floor(253 + t * (253 - 253));
+                        g = Math.floor(231 + t * (231 - 231));
+                        b = Math.floor(37 + t * (37 - 37));
+                    }
+                    
+                    // Fill cell
+                    for (let cy = 0; cy < cellHeight; cy++) {
+                        for (let cx = 0; cx < cellWidth; cx++) {
+                            const px = col * cellWidth + cx;
+                            const py = row * cellHeight + cy;
+                            const idx = (py * canvasWidth + px) * 4;
+                            imageData.data[idx] = r;
+                            imageData.data[idx + 1] = g;
+                            imageData.data[idx + 2] = b;
+                            imageData.data[idx + 3] = 255;
+                        }
+                    }
+                }
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+            
+            // Update info text
+            document.querySelector('#heatmapSection .info-text').textContent = 
+                `Showing ${maxVectors} vectors × ${maxDims} dimensions. Value range: [${minVal.toFixed(3)}, ${maxVal.toFixed(3)}]`;
+        }
+        
+        // UMAP visualization
+        generateUmapBtn.addEventListener('click', async () => {
+            await generateUmap();
+            umapSection.style.display = 'block';
+            umapSection.scrollIntoView({ behavior: 'smooth' });
+        });
+        
+        async function generateUmap() {
+            if (!indexData || !indexData.vectors || indexData.vectors.length === 0) {
+                console.error('No vector data available');
+                return;
+            }
+            
+            generateUmapBtn.disabled = true;
+            generateUmapBtn.textContent = '⏳ Preparing data...';
+            document.getElementById('umapWarning').style.display = 'none';
+            
+            await new Promise(resolve => setTimeout(resolve, 100)); // Allow UI update
+            
+            try {
+                // Use actual embedding vectors for UMAP
+                const maxVectors = Math.min(3000, indexData.vectors.length);
+                
+                // Sample vectors if we have too many
+                let sampleIndices;
+                if (indexData.vectors.length > maxVectors) {
+                    sampleIndices = [];
+                    const step = indexData.vectors.length / maxVectors;
+                    for (let i = 0; i < maxVectors; i++) {
+                        sampleIndices.push(Math.floor(i * step));
+                    }
+                } else {
+                    sampleIndices = Array.from({ length: indexData.vectors.length }, (_, i) => i);
+                }
+                
+                // Prepare feature vectors
+                const features = sampleIndices.map(i => Array.from(indexData.vectors[i]));
+                
+                generateUmapBtn.textContent = '⏳ Computing UMAP...';
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                // Run UMAP
+                const umap = new UMAP.UMAP({
+                    nComponents: 2,
+                    nNeighbors: Math.min(15, Math.floor(features.length / 10)),
+                    minDist: 0.1,
+                    spread: 1.0
+                });
+                
+                const embedding = await umap.fitAsync(features, (epochNumber) => {
+                    if (epochNumber % 50 === 0) {
+                        generateUmapBtn.textContent = `⏳ UMAP epoch ${epochNumber}...`;
+                    }
+                });
+                
+                // Prepare plot data
+                const x = embedding.map(e => e[0]);
+                const y = embedding.map(e => e[1]);
+                
+                let traces;
+                if (classLabels && Object.keys(classLabels).length > 0) {
+                    // Group by class
+                    const classGroups = {};
+                    sampleIndices.forEach((origIdx, i) => {
+                        const cls = classLabels[origIdx] || 'Unknown';
+                        if (!classGroups[cls]) {
+                            classGroups[cls] = { x: [], y: [], indices: [] };
+                        }
+                        classGroups[cls].x.push(x[i]);
+                        classGroups[cls].y.push(y[i]);
+                        classGroups[cls].indices.push(origIdx);
+                    });
+                    
+                    const colors = generateColors(Object.keys(classGroups).length);
+                    traces = Object.keys(classGroups).map((cls, idx) => ({
+                        x: classGroups[cls].x,
+                        y: classGroups[cls].y,
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: cls,
+                        text: classGroups[cls].indices.map(i => `Index: ${i}<br>Class: ${cls}`),
+                        hoverinfo: 'text',
+                        marker: {
+                            size: 6,
+                            color: colors[idx],
+                            opacity: 0.7
+                        }
+                    }));
+                    
+                    // Show legend
+                    const legendDiv = document.getElementById('umapLegend');
+                    legendDiv.style.display = 'flex';
+                    legendDiv.innerHTML = Object.keys(classGroups).map((cls, idx) => 
+                        `<div class="legend-item">
+                            <div class="legend-color" style="background: ${colors[idx]}"></div>
+                            <span>${cls} (${classGroups[cls].indices.length})</span>
+                        </div>`
+                    ).join('');
+                } else {
+                    traces = [{
+                        x: x,
+                        y: y,
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: 'Vectors',
+                        text: sampleIndices.map(i => `Index: ${i}`),
+                        hoverinfo: 'text',
+                        marker: {
+                            size: 6,
+                            color: sampleIndices,
+                            colorscale: 'Viridis',
+                            opacity: 0.7
+                        }
+                    }];
+                    document.getElementById('umapLegend').style.display = 'none';
+                }
+                
+                const layout = {
+                    title: `UMAP 2D Projection (${sampleIndices.length} vectors)`,
+                    xaxis: { title: 'UMAP 1' },
+                    yaxis: { title: 'UMAP 2' },
+                    hovermode: 'closest',
+                    showlegend: !!classLabels
+                };
+                
+                Plotly.newPlot(umapPlot, traces, layout, { responsive: true });
+                
+            } catch (error) {
+                console.error('UMAP error:', error);
+                umapPlot.innerHTML = `<div class="warning">Error generating UMAP: ${error.message}</div>`;
+            }
+            
+            generateUmapBtn.disabled = false;
+            generateUmapBtn.textContent = '🗺️ Generate UMAP';
+        }
+        
+        function generateColors(count) {
+            const colors = [];
+            for (let i = 0; i < count; i++) {
+                const hue = (i * 360 / count) % 360;
+                colors.push(`hsl(${hue}, 70%, 50%)`);
+            }
+            return colors;
+        }
+    </script>
+</body>
+</html>
