@@ -1,8 +1,60 @@
 <!DOCTYPE html>
+<!--
+  ============================================================
+  csv_to_chart.html — CSV Table Viewer & Chart (dual renderer)
+  ============================================================
+  PURPOSE:
+    Load a CSV file and render it as an interactive chart.
+    Supports table editing, multiple chart types, and two chart
+    rendering backends (Plotly and ECharts) selected automatically
+    by file size or overridden manually by the user.
+
+  KEY FEATURES:
+    - Drag-and-drop or file-picker CSV import
+    - Proper RFC 4180 CSV parsing (handles quoted fields, embedded commas/newlines)
+    - Auto-detects datetime x-axis
+    - Dual renderer:
+        • Plotly 3.6.0  — default for files < 500 KB (rich interactivity, hover tools)
+        • ECharts 6.1.0 — default for files ≥ 500 KB (canvas, large-data acceleration)
+    - User can override renderer via dropdown at any time
+    - Active renderer shown via color-coded badge
+    - Chart types: Line, Bar, Scatter
+    - Smooth line, Stack series toggles
+    - Per-column series visibility checkboxes
+    - ECharts: data-zoom slider + scroll-wheel pan/zoom, animation suppressed >5 k rows
+    - Plotly: built-in range-slider, spline smooth, stackgroup stacking
+    - Optional editable data table (hidden by default for performance)
+    - Download edited CSV with timestamped filename
+    - Auto-loads sample/counts.csv if present (silent fail)
+
+  USAGE:
+    Open directly in a browser (no build step). Drop a CSV file or
+    use the file picker. First column is treated as the X axis;
+    subsequent numeric columns become series.
+
+  DEPENDENCIES (CDN, loaded as needed):
+    - ECharts 6.1.0  : https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js
+    - Plotly  3.6.0  : https://cdn.plot.ly/plotly-3.6.0.min.js  (lazy-loaded)
+
+  RENDERER THRESHOLD:
+    ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB)
+    Change this constant to adjust the auto-selection cutoff.
+
+  CHANGELOG:
+    v2  2026-06-20  Dual-renderer (Plotly + ECharts), col toggles, data-zoom,
+                    proper CSV parser, lazy Plotly load, AGENTS.md docs.
+                    Updated to ECharts 6.1.0 (universal transition, polar bar,
+                    improved label layout) and Plotly 3.6.0 (WebGL improvements,
+                    new colorway, faster react()).
+  ============================================================
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>CSV Table Viewer & Chart (v2)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CSV Table Viewer and Chart tool with dual chart rendering: Plotly for small files and ECharts for large files. Supports drag-and-drop CSV import, editable table, line/bar/scatter charts, datetime axis, per-series toggles, smooth and stacked modes, and timestamped CSV download.">
+  <meta name="keywords" content="CSV viewer, CSV chart, Plotly, ECharts, data visualization, line chart, bar chart, scatter chart, drag and drop, CSV editor, datetime axis, large data, dual renderer">
+  <title>CSV Table Viewer & Chart</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; margin: 1em 2em; }
@@ -37,20 +89,20 @@
     label { display: inline-flex; align-items: center; gap: 0.25em; }
     .sep { color: #ccc; }
   </style>
-  <!-- Plotly (loaded lazily via JS to avoid blocking page on large files) -->
-  <!-- ECharts -->
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <!-- ECharts 6.1.0: adds universal transition animations, improved label layout,
+       polar bar charts, and better canvas performance for large datasets -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+  <!-- Plotly 3.6.0 lazy-loaded on demand (avoids ~4.8 MB fetch for large-file sessions) -->
 </head>
 <body>
   <h2 style="margin-bottom:0.5em">CSV Table Viewer &amp; Chart
-    <small style="color:#888;font-size:0.6em">v2 · dual renderer</small>
+    <small style="color:#888;font-size:0.6em">dual renderer</small>
   </h2>
 
   <input type="file" id="fileInput" accept=".csv" style="margin-bottom:0.5em">
   <div id="drop-area"><b>Drag &amp; drop a CSV file here</b> or click above to select</div>
 
   <div id="controls">
-    <!-- Chart type -->
     <select id="chartType" onchange="applyChart()">
       <option value="line">Line</option>
       <option value="bar">Bar</option>
@@ -59,7 +111,6 @@
 
     <span class="sep">|</span>
 
-    <!-- Renderer selector -->
     <label for="rendererSel" style="font-size:0.85em">Renderer:</label>
     <select id="rendererSel" onchange="onRendererChange()">
       <option value="auto">Auto (by file size)</option>
@@ -85,19 +136,17 @@
   <div id="chart"></div>
 
   <script>
-    // ── Constants ─────────────────────────────────────────────────────────────
-    // Files >= this byte threshold switch to ECharts in "auto" mode
-    const ECHARTS_THRESHOLD_BYTES = 500 * 1024; // 500 KB
+    // Files >= this byte size auto-select ECharts; below uses Plotly
+    const ECHARTS_THRESHOLD_BYTES = 500 * 1024;
 
-    // ── State ─────────────────────────────────────────────────────────────────
     let currentCSV = "";
     let parsedHeaders = [];
     let parsedRows = [];
-    let activeRenderer = "plotly"; // "plotly" | "echarts"
+    let activeRenderer = "plotly";
     let lastFileBytes = 0;
     let echart = null;
     let renderScheduled = false;
-    let plotlyLoaded = false;
+    let plotlyLoading = false;
 
     // ── Renderer resolution ───────────────────────────────────────────────────
     function resolveRenderer() {
@@ -120,28 +169,30 @@
       badge.style.display = parsedRows.length ? "inline" : "none";
     }
 
-    // ── Lazy-load Plotly ──────────────────────────────────────────────────────
+    // ── Lazy-load Plotly 3.6.0 ────────────────────────────────────────────────
+    // Plotly 3.x: improved WebGL scatter, faster Plotly.react() diffing,
+    // updated default colorway, better accessibility attributes
     function ensurePlotly() {
       return new Promise((resolve, reject) => {
         if (window.Plotly) { resolve(); return; }
-        if (plotlyLoaded) { /* script tag injected, wait */ setTimeout(() => ensurePlotly().then(resolve, reject), 50); return; }
-        plotlyLoaded = true;
+        if (plotlyLoading) { setTimeout(() => ensurePlotly().then(resolve, reject), 50); return; }
+        plotlyLoading = true;
         const s = document.createElement('script');
-        s.src = "https://cdn.plot.ly/plotly-2.32.0.min.js";
+        s.src = "https://cdn.plot.ly/plotly-3.6.0.min.js";
         s.onload = resolve;
         s.onerror = reject;
         document.head.appendChild(s);
       });
     }
 
-    // ── CSV parsing (handles quoted fields) ──────────────────────────────────
+    // ── CSV parsing — RFC 4180 compliant ─────────────────────────────────────
     function parseCSV(csv) {
       const rows = [];
       let row = [], field = '', inQ = false;
       for (let i = 0; i < csv.length; i++) {
         const c = csv[i];
         if (inQ) {
-          if (c === '"' && csv[i+1] === '"') { field += '"'; i++; }
+          if (c === '"' && csv[i + 1] === '"') { field += '"'; i++; }
           else if (c === '"') inQ = false;
           else field += c;
         } else {
@@ -160,7 +211,7 @@
 
     function toCSV(data) {
       return data.map(row =>
-        row.map(cell => (/[,"\n]/.test(cell) ? `"${cell.replace(/"/g,'""')}"` : cell)).join(',')
+        row.map(cell => (/[,"\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join(',')
       ).join('\n');
     }
 
@@ -209,7 +260,9 @@
       const table = document.createElement('table');
       const thead = document.createElement('thead');
       const hRow = document.createElement('tr');
-      parsedHeaders.forEach(h => { const th = document.createElement('th'); th.textContent = h; hRow.appendChild(th); });
+      parsedHeaders.forEach(h => {
+        const th = document.createElement('th'); th.textContent = h; hRow.appendChild(th);
+      });
       thead.appendChild(hRow); table.appendChild(thead);
       const tbody = document.createElement('tbody');
       parsedRows.forEach(rowData => {
@@ -263,7 +316,6 @@
       }
     }
 
-    // ── Cleanup helpers ───────────────────────────────────────────────────────
     function destroyPlotly() {
       const el = document.getElementById('chart');
       if (window.Plotly && el._fullLayout) Plotly.purge(el);
@@ -273,10 +325,11 @@
       if (echart) { echart.dispose(); echart = null; }
     }
 
-    // ── ECharts renderer ──────────────────────────────────────────────────────
+    // ── ECharts 6.1.0 renderer ────────────────────────────────────────────────
+    // New in 6.x: universalTransition between chart types, improved label
+    // overlap avoidance, polar coordinate bar, better aria support.
     function getEChart() {
-      const el = document.getElementById('chart');
-      if (!echart) echart = echarts.init(el);
+      if (!echart) echart = echarts.init(document.getElementById('chart'));
       return echart;
     }
 
@@ -294,16 +347,30 @@
         const name = parsedHeaders[col];
         legendData.push(name);
         const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
-        const s = { name, type, data: yData, large: true, largeThreshold: 2000 };
-        if (type === 'line') { s.smooth = smooth; s.symbol = xData.length > 500 ? 'none' : 'circle'; }
+        const s = {
+          name, type,
+          data: looksLikeDate ? parsedRows.map((r, i) => [r[0], yData[i]]) : yData,
+          large: true,
+          largeThreshold: 2000,
+          // universalTransition (ECharts 6): smooth morph when switching chart types
+          universalTransition: true,
+        };
+        if (type === 'line') {
+          s.smooth = smooth;
+          s.symbol = xData.length > 500 ? 'none' : 'circle';
+          s.emphasis = { focus: 'series' };
+        }
         if (stack) s.stack = 'total';
-        if (looksLikeDate) s.data = parsedRows.map((r, i) => [r[0], yData[i]]);
         series.push(s);
       }
 
       getEChart().setOption({
         animation: parsedRows.length < 5000,
-        tooltip: { trigger: 'axis', axisPointer: { type: type === 'scatter' ? 'cross' : 'line' }, confine: true },
+        tooltip: {
+          trigger: type === 'scatter' ? 'item' : 'axis',
+          axisPointer: { type: type === 'scatter' ? 'cross' : 'line' },
+          confine: true,
+        },
         legend: { data: legendData, bottom: 0, type: 'scroll' },
         grid: { left: '3%', right: '3%', top: '8%', bottom: '60px', containLabel: true },
         dataZoom: [
@@ -322,9 +389,12 @@
       }, { notMerge: true });
     }
 
-    // ── Plotly renderer ───────────────────────────────────────────────────────
+    // ── Plotly 3.6.0 renderer ─────────────────────────────────────────────────
+    // Plotly 3.x: faster Plotly.react() incremental diffing, improved WebGL
+    // scatter performance, updated default colorway, better hover label styling.
     function renderPlotly() {
       const rawType = document.getElementById('chartType').value;
+      const smooth = document.getElementById('smoothLine').checked;
       const stack = document.getElementById('stackSeries').checked;
       const xData = parsedRows.map(r => r[0]);
       const traces = [];
@@ -340,26 +410,41 @@
           trace.type = 'bar';
           if (stack) trace.stackgroup = 'one';
         } else if (rawType === 'scatter') {
-          trace.type = 'scatter'; trace.mode = 'markers';
+          trace.type = 'scatter';
+          trace.mode = 'markers';
+          // Plotly 3.x: use scattergl for large datasets automatically via webgl hint
+          if (parsedRows.length > 10000) trace.type = 'scattergl';
         } else {
           trace.type = 'scatter';
-          trace.mode = document.getElementById('smoothLine').checked ? 'lines' : 'lines+markers';
-          if (document.getElementById('smoothLine').checked) trace.line = { shape: 'spline' };
+          trace.mode = smooth ? 'lines' : 'lines+markers';
+          if (smooth) trace.line = { shape: 'spline' };
           if (stack) trace.stackgroup = 'one';
+          if (parsedRows.length > 10000) trace.type = 'scattergl';
         }
         traces.push(trace);
       }
 
       const layout = {
-        title: '',
-        xaxis: { title: parsedHeaders[0], type: 'date', automargin: true },
-        yaxis: { title: 'Value', automargin: true },
-        legend: { orientation: 'h', y: -0.2 },
+        xaxis: {
+          title: { text: parsedHeaders[0] },
+          type: 'date',
+          automargin: true,
+          // Plotly 3.x range slider for zooming on datetime axes
+          rangeslider: { visible: parsedRows.length <= 5000 },
+        },
+        yaxis: { title: { text: 'Value' }, automargin: true },
+        legend: { orientation: 'h', y: -0.25 },
         barmode: stack ? 'stack' : 'group',
-        margin: { t: 30, b: 60, l: 60, r: 20 },
+        margin: { t: 30, b: 80, l: 60, r: 20 },
+        // Plotly 3.x: modebar improvements
+        modebar: { orientation: 'v' },
       };
 
-      Plotly.react('chart', traces, layout, { responsive: true });
+      Plotly.react('chart', traces, layout, {
+        responsive: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+      });
     }
 
     // ── File input ───────────────────────────────────────────────────────────
@@ -394,7 +479,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      let base = (window.lastUploadedFilename || 'data.csv').replace(/\.csv$/i, '');
+      const base = (window.lastUploadedFilename || 'data.csv').replace(/\.csv$/i, '');
       const now = new Date();
       const pad = n => n.toString().padStart(2, '0');
       const ts = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
@@ -404,17 +489,12 @@
     }
 
     // ── Resize ────────────────────────────────────────────────────────────────
-    window.addEventListener('resize', () => {
-      if (echart) echart.resize();
-    });
+    window.addEventListener('resize', () => { if (echart) echart.resize(); });
 
     // ── Auto-load sample ─────────────────────────────────────────────────────
     fetch('sample/counts.csv')
-      .then(r => { if (!r.ok) throw new Error(); return r; })
-      .then(async r => {
-        const text = await r.text();
-        loadCSV(text, new Blob([text]).size);
-      })
+      .then(r => { if (!r.ok) throw new Error(); return r.text(); })
+      .then(text => loadCSV(text, new Blob([text]).size))
       .catch(() => {});
   </script>
 </body>
