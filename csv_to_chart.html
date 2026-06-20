@@ -2,225 +2,420 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>CSV Table Viewer & Editor</title>
+  <title>CSV Table Viewer & Chart (v2)</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2em; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
-    th, td { border: 1px solid #ccc; padding: 0.5em; text-align: left; }
-    th { background: #f0f0f0; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 1em 2em; }
+    #drop-area {
+      border: 2px dashed #aaa; border-radius: 8px; padding: 1.2em;
+      text-align: center; color: #888; margin-bottom: 1em; background: #f9f9f9;
+      cursor: pointer; transition: background 0.2s, color 0.2s;
+    }
+    #drop-area.drag-over { background: #e0f7fa; color: #00796b; border-color: #00796b; }
+    #controls { display: flex; gap: 0.6em; align-items: center; flex-wrap: wrap; margin-bottom: 0.8em; }
+    button { padding: 0.3em 0.9em; cursor: pointer; }
+    select { padding: 0.3em; }
+    #table-wrapper {
+      max-height: 300px; overflow: auto; border: 1px solid #ddd;
+      border-radius: 4px; margin-bottom: 1em; display: none;
+    }
+    table { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+    th, td { border: 1px solid #ccc; padding: 0.3em 0.6em; white-space: nowrap; }
+    th { background: #f0f0f0; position: sticky; top: 0; z-index: 1; }
     td[contenteditable="true"] { background: #fffbe7; }
-    button { margin-right: 1em; }
-    #fileInput { margin-bottom: 1em; }
-    #plot-controls { margin-top: 2em; margin-bottom: 1em; }
-    #plot-container { margin-top: 1em; }
-    #chartType { margin-right: 1em; }
+    #chart { width: 100%; height: 480px; }
+    #status { font-size: 0.8em; color: #555; }
+    #renderer-badge {
+      font-size: 0.75em; padding: 0.15em 0.5em; border-radius: 3px;
+      font-weight: bold; display: none;
+    }
+    #renderer-badge.plotly  { background: #e8f0fe; color: #1a73e8; }
+    #renderer-badge.echarts { background: #e6f4ea; color: #1e8e3e; }
+    #col-toggles { display: flex; gap: 0.5em; flex-wrap: wrap; margin-bottom: 0.5em; font-size: 0.85em; }
+    #col-toggles label { cursor: pointer; user-select: none; }
+    #col-toggles input { cursor: pointer; }
+    label { display: inline-flex; align-items: center; gap: 0.25em; }
+    .sep { color: #ccc; }
   </style>
-  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <!-- Plotly (loaded lazily via JS to avoid blocking page on large files) -->
+  <!-- ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 <body>
-  <h2>CSV Table Viewer & Editor</h2>
-  <input type="file" id="fileInput" accept=".csv">
-  <div id="drop-area" style="border: 2px dashed #aaa; border-radius: 8px; padding: 1.5em; text-align: center; color: #888; margin-bottom: 1em; background: #f9f9f9;">
-    <b>Drag & drop a CSV file here</b> or click above to select
-  </div>
-  <button onclick="downloadCSV()">Download CSV</button>
-  <script>
-    // Drag and drop support
-    window.addEventListener('DOMContentLoaded', function() {
-      const dropArea = document.getElementById('drop-area');
-      dropArea.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        dropArea.style.background = '#e0f7fa';
-        dropArea.style.color = '#00796b';
-      });
-      dropArea.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        dropArea.style.background = '#f9f9f9';
-        dropArea.style.color = '#888';
-      });
-      dropArea.addEventListener('drop', function(e) {
-        e.preventDefault();
-        dropArea.style.background = '#f9f9f9';
-        dropArea.style.color = '#888';
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-          const file = files[0];
-          if (file.name.endsWith('.csv')) {
-            window.lastUploadedFilename = file.name;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-              currentCSV = e.target.result;
-              renderTable(currentCSV);
-            };
-            reader.readAsText(file);
-          } else {
-            alert('Please drop a .csv file.');
-          }
-        }
-      });
-    });
-  </script>
-  <div id="table-container">Loading...</div>
-  <div id="plot-controls">
-    <select id="chartType" onchange="refreshPlot()">
-      <option value="lines+markers">Line Chart</option>
-      <option value="bar">Bar Chart</option>
+  <h2 style="margin-bottom:0.5em">CSV Table Viewer &amp; Chart
+    <small style="color:#888;font-size:0.6em">v2 · dual renderer</small>
+  </h2>
+
+  <input type="file" id="fileInput" accept=".csv" style="margin-bottom:0.5em">
+  <div id="drop-area"><b>Drag &amp; drop a CSV file here</b> or click above to select</div>
+
+  <div id="controls">
+    <!-- Chart type -->
+    <select id="chartType" onchange="applyChart()">
+      <option value="line">Line</option>
+      <option value="bar">Bar</option>
+      <option value="scatter">Scatter</option>
     </select>
-    <button onclick="refreshPlot()">Refresh Plot</button>
+
+    <span class="sep">|</span>
+
+    <!-- Renderer selector -->
+    <label for="rendererSel" style="font-size:0.85em">Renderer:</label>
+    <select id="rendererSel" onchange="onRendererChange()">
+      <option value="auto">Auto (by file size)</option>
+      <option value="plotly">Plotly</option>
+      <option value="echarts">ECharts</option>
+    </select>
+    <span id="renderer-badge"></span>
+
+    <span class="sep">|</span>
+
+    <label><input type="checkbox" id="smoothLine" onchange="applyChart()"> Smooth</label>
+    <label><input type="checkbox" id="stackSeries" onchange="applyChart()"> Stack</label>
+    <label><input type="checkbox" id="showTable" onchange="toggleTable()"> Table</label>
+
+    <span class="sep">|</span>
+
+    <button onclick="downloadCSV()">Download CSV</button>
+    <span id="status"></span>
   </div>
-  <div id="plot-container"></div>
+
+  <div id="col-toggles"></div>
+  <div id="table-wrapper"><div id="table-container"></div></div>
+  <div id="chart"></div>
 
   <script>
-    let currentCSV = "";
+    // ── Constants ─────────────────────────────────────────────────────────────
+    // Files >= this byte threshold switch to ECharts in "auto" mode
+    const ECHARTS_THRESHOLD_BYTES = 500 * 1024; // 500 KB
 
+    // ── State ─────────────────────────────────────────────────────────────────
+    let currentCSV = "";
+    let parsedHeaders = [];
+    let parsedRows = [];
+    let activeRenderer = "plotly"; // "plotly" | "echarts"
+    let lastFileBytes = 0;
+    let echart = null;
+    let renderScheduled = false;
+    let plotlyLoaded = false;
+
+    // ── Renderer resolution ───────────────────────────────────────────────────
+    function resolveRenderer() {
+      const sel = document.getElementById('rendererSel').value;
+      if (sel !== "auto") return sel;
+      return lastFileBytes >= ECHARTS_THRESHOLD_BYTES ? "echarts" : "plotly";
+    }
+
+    function onRendererChange() {
+      if (!parsedRows.length) return;
+      activeRenderer = resolveRenderer();
+      updateBadge();
+      applyChart();
+    }
+
+    function updateBadge() {
+      const badge = document.getElementById('renderer-badge');
+      badge.textContent = activeRenderer === "plotly" ? "Plotly" : "ECharts";
+      badge.className = activeRenderer === "plotly" ? "plotly" : "echarts";
+      badge.style.display = parsedRows.length ? "inline" : "none";
+    }
+
+    // ── Lazy-load Plotly ──────────────────────────────────────────────────────
+    function ensurePlotly() {
+      return new Promise((resolve, reject) => {
+        if (window.Plotly) { resolve(); return; }
+        if (plotlyLoaded) { /* script tag injected, wait */ setTimeout(() => ensurePlotly().then(resolve, reject), 50); return; }
+        plotlyLoaded = true;
+        const s = document.createElement('script');
+        s.src = "https://cdn.plot.ly/plotly-2.32.0.min.js";
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    // ── CSV parsing (handles quoted fields) ──────────────────────────────────
     function parseCSV(csv) {
-      return csv.trim().split('\n').map(row => row.split(','));
+      const rows = [];
+      let row = [], field = '', inQ = false;
+      for (let i = 0; i < csv.length; i++) {
+        const c = csv[i];
+        if (inQ) {
+          if (c === '"' && csv[i+1] === '"') { field += '"'; i++; }
+          else if (c === '"') inQ = false;
+          else field += c;
+        } else {
+          if (c === '"') inQ = true;
+          else if (c === ',') { row.push(field); field = ''; }
+          else if (c === '\n') {
+            row.push(field); field = '';
+            if (row.some(Boolean)) rows.push(row);
+            row = [];
+          } else if (c !== '\r') field += c;
+        }
+      }
+      if (field || row.length) { row.push(field); rows.push(row); }
+      return rows;
     }
 
     function toCSV(data) {
-      return data.map(row => row.map(cell => cell.replace(/"/g, '""')).join(',')).join('\n');
+      return data.map(row =>
+        row.map(cell => (/[,"\n]/.test(cell) ? `"${cell.replace(/"/g,'""')}"` : cell)).join(',')
+      ).join('\n');
     }
 
-    function renderTable(csv) {
+    // ── Load & process CSV ───────────────────────────────────────────────────
+    function loadCSV(csv, fileBytes) {
+      currentCSV = csv;
+      lastFileBytes = fileBytes || new Blob([csv]).size;
       const data = parseCSV(csv);
-      const table = document.createElement('table');
-      // Header
-      const thead = document.createElement('thead');
-      const headerRow = document.createElement('tr');
-      data[0].forEach(header => {
-        const th = document.createElement('th');
-        th.textContent = header;
-        headerRow.appendChild(th);
-      });
-      thead.appendChild(headerRow);
-      table.appendChild(thead);
+      if (data.length < 2) return;
+      parsedHeaders = data[0];
+      parsedRows = data.slice(1);
+      document.getElementById('status').textContent =
+        `${parsedRows.length.toLocaleString()} rows × ${parsedHeaders.length} cols` +
+        ` · ${(lastFileBytes / 1024).toFixed(0)} KB`;
+      hiddenCols.clear();
+      buildColToggles();
+      activeRenderer = resolveRenderer();
+      updateBadge();
+      if (document.getElementById('showTable').checked) renderTable();
+      scheduleChart();
+    }
 
-      // Body
+    // ── Column toggles ───────────────────────────────────────────────────────
+    const hiddenCols = new Set();
+    function buildColToggles() {
+      const div = document.getElementById('col-toggles');
+      div.innerHTML = '';
+      parsedHeaders.slice(1).forEach((h, i) => {
+        const col = i + 1;
+        const lbl = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = true;
+        cb.addEventListener('change', () => {
+          if (cb.checked) hiddenCols.delete(col); else hiddenCols.add(col);
+          scheduleChart();
+        });
+        lbl.appendChild(cb); lbl.append(' ' + h);
+        div.appendChild(lbl);
+      });
+    }
+
+    // ── Table ────────────────────────────────────────────────────────────────
+    function renderTable() {
+      const container = document.getElementById('table-container');
+      const frag = document.createDocumentFragment();
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      const hRow = document.createElement('tr');
+      parsedHeaders.forEach(h => { const th = document.createElement('th'); th.textContent = h; hRow.appendChild(th); });
+      thead.appendChild(hRow); table.appendChild(thead);
       const tbody = document.createElement('tbody');
-      for (let i = 1; i < data.length; i++) {
+      parsedRows.forEach(rowData => {
         const tr = document.createElement('tr');
-        data[i].forEach((cell, j) => {
+        rowData.forEach(cell => {
           const td = document.createElement('td');
-          td.contentEditable = "true";
-          td.textContent = cell;
-          td.addEventListener('input', () => {
-            updateCSVFromTable();
-            renderPlots();
-          });
+          td.contentEditable = "true"; td.textContent = cell;
+          td.addEventListener('input', onCellEdit);
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
+      });
+      table.appendChild(tbody); frag.appendChild(table);
+      container.innerHTML = ''; container.appendChild(frag);
+    }
+
+    function onCellEdit() { updateParsedFromTable(); scheduleChart(); }
+
+    function updateParsedFromTable() {
+      const rows = Array.from(document.querySelectorAll('#table-container table tr'));
+      if (!rows.length) return;
+      parsedHeaders = Array.from(rows[0].cells).map(c => c.textContent);
+      parsedRows = rows.slice(1).map(r => Array.from(r.cells).map(c => c.textContent));
+      currentCSV = toCSV([parsedHeaders, ...parsedRows]);
+    }
+
+    function toggleTable() {
+      const wrapper = document.getElementById('table-wrapper');
+      if (document.getElementById('showTable').checked) {
+        wrapper.style.display = 'block'; renderTable();
+      } else {
+        wrapper.style.display = 'none';
       }
-      table.appendChild(tbody);
-
-      const container = document.getElementById('table-container');
-      container.innerHTML = '';
-      container.appendChild(table);
-
-      // Render plots after table is rendered
-      renderPlots();
     }
 
-    function updateCSVFromTable() {
-      const table = document.querySelector('table');
-      const rows = Array.from(table.rows);
-      const data = rows.map(row =>
-        Array.from(row.cells).map(cell => cell.textContent)
-      );
-      currentCSV = toCSV(data);
+    // ── Chart dispatch ────────────────────────────────────────────────────────
+    function scheduleChart() {
+      if (renderScheduled) return;
+      renderScheduled = true;
+      requestAnimationFrame(() => { renderScheduled = false; applyChart(); });
     }
 
+    function applyChart() {
+      if (!parsedRows.length) return;
+      if (activeRenderer === "echarts") {
+        destroyPlotly();
+        renderECharts();
+      } else {
+        destroyECharts();
+        ensurePlotly().then(renderPlotly);
+      }
+    }
+
+    // ── Cleanup helpers ───────────────────────────────────────────────────────
+    function destroyPlotly() {
+      const el = document.getElementById('chart');
+      if (window.Plotly && el._fullLayout) Plotly.purge(el);
+    }
+
+    function destroyECharts() {
+      if (echart) { echart.dispose(); echart = null; }
+    }
+
+    // ── ECharts renderer ──────────────────────────────────────────────────────
+    function getEChart() {
+      const el = document.getElementById('chart');
+      if (!echart) echart = echarts.init(el);
+      return echart;
+    }
+
+    function renderECharts() {
+      const type = document.getElementById('chartType').value;
+      const smooth = document.getElementById('smoothLine').checked;
+      const stack = document.getElementById('stackSeries').checked;
+      const xData = parsedRows.map(r => r[0]);
+      const looksLikeDate = xData.length > 0 && !isNaN(Date.parse(xData[0]));
+      const series = [];
+      const legendData = [];
+
+      for (let col = 1; col < parsedHeaders.length; col++) {
+        if (hiddenCols.has(col)) continue;
+        const name = parsedHeaders[col];
+        legendData.push(name);
+        const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
+        const s = { name, type, data: yData, large: true, largeThreshold: 2000 };
+        if (type === 'line') { s.smooth = smooth; s.symbol = xData.length > 500 ? 'none' : 'circle'; }
+        if (stack) s.stack = 'total';
+        if (looksLikeDate) s.data = parsedRows.map((r, i) => [r[0], yData[i]]);
+        series.push(s);
+      }
+
+      getEChart().setOption({
+        animation: parsedRows.length < 5000,
+        tooltip: { trigger: 'axis', axisPointer: { type: type === 'scatter' ? 'cross' : 'line' }, confine: true },
+        legend: { data: legendData, bottom: 0, type: 'scroll' },
+        grid: { left: '3%', right: '3%', top: '8%', bottom: '60px', containLabel: true },
+        dataZoom: [
+          { type: 'inside', xAxisIndex: 0, filterMode: 'filter' },
+          { type: 'slider', xAxisIndex: 0, bottom: 30, height: 20 },
+        ],
+        xAxis: {
+          type: looksLikeDate ? 'time' : 'category',
+          data: looksLikeDate ? undefined : xData,
+          name: parsedHeaders[0], nameLocation: 'middle', nameGap: 28,
+          boundaryGap: type === 'bar',
+          axisLabel: { rotate: xData.length > 20 ? 30 : 0, hideOverlap: true },
+        },
+        yAxis: { type: 'value', nameLocation: 'middle', nameGap: 40 },
+        series,
+      }, { notMerge: true });
+    }
+
+    // ── Plotly renderer ───────────────────────────────────────────────────────
+    function renderPlotly() {
+      const rawType = document.getElementById('chartType').value;
+      const stack = document.getElementById('stackSeries').checked;
+      const xData = parsedRows.map(r => r[0]);
+      const traces = [];
+
+      for (let col = 1; col < parsedHeaders.length; col++) {
+        if (hiddenCols.has(col)) continue;
+        const name = parsedHeaders[col];
+        const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
+        if (yData.every(v => v === null)) continue;
+
+        const trace = { x: xData, y: yData, name };
+        if (rawType === 'bar') {
+          trace.type = 'bar';
+          if (stack) trace.stackgroup = 'one';
+        } else if (rawType === 'scatter') {
+          trace.type = 'scatter'; trace.mode = 'markers';
+        } else {
+          trace.type = 'scatter';
+          trace.mode = document.getElementById('smoothLine').checked ? 'lines' : 'lines+markers';
+          if (document.getElementById('smoothLine').checked) trace.line = { shape: 'spline' };
+          if (stack) trace.stackgroup = 'one';
+        }
+        traces.push(trace);
+      }
+
+      const layout = {
+        title: '',
+        xaxis: { title: parsedHeaders[0], type: 'date', automargin: true },
+        yaxis: { title: 'Value', automargin: true },
+        legend: { orientation: 'h', y: -0.2 },
+        barmode: stack ? 'stack' : 'group',
+        margin: { t: 30, b: 60, l: 60, r: 20 },
+      };
+
+      Plotly.react('chart', traces, layout, { responsive: true });
+    }
+
+    // ── File input ───────────────────────────────────────────────────────────
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      window.lastUploadedFilename = file.name;
+      readFile(file);
+    });
+
+    const dropArea = document.getElementById('drop-area');
+    dropArea.addEventListener('dragover', e => { e.preventDefault(); dropArea.classList.add('drag-over'); });
+    dropArea.addEventListener('dragleave', () => dropArea.classList.remove('drag-over'));
+    dropArea.addEventListener('drop', e => {
+      e.preventDefault(); dropArea.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.endsWith('.csv')) { window.lastUploadedFilename = file.name; readFile(file); }
+      else alert('Please drop a .csv file.');
+    });
+
+    function readFile(file) {
+      const bytes = file.size;
+      const reader = new FileReader();
+      reader.onload = e => loadCSV(e.target.result, bytes);
+      reader.readAsText(file);
+    }
+
+    // ── Download ─────────────────────────────────────────────────────────────
     function downloadCSV() {
-      updateCSVFromTable();
+      if (document.getElementById('showTable').checked) updateParsedFromTable();
       const blob = new Blob([currentCSV], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // Use original filename if available, else fallback
-      let originalFilename = window.lastUploadedFilename || 'counts.csv';
-      let baseName = originalFilename.replace(/\.csv$/i, '');
-      let now = new Date();
-      let pad = n => n.toString().padStart(2, '0');
-      let timestamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-      a.download = `${baseName}_${timestamp}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      let base = (window.lastUploadedFilename || 'data.csv').replace(/\.csv$/i, '');
+      const now = new Date();
+      const pad = n => n.toString().padStart(2, '0');
+      const ts = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      a.download = `${base}_${ts}.csv`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }
 
-    document.getElementById('fileInput').addEventListener('change', function(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        currentCSV = e.target.result;
-        renderTable(currentCSV);
-      };
-      reader.readAsText(file);
+    // ── Resize ────────────────────────────────────────────────────────────────
+    window.addEventListener('resize', () => {
+      if (echart) echart.resize();
     });
 
-    // Fetch counts.csv from the same folder as this HTML file
+    // ── Auto-load sample ─────────────────────────────────────────────────────
     fetch('sample/counts.csv')
-      .then(response => {
-        if (!response.ok) throw new Error("CSV file not found.");
-        return response.text();
+      .then(r => { if (!r.ok) throw new Error(); return r; })
+      .then(async r => {
+        const text = await r.text();
+        loadCSV(text, new Blob([text]).size);
       })
-      .then(csv => {
-        currentCSV = csv;
-        renderTable(currentCSV);
-      })
-      .catch(err => {
-        document.getElementById('table-container').innerHTML = "<b>Could not load counts.csv from this folder.</b>";
-      });
-
-    // Plotting function
-    function renderPlots() {
-      const data = parseCSV(currentCSV);
-      if (data.length < 2) {
-        document.getElementById('plot-container').innerHTML = '';
-        return;
-      }
-      const headers = data[0];
-      const rows = data.slice(1);
-
-      // Parse datetime and numeric columns
-      const datetimes = rows.map(row => row[0]);
-      const chartType = document.getElementById('chartType').value;
-      let plots = [];
-      for (let col = 1; col < headers.length; col++) {
-        // Try to parse as numbers, skip if not possible
-        let y = rows.map(row => {
-          let v = row[col];
-          let n = Number(v);
-          return isNaN(n) ? null : n;
-        });
-        if (y.every(v => v === null)) continue;
-
-        plots.push({
-          x: datetimes,
-          y: y,
-          mode: chartType === "bar" ? undefined : chartType,
-          name: headers[col],
-          type: chartType
-        });
-      }
-
-      const layout = {
-        title: 'Counts vs. Datetime',
-        xaxis: { title: headers[0], type: 'date', automargin: true },
-        yaxis: { title: 'Value', automargin: true },
-        legend: { orientation: "h" }
-      };
-
-      Plotly.newPlot('plot-container', plots, layout, {responsive: true});
-    }
-
-    // Button to refresh plot according to latest edited table
-    function refreshPlot() {
-      updateCSVFromTable();
-      renderPlots();
-    }
+      .catch(() => {});
   </script>
 </body>
 </html>
