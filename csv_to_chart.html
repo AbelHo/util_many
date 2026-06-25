@@ -44,6 +44,11 @@
     ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB) — edit to adjust auto-switch.
 
   CHANGELOG:
+    v2.2  2026-06-25  Fixed night-band calculation to pair sunset→next sunrise
+                    instead of clipping at UTC midnight (broke for UTC+8+).
+                    Fixed Plotly shapes to use local naive date strings instead
+                    of UTC ISO Z-strings, so shapes share the same coordinate
+                    system as the CSV trace data in Plotly's date axis.
     v2.1  2026-06-25  Day/Night shading: GPS + IP geolocation fallback, editable
                     coords, NOAA sunrise/sunset algorithm, ECharts markArea,
                     Plotly layout shapes. dataIsDatetime flag centralised.
@@ -468,8 +473,10 @@
         shapes = ranges.map(([s, e]) => ({
           type: 'rect',
           xref: 'x', yref: 'paper',
-          x0: new Date(s).toISOString(),
-          x1: new Date(e).toISOString(),
+          // Use local naive strings (not UTC ISO) so Plotly parses them via
+          // new Date() — the same path it uses for the trace's CSV date strings.
+          x0: toLocalDateStr(s),
+          x1: toLocalDateStr(e),
           y0: 0, y1: 1,
           fillcolor: 'rgba(20, 20, 70, 0.10)',
           line: { width: 0 },
@@ -634,39 +641,69 @@
       };
     }
 
-    // Build array of [startMs, endMs] night intervals spanning the data range
+    // Build array of [startMs, endMs] night intervals spanning the data range.
+    // Iterates UTC calendar days but pairs each sunset with the NEXT sunrise,
+    // so night bands are correct even when sunrise falls on the previous UTC day
+    // (as happens for UTC+8 and higher, e.g. Singapore, Japan, Australia).
     function computeNightRanges(xData, lat, lon) {
       const times = xData.map(s => new Date(s).getTime()).filter(t => !isNaN(t));
       if (times.length < 2) return [];
       const minT = Math.min(...times);
       const maxT = Math.max(...times);
 
-      const ranges = [];
-      const cur = new Date(minT);
+      // Expand the search window by one day on each side so we capture
+      // partial nights that begin/end just outside the data range.
+      const cur = new Date(minT - 86400000);
       cur.setUTCHours(0, 0, 0, 0);
-      const endDay = new Date(maxT);
+      const endDay = new Date(maxT + 86400000);
       endDay.setUTCHours(0, 0, 0, 0);
 
+      const ranges = [];
+      let prevSunset = null;   // UTC ms of the most recent sunset seen
+
       while (cur <= endDay) {
-        const ss        = sunriseSet(cur, lat, lon);
-        const dayMs     = cur.getTime();
-        const nextDayMs = dayMs + 86400000;
+        const ss = sunriseSet(new Date(cur), lat, lon);
 
         if (ss.polarNight) {
-          // Entire calendar day is dark
-          const s = Math.max(dayMs, minT), e = Math.min(nextDayMs, maxT);
+          // Whole UTC calendar day is dark — emit it directly
+          const s = Math.max(cur.getTime(), minT);
+          const e = Math.min(cur.getTime() + 86400000, maxT);
           if (e > s) ranges.push([s, e]);
+          // prevSunset unchanged (there was no sunrise or sunset today)
         } else if (!ss.polarDay) {
-          // Night band: midnight → sunrise
-          const s1 = Math.max(dayMs, minT), e1 = Math.min(ss.sunrise, maxT);
-          if (e1 > s1) ranges.push([s1, e1]);
-          // Night band: sunset → midnight
-          const s2 = Math.max(ss.sunset, minT), e2 = Math.min(nextDayMs, maxT);
-          if (e2 > s2) ranges.push([s2, e2]);
+          // Emit the night band: previous sunset → this day's sunrise
+          if (prevSunset !== null) {
+            const s = Math.max(prevSunset, minT);
+            const e = Math.min(ss.sunrise, maxT);
+            if (e > s) ranges.push([s, e]);
+          }
+          prevSunset = ss.sunset;
+        } else {
+          // Polar day — sun never sets; clear prevSunset
+          prevSunset = null;
         }
+
         cur.setUTCDate(cur.getUTCDate() + 1);
       }
+
+      // Trailing night after the last sunset through end of data
+      if (prevSunset !== null && prevSunset < maxT) {
+        const s = Math.max(prevSunset, minT);
+        if (s < maxT) ranges.push([s, maxT]);
+      }
+
       return ranges;
+    }
+
+    // Format a UTC-ms timestamp as a local naive datetime string
+    // ("YYYY-MM-DD HH:MM:SS") so that Plotly parses it through new Date(),
+    // the same path used for naive CSV date strings. This keeps shape
+    // boundaries in the same coordinate system as the trace x-data.
+    function toLocalDateStr(ms) {
+      const d = new Date(ms);
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ` +
+             `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     }
 
     // ── File input ───────────────────────────────────────────────────────────
