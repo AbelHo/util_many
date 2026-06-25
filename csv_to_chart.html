@@ -5,55 +5,59 @@
   ============================================================
   PURPOSE:
     Load a CSV file and render it as an interactive chart.
-    Supports table editing, multiple chart types, and two chart
-    rendering backends (Plotly and ECharts) selected automatically
-    by file size or overridden manually by the user.
+    Supports table editing, multiple chart types, two chart
+    rendering backends, and day/night background shading.
 
   KEY FEATURES:
     - Drag-and-drop or file-picker CSV import
-    - Proper RFC 4180 CSV parsing (handles quoted fields, embedded commas/newlines)
+    - Proper RFC 4180 CSV parsing (handles quoted fields)
     - Auto-detects datetime x-axis
     - Dual renderer:
-        • Plotly 3.6.0  — default for files < 500 KB (rich interactivity, hover tools)
-        • ECharts 6.1.0 — default for files ≥ 500 KB (canvas, large-data acceleration)
-    - User can override renderer via dropdown at any time
-    - Active renderer shown via color-coded badge
+        • Plotly 3.6.0  — default for files < 500 KB (rich interactivity)
+        • ECharts 6.1.0 — default for files ≥ 500 KB (canvas large-data mode)
+    - Renderer override dropdown; active renderer shown via color-coded badge
     - Chart types: Line, Bar, Scatter
     - Smooth line, Stack series toggles
     - Per-column series visibility checkboxes
-    - ECharts: data-zoom slider + scroll-wheel pan/zoom, animation suppressed >5 k rows
-    - Plotly: built-in range-slider, spline smooth, stackgroup stacking
-    - Optional editable data table (hidden by default for performance)
+    - ECharts: data-zoom slider + scroll-wheel pan/zoom, universalTransition,
+               animation suppressed > 5 k rows
+    - Plotly: range-slider, spline smooth, scattergl for > 10 k rows
+    - Day/Night shading (checkbox):
+        • Requests GPS; falls back to IP geolocation (ipapi.co → freeipapi.com)
+        • Displays editable Lat/Lon inputs — manual edit re-renders immediately
+        • Computes sunrise/sunset via NOAA algorithm (pure JS, no API)
+        • Renders shaded night bands on both ECharts (markArea) and Plotly (shapes)
+        • Only active when x-axis data is datetime
+    - Optional editable data table (hidden by default)
     - Download edited CSV with timestamped filename
     - Auto-loads sample/counts.csv if present (silent fail)
 
   USAGE:
-    Open directly in a browser (no build step). Drop a CSV file or
-    use the file picker. First column is treated as the X axis;
-    subsequent numeric columns become series.
+    Open directly in a browser (no build step). Drop a CSV file or use the
+    file picker. First column = X axis; subsequent numeric columns = series.
 
   DEPENDENCIES (CDN, loaded as needed):
     - ECharts 6.1.0  : https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js
     - Plotly  3.6.0  : https://cdn.plot.ly/plotly-3.6.0.min.js  (lazy-loaded)
 
   RENDERER THRESHOLD:
-    ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB)
-    Change this constant to adjust the auto-selection cutoff.
+    ECHARTS_THRESHOLD_BYTES = 500 * 1024  (500 KB) — edit to adjust auto-switch.
 
   CHANGELOG:
+    v2.1  2026-06-25  Day/Night shading: GPS + IP geolocation fallback, editable
+                    coords, NOAA sunrise/sunset algorithm, ECharts markArea,
+                    Plotly layout shapes. dataIsDatetime flag centralised.
     v2  2026-06-20  Dual-renderer (Plotly + ECharts), col toggles, data-zoom,
                     proper CSV parser, lazy Plotly load, AGENTS.md docs.
-                    Updated to ECharts 6.1.0 (universal transition, polar bar,
-                    improved label layout) and Plotly 3.6.0 (WebGL improvements,
-                    new colorway, faster react()).
+                    ECharts 6.1.0, Plotly 3.6.0.
   ============================================================
 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="CSV Table Viewer and Chart tool with dual chart rendering: Plotly for small files and ECharts for large files. Supports drag-and-drop CSV import, editable table, line/bar/scatter charts, datetime axis, per-series toggles, smooth and stacked modes, and timestamped CSV download.">
-  <meta name="keywords" content="CSV viewer, CSV chart, Plotly, ECharts, data visualization, line chart, bar chart, scatter chart, drag and drop, CSV editor, datetime axis, large data, dual renderer">
+  <meta name="description" content="CSV Table Viewer and Chart with dual rendering (Plotly / ECharts), day/night background shading via GPS or IP geolocation, editable table, line/bar/scatter charts, datetime axis, per-series toggles, and timestamped CSV download.">
+  <meta name="keywords" content="CSV viewer, CSV chart, Plotly, ECharts, data visualization, line chart, bar chart, scatter chart, drag and drop, CSV editor, datetime axis, large data, dual renderer, sunrise sunset, day night shading, geolocation">
   <title>CSV Table Viewer & Chart</title>
   <style>
     * { box-sizing: border-box; }
@@ -88,11 +92,22 @@
     #col-toggles input { cursor: pointer; }
     label { display: inline-flex; align-items: center; gap: 0.25em; }
     .sep { color: #ccc; }
+
+    /* Location panel (day/night shading) */
+    #location-section {
+      display: none; align-items: center; gap: 0.9em; flex-wrap: wrap;
+      background: #f0f4ff; border: 1px solid #c0cce0; border-radius: 6px;
+      padding: 0.5em 1em; margin-bottom: 0.8em; font-size: 0.85em;
+    }
+    #location-section input[type="number"] {
+      width: 6.5em; padding: 0.15em 0.3em; border: 1px solid #aac; border-radius: 3px;
+    }
+    #location-status { color: #555; }
+    #location-warn { color: #b00; font-style: italic; }
   </style>
-  <!-- ECharts 6.1.0: adds universal transition animations, improved label layout,
-       polar bar charts, and better canvas performance for large datasets -->
+  <!-- ECharts 6.1.0: universalTransition, improved label layout, canvas perf -->
   <script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
-  <!-- Plotly 3.6.0 lazy-loaded on demand (avoids ~4.8 MB fetch for large-file sessions) -->
+  <!-- Plotly 3.6.0 lazy-loaded on demand (~4.8 MB, skipped for large-file sessions) -->
 </head>
 <body>
   <h2 style="margin-bottom:0.5em">CSV Table Viewer &amp; Chart
@@ -123,6 +138,7 @@
 
     <label><input type="checkbox" id="smoothLine" onchange="applyChart()"> Smooth</label>
     <label><input type="checkbox" id="stackSeries" onchange="applyChart()"> Stack</label>
+    <label><input type="checkbox" id="dayNightCb" onchange="toggleDayNight()"> Day/Night</label>
     <label><input type="checkbox" id="showTable" onchange="toggleTable()"> Table</label>
 
     <span class="sep">|</span>
@@ -131,22 +147,37 @@
     <span id="status"></span>
   </div>
 
+  <!-- Location panel: shown when Day/Night checkbox is active -->
+  <div id="location-section">
+    <span id="location-status">Detecting location…</span>
+    <label>Lat: <input id="inputLat" type="number" step="0.0001" min="-90" max="90" onchange="onCoordsEdit()"></label>
+    <label>Lon: <input id="inputLon" type="number" step="0.0001" min="-180" max="180" onchange="onCoordsEdit()"></label>
+    <span id="location-warn"></span>
+  </div>
+
   <div id="col-toggles"></div>
   <div id="table-wrapper"><div id="table-container"></div></div>
   <div id="chart"></div>
 
   <script>
-    // Files >= this byte size auto-select ECharts; below uses Plotly
+    // Files >= this byte size auto-select ECharts in "auto" mode
     const ECHARTS_THRESHOLD_BYTES = 500 * 1024;
 
+    // ── Core state ────────────────────────────────────────────────────────────
     let currentCSV = "";
     let parsedHeaders = [];
     let parsedRows = [];
+    let dataIsDatetime = false;   // true when first col parses as dates
     let activeRenderer = "plotly";
     let lastFileBytes = 0;
     let echart = null;
     let renderScheduled = false;
     let plotlyLoading = false;
+
+    // ── Day/Night state ───────────────────────────────────────────────────────
+    let dayNightEnabled = false;
+    let userLat = null;
+    let userLon = null;
 
     // ── Renderer resolution ───────────────────────────────────────────────────
     function resolveRenderer() {
@@ -170,8 +201,6 @@
     }
 
     // ── Lazy-load Plotly 3.6.0 ────────────────────────────────────────────────
-    // Plotly 3.x: improved WebGL scatter, faster Plotly.react() diffing,
-    // updated default colorway, better accessibility attributes
     function ensurePlotly() {
       return new Promise((resolve, reject) => {
         if (window.Plotly) { resolve(); return; }
@@ -185,7 +214,7 @@
       });
     }
 
-    // ── CSV parsing — RFC 4180 compliant ─────────────────────────────────────
+    // ── CSV parsing — RFC 4180 ────────────────────────────────────────────────
     function parseCSV(csv) {
       const rows = [];
       let row = [], field = '', inQ = false;
@@ -223,6 +252,7 @@
       if (data.length < 2) return;
       parsedHeaders = data[0];
       parsedRows = data.slice(1);
+      dataIsDatetime = parsedRows.length > 0 && !isNaN(Date.parse(parsedRows[0][0]));
       document.getElementById('status').textContent =
         `${parsedRows.length.toLocaleString()} rows × ${parsedHeaders.length} cols` +
         ` · ${(lastFileBytes / 1024).toFixed(0)} KB`;
@@ -230,6 +260,7 @@
       buildColToggles();
       activeRenderer = resolveRenderer();
       updateBadge();
+      updateDayNightWarning();
       if (document.getElementById('showTable').checked) renderTable();
       scheduleChart();
     }
@@ -326,8 +357,6 @@
     }
 
     // ── ECharts 6.1.0 renderer ────────────────────────────────────────────────
-    // New in 6.x: universalTransition between chart types, improved label
-    // overlap avoidance, polar coordinate bar, better aria support.
     function getEChart() {
       if (!echart) echart = echarts.init(document.getElementById('chart'));
       return echart;
@@ -338,7 +367,6 @@
       const smooth = document.getElementById('smoothLine').checked;
       const stack = document.getElementById('stackSeries').checked;
       const xData = parsedRows.map(r => r[0]);
-      const looksLikeDate = xData.length > 0 && !isNaN(Date.parse(xData[0]));
       const series = [];
       const legendData = [];
 
@@ -349,10 +377,8 @@
         const yData = parsedRows.map(r => { const n = Number(r[col]); return isNaN(n) ? null : n; });
         const s = {
           name, type,
-          data: looksLikeDate ? parsedRows.map((r, i) => [r[0], yData[i]]) : yData,
-          large: true,
-          largeThreshold: 2000,
-          // universalTransition (ECharts 6): smooth morph when switching chart types
+          data: dataIsDatetime ? parsedRows.map((r, i) => [r[0], yData[i]]) : yData,
+          large: true, largeThreshold: 2000,
           universalTransition: true,
         };
         if (type === 'line') {
@@ -362,6 +388,22 @@
         }
         if (stack) s.stack = 'total';
         series.push(s);
+      }
+
+      // Attach night shading bands to first series via markArea
+      if (dayNightEnabled && userLat !== null && dataIsDatetime && series.length > 0) {
+        const ranges = computeNightRanges(xData, userLat, userLon);
+        if (ranges.length > 0) {
+          series[0].markArea = {
+            silent: true,
+            label: { show: false },
+            itemStyle: { color: 'rgba(20, 20, 70, 0.10)', borderWidth: 0 },
+            data: ranges.map(([s, e]) => [
+              { xAxis: new Date(s).toISOString() },
+              { xAxis: new Date(e).toISOString() },
+            ]),
+          };
+        }
       }
 
       getEChart().setOption({
@@ -378,8 +420,8 @@
           { type: 'slider', xAxisIndex: 0, bottom: 30, height: 20 },
         ],
         xAxis: {
-          type: looksLikeDate ? 'time' : 'category',
-          data: looksLikeDate ? undefined : xData,
+          type: dataIsDatetime ? 'time' : 'category',
+          data: dataIsDatetime ? undefined : xData,
           name: parsedHeaders[0], nameLocation: 'middle', nameGap: 28,
           boundaryGap: type === 'bar',
           axisLabel: { rotate: xData.length > 20 ? 30 : 0, hideOverlap: true },
@@ -390,8 +432,6 @@
     }
 
     // ── Plotly 3.6.0 renderer ─────────────────────────────────────────────────
-    // Plotly 3.x: faster Plotly.react() incremental diffing, improved WebGL
-    // scatter performance, updated default colorway, better hover label styling.
     function renderPlotly() {
       const rawType = document.getElementById('chartType').value;
       const smooth = document.getElementById('smoothLine').checked;
@@ -410,18 +450,31 @@
           trace.type = 'bar';
           if (stack) trace.stackgroup = 'one';
         } else if (rawType === 'scatter') {
-          trace.type = 'scatter';
+          trace.type = parsedRows.length > 10000 ? 'scattergl' : 'scatter';
           trace.mode = 'markers';
-          // Plotly 3.x: use scattergl for large datasets automatically via webgl hint
-          if (parsedRows.length > 10000) trace.type = 'scattergl';
         } else {
-          trace.type = 'scatter';
+          trace.type = parsedRows.length > 10000 ? 'scattergl' : 'scatter';
           trace.mode = smooth ? 'lines' : 'lines+markers';
           if (smooth) trace.line = { shape: 'spline' };
           if (stack) trace.stackgroup = 'one';
-          if (parsedRows.length > 10000) trace.type = 'scattergl';
         }
         traces.push(trace);
+      }
+
+      // Build night shading as layout shapes (rendered below the data layer)
+      let shapes = [];
+      if (dayNightEnabled && userLat !== null && dataIsDatetime) {
+        const ranges = computeNightRanges(xData, userLat, userLon);
+        shapes = ranges.map(([s, e]) => ({
+          type: 'rect',
+          xref: 'x', yref: 'paper',
+          x0: new Date(s).toISOString(),
+          x1: new Date(e).toISOString(),
+          y0: 0, y1: 1,
+          fillcolor: 'rgba(20, 20, 70, 0.10)',
+          line: { width: 0 },
+          layer: 'below',
+        }));
       }
 
       const layout = {
@@ -429,15 +482,14 @@
           title: { text: parsedHeaders[0] },
           type: 'date',
           automargin: true,
-          // Plotly 3.x range slider for zooming on datetime axes
           rangeslider: { visible: parsedRows.length <= 5000 },
         },
         yaxis: { title: { text: 'Value' }, automargin: true },
         legend: { orientation: 'h', y: -0.25 },
         barmode: stack ? 'stack' : 'group',
         margin: { t: 30, b: 80, l: 60, r: 20 },
-        // Plotly 3.x: modebar improvements
         modebar: { orientation: 'v' },
+        shapes,
       };
 
       Plotly.react('chart', traces, layout, {
@@ -445,6 +497,176 @@
         displaylogo: false,
         modeBarButtonsToRemove: ['select2d', 'lasso2d'],
       });
+    }
+
+    // ── Day/Night shading ─────────────────────────────────────────────────────
+    function toggleDayNight() {
+      dayNightEnabled = document.getElementById('dayNightCb').checked;
+      document.getElementById('location-section').style.display =
+        dayNightEnabled ? 'flex' : 'none';
+      if (dayNightEnabled && userLat === null) {
+        getLocation();
+      } else {
+        updateDayNightWarning();
+        scheduleChart();
+      }
+    }
+
+    function updateDayNightWarning() {
+      const warn = document.getElementById('location-warn');
+      if (!warn) return;
+      warn.textContent = (dayNightEnabled && !dataIsDatetime && parsedRows.length > 0)
+        ? '⚠ Requires datetime X-axis' : '';
+    }
+
+    // Attempt GPS, then fall back to IP-based geolocation
+    function getLocation() {
+      setLocationStatus('Detecting location…');
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => setCoords(pos.coords.latitude, pos.coords.longitude, 'GPS'),
+          () => getLocationByIP(),
+          { timeout: 8000 }
+        );
+      } else {
+        getLocationByIP();
+      }
+    }
+
+    function getLocationByIP() {
+      setLocationStatus('GPS unavailable — trying IP geolocation…');
+      fetch('https://ipapi.co/json/')
+        .then(r => r.json())
+        .then(d => {
+          if (!d.latitude) throw new Error();
+          setCoords(d.latitude, d.longitude,
+            `IP estimate${d.city ? ' · ' + d.city : ''}${d.country_name ? ', ' + d.country_name : ''}`);
+        })
+        .catch(() =>
+          fetch('https://freeipapi.com/api/json')
+            .then(r => r.json())
+            .then(d => {
+              if (!d.latitude) throw new Error();
+              setCoords(d.latitude, d.longitude, 'IP estimate');
+            })
+            .catch(() => {
+              setLocationStatus('Could not detect location — enter coordinates manually.');
+              setCoords(0, 0, 'manual');
+            })
+        );
+    }
+
+    function setCoords(lat, lon, source) {
+      userLat = parseFloat(lat);
+      userLon = parseFloat(lon);
+      document.getElementById('inputLat').value = userLat.toFixed(4);
+      document.getElementById('inputLon').value = userLon.toFixed(4);
+      setLocationStatus('📍 ' + source);
+      updateDayNightWarning();
+      scheduleChart();
+    }
+
+    function setLocationStatus(msg) {
+      document.getElementById('location-status').textContent = msg;
+    }
+
+    function onCoordsEdit() {
+      const lat = parseFloat(document.getElementById('inputLat').value);
+      const lon = parseFloat(document.getElementById('inputLon').value);
+      if (isNaN(lat) || isNaN(lon)) return;
+      userLat = lat;
+      userLon = lon;
+      setLocationStatus('📍 manual');
+      scheduleChart();
+    }
+
+    // ── Sunrise/Sunset — NOAA Solar Calculator algorithm ──────────────────────
+    // Accurate to ~1 min for latitudes ±72°. Returns UTC ms timestamps.
+    function sunriseSet(utcDate, lat, lon) {
+      const rad = d => d * Math.PI / 180;
+      const deg = r => r * 180 / Math.PI;
+      const y = utcDate.getUTCFullYear(), m = utcDate.getUTCMonth() + 1, d = utcDate.getUTCDate();
+
+      // Julian day number
+      const JD = 367*y - Math.floor(7*(y + Math.floor((m+9)/12)) / 4)
+               + Math.floor(275*m/9) + d + 1721013.5;
+      const t = (JD - 2451545.0) / 36525;
+
+      // Geometric mean longitude & anomaly
+      const L0 = (280.46646 + t*(36000.76983 + t*0.0003032)) % 360;
+      const M  = (357.52911 + t*(35999.05029 - t*0.0001537)) % 360;
+
+      // Equation of center → true longitude → apparent longitude
+      const C = Math.sin(rad(M))*(1.914602 - t*(0.004817 + 0.000014*t))
+              + Math.sin(rad(2*M))*(0.019993 - 0.000101*t)
+              + Math.sin(rad(3*M))*0.000289;
+      const omega  = 125.04 - 1934.136*t;
+      const lambda = (L0 + C) - 0.00569 - 0.00478*Math.sin(rad(omega));
+
+      // Obliquity & declination
+      const eps = (23 + (26 + (21.448 - t*(46.815 + t*(0.00059 - t*0.001813)))/60)/60)
+                + 0.00256*Math.cos(rad(omega));
+      const dec = deg(Math.asin(Math.sin(rad(eps)) * Math.sin(rad(lambda))));
+
+      // Equation of time (minutes)
+      const y2  = Math.tan(rad(eps/2)) ** 2;
+      const eot = 4*deg(
+        y2*Math.sin(rad(2*L0)) - 2*0.016709*Math.sin(rad(M))
+        + 4*0.016709*y2*Math.sin(rad(M))*Math.cos(rad(2*L0))
+        - 0.5*y2*y2*Math.sin(rad(4*L0))
+        - 1.25*0.016709*0.016709*Math.sin(rad(2*M))
+      );
+
+      // Hour angle at −0.8333° (accounts for atmospheric refraction + solar disc)
+      const cosH = (Math.sin(rad(-0.8333)) - Math.sin(rad(lat))*Math.sin(rad(dec)))
+                 / (Math.cos(rad(lat))*Math.cos(rad(dec)));
+
+      if (cosH < -1) return { polarDay:   true };
+      if (cosH >  1) return { polarNight: true };
+
+      const H          = deg(Math.acos(cosH));
+      const solarNoon  = 720 - 4*lon - eot;          // minutes from UTC midnight
+      const dayStartMs = Date.UTC(y, m-1, d);
+
+      return {
+        sunrise: dayStartMs + (solarNoon - 4*H) * 60000,
+        sunset:  dayStartMs + (solarNoon + 4*H) * 60000,
+      };
+    }
+
+    // Build array of [startMs, endMs] night intervals spanning the data range
+    function computeNightRanges(xData, lat, lon) {
+      const times = xData.map(s => new Date(s).getTime()).filter(t => !isNaN(t));
+      if (times.length < 2) return [];
+      const minT = Math.min(...times);
+      const maxT = Math.max(...times);
+
+      const ranges = [];
+      const cur = new Date(minT);
+      cur.setUTCHours(0, 0, 0, 0);
+      const endDay = new Date(maxT);
+      endDay.setUTCHours(0, 0, 0, 0);
+
+      while (cur <= endDay) {
+        const ss        = sunriseSet(cur, lat, lon);
+        const dayMs     = cur.getTime();
+        const nextDayMs = dayMs + 86400000;
+
+        if (ss.polarNight) {
+          // Entire calendar day is dark
+          const s = Math.max(dayMs, minT), e = Math.min(nextDayMs, maxT);
+          if (e > s) ranges.push([s, e]);
+        } else if (!ss.polarDay) {
+          // Night band: midnight → sunrise
+          const s1 = Math.max(dayMs, minT), e1 = Math.min(ss.sunrise, maxT);
+          if (e1 > s1) ranges.push([s1, e1]);
+          // Night band: sunset → midnight
+          const s2 = Math.max(ss.sunset, minT), e2 = Math.min(nextDayMs, maxT);
+          if (e2 > s2) ranges.push([s2, e2]);
+        }
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      return ranges;
     }
 
     // ── File input ───────────────────────────────────────────────────────────
