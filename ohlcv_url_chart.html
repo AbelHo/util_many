@@ -68,7 +68,15 @@
     Compression uses the browser-native CompressionStream API
     (Chrome/Edge 103+, Firefox 113+, Safari 16.4+).
 
+  GENERATORS (produce share URLs outside the browser):
+    - helper/ohlcv_url.py   Python module + CLI
+    - helper/OhlcvUrl.cs    C# static class + CLI, usable from NinjaTrader
+                            NinjaScript. Both emit the same #d=... format.
+
   CHANGELOG:
+    v1.1 2026-06-28  Parse naive (no-timezone) timestamps as UTC so the chart
+                    shows the supplied wall-clock and matches helper/ output.
+                    Added Python + C#/NinjaScript URL generators in helper/.
     v1  2026-06-28  Initial version: columnar delta/varint packing,
                     native deflate-raw, Base64url + max-density encoding,
                     candlestick + volume chart, CSV upload -> share URL.
@@ -357,7 +365,11 @@
   function parseTimestamp(s) {
     s = String(s).trim();
     if (/^\d+$/.test(s)) { const num = Number(s); return s.length >= 12 ? Math.round(num / 1000) : num; }
-    const ms = Date.parse(s);
+    // Treat naive (no-timezone) date-times as UTC, so the chart shows the same
+    // wall-clock that was supplied and matches the helper/ URL generators.
+    let iso = s.replace(" ", "T");
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) iso += "Z";
+    const ms = Date.parse(iso);
     if (isNaN(ms)) throw new Error("Unparseable timestamp: " + s);
     return Math.round(ms / 1000);
   }
