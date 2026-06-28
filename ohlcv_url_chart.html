@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<!--
+  ============================================================
+  ohlcv_url_chart.html — Self-contained OHLCV chart in a URL
+  ============================================================
+  PURPOSE:
+    Render an interactive Plotly candlestick + volume chart from OHLCV
+    trading data, with the entire dataset packed into the page URL. Share
+    the URL and the recipient sees the exact same chart — no server, no
+    database, no file transfer. Upload a CSV to generate the shareable URL.
+
+  KEY FEATURES:
+    - Load chart purely from the URL hash (#d=...) — data travels in the link
+    - Drag-and-drop or file-picker CSV import -> chart + shareable URL
+    - Candlestick (OHLC) + volume sub-plot (Plotly 3.6.0)
+    - Flexible CSV headers (case-insensitive):
+        time   : timestamp | datetime | dts | date | time
+        prices : open|o, high|h, low|l, close|c
+        volume : volume | vol | v   (optional)
+        timestamps may be ISO dates, "YYYY-MM-DD HH:MM:SS", or epoch s/ms
+    - Lossless within detected decimal precision
+    - Copy URL, Download reconstructed CSV, Download PNG
+    - "Max density" toggle for the shortest possible URL
+    - URL-length warning for very large datasets
+
+  HOW THE DATA IS PACKED INTO THE URL (most-compact-first design):
+    The dominant size win is domain-specific binary packing, NOT the text
+    encoder. Three stages:
+      1. COLUMNAR BINARY PACKING (biggest win)
+         - Struct-of-arrays layout (all timestamps, then all opens, ...)
+         - Regular timestamps -> store start + interval + count only
+           (a few bytes regardless of row count); else delta+zigzag+varint
+         - Prices quantized to integer ticks (x10^decimals, lossless),
+           then per-column delta -> zigzag -> varint (tiny 1-byte values)
+         - Volume quantized + varint (raw or delta, whichever is smaller)
+      2. GENERIC COMPRESSION: native deflate-raw via CompressionStream
+         (zero dependencies; deflate-raw avoids gzip header/CRC overhead)
+      3. URL-SAFE TEXT in the hash fragment (#...), which never reaches a
+         server (private, works on static hosting, higher capacity):
+         - Default: Base64url (A-Z a-z 0-9 - _) — bulletproof through
+           chat / markdown / email (~33% overhead)
+         - "Max density": custom 73-char URL-fragment-safe alphabet via
+           big-integer base conversion (~3-5% shorter URL)
+    Typical: ~500 daily bars ~25-30 KB CSV -> ~4-5 KB packed -> ~2.5-3.5 KB
+    deflate -> ~3.5-4.7 KB Base64url URL (about 2-3x smaller than gzip-CSV).
+
+  BINARY CONTAINER FORMAT (v1, before deflate + text encoding):
+      magic           2 bytes  'O','1'
+      version         1 byte   1
+      flags           1 byte   bit0 tsRegular, bit1 hasVolume,
+                               bit2 volFloat,  bit3 volDelta
+      priceDecimals   1 byte   0..9   (scale = 10^d)
+      volDecimals     1 byte   0..9
+      rowCount        varint
+      timestamps      regular: tsStart, tsInterval (varint, epoch seconds)
+                      else   : tsStart + (n-1) zigzag-varint deltas
+      O,H,L,C         each: n values as zigzag-varint deltas (first vs 0)
+      volume          (if hasVolume) n varints (raw, or delta+zigzag)
+    Hash layout: #d=<payload>  [&e=1 max-density]  [&s=<symbol/title>]
+
+  USAGE:
+    Open directly in a browser. Drop a CSV (or use the picker) to chart it
+    and get a shareable URL. Open a previously-generated URL to restore the
+    chart. (Auto-loads sample/ohlcv_sample.csv when served over http.)
+
+  DEPENDENCIES (CDN, lazy-loaded):
+    - Plotly 3.6.0 : https://cdn.plot.ly/plotly-3.6.0.min.js
+    Compression uses the browser-native CompressionStream API
+    (Chrome/Edge 103+, Firefox 113+, Safari 16.4+).
+
+  CHANGELOG:
+    v1  2026-06-28  Initial version: columnar delta/varint packing,
+                    native deflate-raw, Base64url + max-density encoding,
+                    candlestick + volume chart, CSV upload -> share URL.
+  ============================================================
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Self-contained OHLCV candlestick chart whose entire dataset is packed into the URL. Upload a CSV of trading data (timestamp/open/high/low/close/volume) to render a Plotly candlestick + volume chart and generate a shareable link that reproduces it with no server. Uses columnar delta/varint binary packing, native deflate-raw compression, and Base64url (or max-density) URL encoding.">
+  <meta name="keywords" content="OHLCV chart, candlestick chart, Plotly candlestick, trading data, data in URL, shareable chart link, CSV to candlestick, deflate, CompressionStream, base64url, varint, delta encoding, columnar compression, static html, no server, GitHub Pages, volume chart, stock chart, crypto chart">
+  <title>OHLCV URL Chart</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 1em 2em; color: #222; }
+    h2 { margin-bottom: 0.3em; }
+    #drop-area {
+      border: 2px dashed #aaa; border-radius: 8px; padding: 1.1em;
+      text-align: center; color: #888; margin-bottom: 0.9em; background: #f9f9f9;
+      cursor: pointer; transition: background 0.2s, color 0.2s;
+    }
+    #drop-area.drag-over { background: #e0f7fa; color: #00796b; border-color: #00796b; }
+    #controls { display: flex; gap: 0.6em; align-items: center; flex-wrap: wrap; margin-bottom: 0.7em; }
+    button { padding: 0.35em 0.9em; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    label { display: inline-flex; align-items: center; gap: 0.3em; user-select: none; }
+    #share-row { display: flex; gap: 0.5em; align-items: center; margin-bottom: 0.6em; }
+    #shareUrl {
+      flex: 1; padding: 0.4em 0.6em; font-family: monospace; font-size: 0.82em;
+      border: 1px solid #bbb; border-radius: 4px; background: #fbfbfb;
+    }
+    #chart { width: 100%; height: 540px; }
+    #status { font-size: 0.8em; color: #555; margin: 0.3em 0; }
+    #warn { font-size: 0.82em; color: #b00; font-weight: bold; display: none; margin: 0.3em 0; }
+    #error { font-size: 0.85em; color: #b00; display: none; margin: 0.4em 0; }
+    .hint { font-size: 0.78em; color: #888; }
+    code { background: #f0f0f0; padding: 0.05em 0.3em; border-radius: 3px; }
+  </style>
+  <!-- Plotly 3.6.0 lazy-loaded on demand -->
+</head>
+<body>
+  <h2>OHLCV URL Chart</h2>
+  <div class="hint">Candlestick + volume chart whose data lives entirely in the link. Upload a CSV to get a shareable URL — or open a URL someone shared with you.</div>
+
+  <div id="drop-area" style="margin-top:0.7em">
+    <strong>Drop a CSV file here</strong> or <label style="text-decoration:underline;color:#1a73e8;cursor:pointer">browse<input type="file" id="fileInput" accept=".csv,text/csv" style="display:none"></label><br>
+    <span class="hint">Headers: timestamp/datetime/dts, open, high, low, close, volume/vol</span>
+  </div>
+
+  <div id="error"></div>
+
+  <div id="share-row" style="display:none">
+    <input type="text" id="shareUrl" readonly placeholder="Share URL will appear here after you load data">
+    <button id="copyBtn" title="Copy URL to clipboard">Copy URL</button>
+  </div>
+
+  <div id="controls">
+    <label title="Use a denser URL-fragment-safe alphabet (~3-5% shorter URL, best for power users)">
+      <input type="checkbox" id="denseToggle"> Max density
+    </label>
+    <button id="csvBtn" disabled>Download CSV</button>
+    <button id="pngBtn" disabled>Download PNG</button>
+  </div>
+
+  <div id="warn"></div>
+  <div id="status">No data loaded. Drop a CSV file or open a chart URL.</div>
+
+  <div id="chart"></div>
+
+  <script>
+  "use strict";
+
+  /* =========================================================================
+     Low-level integer codecs — division/arithmetic based (NOT bit ops) so
+     they stay correct for values up to 2^53 (e.g. large share volumes).
+     ========================================================================= */
+  function writeVarint(bytes, n) {            // unsigned LEB128
+    n = Math.round(n);
+    while (n >= 128) { bytes.push((n % 128) + 128); n = Math.floor(n / 128); }
+    bytes.push(n);
+  }
+  function readVarint(st) {
+    let result = 0, shift = 1;
+    while (true) {
+      const b = st.bytes[st.pos++];
+      result += (b & 0x7f) * shift;
+      if ((b & 0x80) === 0) break;
+      shift *= 128;
+    }
+    return result;
+  }
+  const zigzag   = n => n >= 0 ? n * 2 : n * -2 - 1;
+  const unzigzag = z => (z % 2 === 0) ? z / 2 : -(z + 1) / 2;
+
+  /* =========================================================================
+     Stage 1 — columnar binary packing of the OHLCV model.
+     model = { ts[], o[], h[], l[], c[], vol[]|null,
+               priceDecimals, volDecimals, hasVolume, volFloat }
+     ts are integer epoch SECONDS.
+     ========================================================================= */
+  function packBinary(model) {
+    const { ts, o, h, l, c, vol, priceDecimals, volDecimals, hasVolume, volFloat } = model;
+    const n = ts.length;
+    const pscale = Math.pow(10, priceDecimals);
+    const vscale = Math.pow(10, volDecimals);
+
+    // Detect regularly-spaced timestamps (the common case for bars).
+    let tsRegular = true, interval = n >= 2 ? ts[1] - ts[0] : 0;
+    for (let i = 2; i < n; i++) if (ts[i] - ts[i - 1] !== interval) { tsRegular = false; break; }
+
+    const bytes = [];
+    bytes.push(0x4F, 0x31);          // magic 'O','1'
+    bytes.push(1);                   // version
+    const flagsIdx = bytes.length;
+    bytes.push(0);                   // flags placeholder
+    bytes.push(priceDecimals & 0xff);
+    bytes.push(volDecimals & 0xff);
+    writeVarint(bytes, n);
+
+    if (tsRegular) {
+      writeVarint(bytes, ts[0] || 0);
+      writeVarint(bytes, interval > 0 ? interval : 0);
+    } else {
+      writeVarint(bytes, ts[0]);
+      for (let i = 1; i < n; i++) writeVarint(bytes, zigzag(ts[i] - ts[i - 1]));
+    }
+
+    // O,H,L,C as scaled-integer delta -> zigzag -> varint (first vs 0).
+    for (const col of [o, h, l, c]) {
+      let prev = 0;
+      for (let i = 0; i < n; i++) {
+        const v = Math.round(col[i] * pscale);
+        writeVarint(bytes, zigzag(v - prev));
+        prev = v;
+      }
+    }
+
+    // Volume: keep whichever of raw / delta is smaller.
+    let volDelta = false;
+    if (hasVolume) {
+      const scaled = vol.map(v => Math.round((v || 0) * vscale));
+      const raw = [], del = [];
+      let prev = 0;
+      for (let i = 0; i < n; i++) {
+        writeVarint(raw, scaled[i]);
+        writeVarint(del, zigzag(scaled[i] - prev));
+        prev = scaled[i];
+      }
+      const chosen = del.length < raw.length ? (volDelta = true, del) : raw;
+      for (const b of chosen) bytes.push(b);
+    }
+
+    let flags = 0;
+    if (tsRegular) flags |= 1;
+    if (hasVolume) flags |= 2;
+    if (volFloat)  flags |= 4;
+    if (volDelta)  flags |= 8;
+    bytes[flagsIdx] = flags;
+
+    return new Uint8Array(bytes);
+  }
+
+  function unpackBinary(u8) {
+    if (u8[0] !== 0x4F || u8[1] !== 0x31) throw new Error("Not an OHLCV payload (bad magic).");
+    const st = { bytes: u8, pos: 2 };
+    const version = u8[st.pos++];
+    if (version !== 1) throw new Error("Unsupported payload version " + version + ".");
+    const flags = u8[st.pos++];
+    const tsRegular = !!(flags & 1), hasVolume = !!(flags & 2),
+          volFloat = !!(flags & 4), volDelta = !!(flags & 8);
+    const priceDecimals = u8[st.pos++], volDecimals = u8[st.pos++];
+    const n = readVarint(st);
+    const pscale = Math.pow(10, priceDecimals);
+    const vscale = Math.pow(10, volDecimals);
+
+    const ts = new Array(n);
+    if (tsRegular) {
+      const start = readVarint(st), interval = readVarint(st);
+      for (let i = 0; i < n; i++) ts[i] = start + interval * i;
+    } else {
+      ts[0] = readVarint(st);
+      for (let i = 1; i < n; i++) ts[i] = ts[i - 1] + unzigzag(readVarint(st));
+    }
+
+    const readCol = () => {
+      const arr = new Array(n); let prev = 0;
+      for (let i = 0; i < n; i++) { prev += unzigzag(readVarint(st)); arr[i] = prev / pscale; }
+      return arr;
+    };
+    const o = readCol(), h = readCol(), l = readCol(), c = readCol();
+
+    let vol = null;
+    if (hasVolume) {
+      vol = new Array(n);
+      if (volDelta) { let prev = 0; for (let i = 0; i < n; i++) { prev += unzigzag(readVarint(st)); vol[i] = prev / vscale; } }
+      else { for (let i = 0; i < n; i++) vol[i] = readVarint(st) / vscale; }
+    }
+    return { ts, o, h, l, c, vol, priceDecimals, volDecimals, hasVolume, volFloat };
+  }
+
+  /* =========================================================================
+     Stage 2 — native deflate-raw compression (no dependencies).
+     ========================================================================= */
+  async function deflateRaw(u8) {
+    const cs = new CompressionStream("deflate-raw");
+    const w = cs.writable.getWriter(); w.write(u8); w.close();
+    return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  }
+  async function inflateRaw(u8) {
+    const ds = new DecompressionStream("deflate-raw");
+    const w = ds.writable.getWriter(); w.write(u8); w.close();
+    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  }
+
+  /* =========================================================================
+     Stage 3 — URL-safe text encodings.
+     ========================================================================= */
+  // Base64url (default): robust through chat / markdown / email.
+  function b64urlEncode(u8) {
+    let bin = "";
+    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    const bin = atob(s);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+
+  // Max density: 73-char alphabet, all RFC-3986 fragment-safe and free of the
+  // hash param separators ('&','='). Whole-buffer big-integer base conversion;
+  // a 2-char prefix records leading zero bytes. (Note: '+','(',')'-class chars
+  // are deliberately excluded so the URL also survives markdown auto-linkers.)
+  const DENSE_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._~!$*+/:@";
+  const DENSE_N = BigInt(DENSE_ALPHABET.length);
+  const DENSE_INV = (() => { const m = {}; for (let i = 0; i < DENSE_ALPHABET.length; i++) m[DENSE_ALPHABET[i]] = i; return m; })();
+
+  function denseEncode(u8) {
+    let lead = 0; while (lead < u8.length && u8[lead] === 0) lead++;
+    let num = 0n;
+    for (let i = lead; i < u8.length; i++) num = num * 256n + BigInt(u8[i]);
+    let digits = "";
+    while (num > 0n) { digits = DENSE_ALPHABET[Number(num % DENSE_N)] + digits; num /= DENSE_N; }
+    const L = DENSE_ALPHABET.length;
+    return DENSE_ALPHABET[Math.floor(lead / L)] + DENSE_ALPHABET[lead % L] + digits;
+  }
+  function denseDecode(s) {
+    const L = DENSE_ALPHABET.length;
+    const lead = DENSE_INV[s[0]] * L + DENSE_INV[s[1]];
+    let num = 0n;
+    for (let i = 2; i < s.length; i++) num = num * DENSE_N + BigInt(DENSE_INV[s[i]]);
+    const tail = [];
+    while (num > 0n) { tail.unshift(Number(num % 256n)); num /= 256n; }
+    const out = new Uint8Array(lead + tail.length);
+    for (let i = 0; i < tail.length; i++) out[lead + i] = tail[i];
+    return out;
+  }
+
+  /* =========================================================================
+     CSV parsing (RFC 4180) + header aliasing + precision / timestamp detect.
+     ========================================================================= */
+  function parseCSV(csv) {
+    const rows = []; let row = [], field = "", inQ = false;
+    for (let i = 0; i < csv.length; i++) {
+      const ch = csv[i];
+      if (inQ) {
+        if (ch === '"' && csv[i + 1] === '"') { field += '"'; i++; }
+        else if (ch === '"') inQ = false;
+        else field += ch;
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === ",") { row.push(field); field = ""; }
+        else if (ch === "\n") { row.push(field); field = ""; if (row.some(Boolean)) rows.push(row); row = []; }
+        else if (ch !== "\r") field += ch;
+      }
+    }
+    if (field || row.length) { row.push(field); if (row.some(Boolean)) rows.push(row); }
+    return rows;
+  }
+
+  const decimalsOf = s => { const m = String(s).trim().match(/\.(\d+)$/); return m ? m[1].length : 0; };
+
+  function parseTimestamp(s) {
+    s = String(s).trim();
+    if (/^\d+$/.test(s)) { const num = Number(s); return s.length >= 12 ? Math.round(num / 1000) : num; }
+    const ms = Date.parse(s);
+    if (isNaN(ms)) throw new Error("Unparseable timestamp: " + s);
+    return Math.round(ms / 1000);
+  }
+
+  function buildModelFromCSV(csvText) {
+    const rows = parseCSV(csvText);
+    if (rows.length < 2) throw new Error("CSV has no data rows.");
+    const header = rows[0].map(h => h.trim().toLowerCase());
+    const find = aliases => header.findIndex(h => aliases.includes(h));
+    const tI = find(["timestamp", "datetime", "dts", "date", "time"]);
+    const oI = find(["open", "o"]), hI = find(["high", "h"]), lI = find(["low", "l"]), cI = find(["close", "c"]);
+    if (tI < 0) throw new Error("No time column found (timestamp / datetime / dts / date / time).");
+    if (oI < 0 || hI < 0 || lI < 0 || cI < 0) throw new Error("Need open, high, low and close columns.");
+    const vI = find(["volume", "vol", "v"]);
+    const hasVolume = vI >= 0;
+
+    const need = Math.max(tI, oI, hI, lI, cI, hasVolume ? vI : 0);
+    const data = rows.slice(1).filter(r => r.length > need && String(r[tI]).trim() !== "");
+    if (!data.length) throw new Error("CSV has no usable data rows.");
+
+    let priceDecimals = 0;
+    for (const r of data) for (const i of [oI, hI, lI, cI]) priceDecimals = Math.max(priceDecimals, decimalsOf(r[i]));
+    priceDecimals = Math.min(priceDecimals, 9);
+
+    let volDecimals = 0, volFloat = false;
+    if (hasVolume) {
+      for (const r of data) { const d = decimalsOf(r[vI]); if (d > 0) volFloat = true; volDecimals = Math.max(volDecimals, d); }
+      volDecimals = Math.min(volDecimals, 9);
+    }
+
+    const ts = [], o = [], h = [], l = [], c = [], vol = hasVolume ? [] : null;
+    for (const r of data) {
+      ts.push(parseTimestamp(r[tI]));
+      o.push(parseFloat(r[oI])); h.push(parseFloat(r[hI])); l.push(parseFloat(r[lI])); c.push(parseFloat(r[cI]));
+      if (hasVolume) vol.push(parseFloat(r[vI]) || 0);
+    }
+    return { ts, o, h, l, c, vol, priceDecimals, volDecimals, hasVolume, volFloat };
+  }
+
+  /* =========================================================================
+     Timestamp formatting (UTC, for consistent round-trips) + CSV rebuild.
+     ========================================================================= */
+  const pad = n => String(n).padStart(2, "0");
+  function fmtTs(epochSec, withTime) {
+    const d = new Date(epochSec * 1000);
+    const date = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    return withTime ? `${date} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}` : date;
+  }
+  const hasIntradayTimes = ts => ts.some(s => s % 86400 !== 0);
+
+  function modelToCSV(model) {
+    const withTime = hasIntradayTimes(model.ts);
+    const head = ["timestamp", "open", "high", "low", "close"];
+    if (model.hasVolume) head.push("volume");
+    const lines = [head.join(",")];
+    const pd = model.priceDecimals, vd = model.volDecimals;
+    for (let i = 0; i < model.ts.length; i++) {
+      const row = [fmtTs(model.ts[i], withTime),
+        model.o[i].toFixed(pd), model.h[i].toFixed(pd), model.l[i].toFixed(pd), model.c[i].toFixed(pd)];
+      if (model.hasVolume) row.push(model.volFloat ? model.vol[i].toFixed(vd) : String(Math.round(model.vol[i])));
+      lines.push(row.join(","));
+    }
+    return lines.join("\n");
+  }
+
+  /* =========================================================================
+     Plotly rendering (lazy CDN load).
+     ========================================================================= */
+  let plotlyLoading = null;
+  function ensurePlotly() {
+    if (window.Plotly) return Promise.resolve();
+    if (plotlyLoading) return plotlyLoading;
+    plotlyLoading = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.plot.ly/plotly-3.6.0.min.js";
+      s.onload = resolve;
+      s.onerror = () => reject(new Error("Failed to load Plotly from CDN."));
+      document.head.appendChild(s);
+    });
+    return plotlyLoading;
+  }
+
+  function renderChart(model, title) {
+    const withTime = hasIntradayTimes(model.ts);
+    const x = model.ts.map(s => fmtTs(s, withTime));
+    const traces = [{
+      type: "candlestick", name: title || "OHLC", x,
+      open: model.o, high: model.h, low: model.l, close: model.c,
+      xaxis: "x", yaxis: "y",
+      increasing: { line: { color: "#26a69a" } }, decreasing: { line: { color: "#ef5350" } },
+    }];
+    if (model.hasVolume) {
+      const colors = model.c.map((cl, i) => cl >= model.o[i] ? "rgba(38,166,154,0.5)" : "rgba(239,83,80,0.5)");
+      traces.push({ type: "bar", name: "Volume", x, y: model.vol, xaxis: "x", yaxis: "y2", marker: { color: colors } });
+    }
+    const layout = {
+      margin: { t: title ? 36 : 24, b: 40, l: 62, r: 20 },
+      showlegend: false,
+      title: title ? { text: title } : undefined,
+      xaxis: { type: "date", rangeslider: { visible: model.ts.length <= 2000 }, domain: [0, 1], anchor: model.hasVolume ? "y2" : "y" },
+      yaxis: { title: { text: "Price" }, domain: model.hasVolume ? [0.26, 1] : [0, 1], automargin: true },
+    };
+    if (model.hasVolume) layout.yaxis2 = { title: { text: "Vol" }, domain: [0, 0.2], automargin: true };
+    Plotly.react("chart", traces, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["select2d", "lasso2d"] });
+  }
+
+  /* =========================================================================
+     URL build / parse.
+     ========================================================================= */
+  const baseURL = () => location.href.split("#")[0];
+
+  async function buildHash(model, dense) {
+    const bin = packBinary(model);
+    const comp = await deflateRaw(bin);
+    const payload = dense ? denseEncode(comp) : b64urlEncode(comp);
+    let hash = "#d=" + payload + (dense ? "&e=1" : "");
+    if (model.symbol) hash += "&s=" + encodeURIComponent(model.symbol);
+    return { hash, binLen: bin.length, compLen: comp.length, payloadLen: payload.length };
+  }
+
+  function parseHash() {
+    const h = location.hash.replace(/^#/, "");
+    if (!h) return null;
+    const p = {};
+    for (const part of h.split("&")) { const i = part.indexOf("="); if (i > 0) p[part.slice(0, i)] = part.slice(i + 1); }
+    return p.d ? p : null;
+  }
+
+  async function decodeHash(p) {
+    const comp = p.e === "1" ? denseDecode(p.d) : b64urlDecode(p.d);
+    const bin = await inflateRaw(comp);
+    const model = unpackBinary(bin);
+    if (p.s) model.symbol = decodeURIComponent(p.s);
+    return model;
+  }
+
+  /* =========================================================================
+     App state + UI wiring.
+     ========================================================================= */
+  let CURRENT = null;   // { model, csvBytes? }
+  const $ = id => document.getElementById(id);
+
+  function showError(msg) { const e = $("error"); e.textContent = msg; e.style.display = msg ? "block" : "none"; }
+  function setStatus(msg) { $("status").textContent = msg; }
+
+  async function updateShareURL() {
+    if (!CURRENT) return;
+    const dense = $("denseToggle").checked;
+    const info = await buildHash(CURRENT.model, dense);
+    const url = baseURL() + info.hash;
+    $("shareUrl").value = url;
+    $("share-row").style.display = "flex";
+    history.replaceState(null, "", info.hash);
+
+    const rows = CURRENT.model.ts.length;
+    const urlLen = url.length;
+    let ratio = "";
+    if (CURRENT.csvBytes) ratio = ` · ${(CURRENT.csvBytes / 1024).toFixed(1)} KB CSV → ${(info.payloadLen / 1024).toFixed(1)} KB URL (${(CURRENT.csvBytes / info.payloadLen).toFixed(1)}×)`;
+    setStatus(`${rows.toLocaleString()} rows · ${CURRENT.model.priceDecimals} price dp · packed ${info.binLen} B → deflate ${info.compLen} B → ${info.payloadLen.toLocaleString()} chars (${dense ? "max-density" : "base64url"})${ratio}`);
+
+    const warn = $("warn");
+    if (urlLen > 64000) { warn.style.display = "block"; warn.textContent = `⚠ URL is ${urlLen.toLocaleString()} chars — too long for many browsers/apps. Reduce rows or enable Max density.`; }
+    else if (urlLen > 16000) { warn.style.display = "block"; warn.textContent = `⚠ URL is ${urlLen.toLocaleString()} chars — fine in modern browsers but may be truncated by some chat apps. Max density helps.`; }
+    else warn.style.display = "none";
+  }
+
+  async function loadModel(model, csvBytes) {
+    if (!("CompressionStream" in window)) { showError("This browser lacks the CompressionStream API. Use a recent Chrome/Edge/Firefox/Safari."); }
+    CURRENT = { model, csvBytes };
+    await ensurePlotly();
+    renderChart(model, model.symbol);
+    $("csvBtn").disabled = false;
+    $("pngBtn").disabled = false;
+    showError("");
+    await updateShareURL();
+  }
+
+  async function handleCSVText(text, filename) {
+    try {
+      const model = buildModelFromCSV(text);
+      if (filename) model.symbol = filename.replace(/\.csv$/i, "");
+      await loadModel(model, new Blob([text]).size);
+    } catch (err) { showError("Could not read CSV: " + err.message); setStatus("Load failed."); }
+  }
+
+  function readFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => handleCSVText(e.target.result, file.name);
+    reader.readAsText(file);
+  }
+
+  // ── File input + drag & drop ──────────────────────────────────────────────
+  $("fileInput").addEventListener("change", e => { const f = e.target.files[0]; if (f) readFile(f); });
+  const drop = $("drop-area");
+  drop.addEventListener("click", e => { if (e.target.tagName !== "INPUT" && e.target.tagName !== "LABEL") $("fileInput").click(); });
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag-over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("drag-over"));
+  drop.addEventListener("drop", e => {
+    e.preventDefault(); drop.classList.remove("drag-over");
+    const f = e.dataTransfer.files[0];
+    if (f && /\.csv$/i.test(f.name)) readFile(f);
+    else showError("Please drop a .csv file.");
+  });
+
+  // ── Buttons ───────────────────────────────────────────────────────────────
+  $("denseToggle").addEventListener("change", () => { updateShareURL().catch(err => showError(err.message)); });
+
+  $("copyBtn").addEventListener("click", async () => {
+    const v = $("shareUrl").value; if (!v) return;
+    try { await navigator.clipboard.writeText(v); $("copyBtn").textContent = "Copied!"; setTimeout(() => $("copyBtn").textContent = "Copy URL", 1200); }
+    catch { $("shareUrl").select(); document.execCommand("copy"); }
+  });
+
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
+  $("csvBtn").addEventListener("click", () => {
+    if (!CURRENT) return;
+    const base = (CURRENT.model.symbol || "ohlcv").replace(/[^\w.-]+/g, "_");
+    const now = new Date();
+    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    downloadBlob(new Blob([modelToCSV(CURRENT.model)], { type: "text/csv" }), `${base}_${ts}.csv`);
+  });
+  $("pngBtn").addEventListener("click", () => {
+    if (window.Plotly) Plotly.downloadImage("chart", { format: "png", width: 1280, height: 720, filename: (CURRENT && CURRENT.model.symbol) || "ohlcv_chart" });
+  });
+
+  // ── Startup: URL hash first, else auto-load sample ─────────────────────────
+  (async function init() {
+    const p = parseHash();
+    if (p) {
+      try {
+        const model = await decodeHash(p);
+        await loadModel(model, null);
+        setStatus(`Loaded ${model.ts.length.toLocaleString()} rows from URL · ` + $("status").textContent);
+        return;
+      } catch (err) { showError("Could not decode chart from URL: " + err.message); }
+    }
+    // No (valid) hash — try the bundled sample (only works when served over http).
+    fetch("sample/ohlcv_sample.csv")
+      .then(r => { if (!r.ok) throw new Error(); return r.text(); })
+      .then(t => handleCSVText(t, "ohlcv_sample.csv"))
+      .catch(() => {});
+  })();
+  </script>
+</body>
+</html>
