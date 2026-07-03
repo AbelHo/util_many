@@ -26,9 +26,20 @@ Usage Instructions:
 Maintenance Notes:
 - All logic is in this file (no external JS dependencies)
 - Uses Web Audio API for audio processing and playback
-- Canvas-based rendering for waveform and spectrogram
-- Markers data structure: [ {type, time, endTime?, freqMin?, freqMax?, label} ]
-- Undo/redo stacks store operation objects for all marker types
+- Audio is decoded at its NATIVE sample rate: a dedicated AudioContext is opened
+  at the file's detected rate (ensureAudioContext) so high-sample-rate / ultrasonic
+  recordings keep their full frequency band instead of being resampled to ~44.1 kHz
+- Spectrogram uses a true in-place radix-2 FFT (fftInPlace) with a Hann window
+- Frequency Range controls (displayFreqMin/displayFreqMax) zoom the spectrogram's
+  frequency axis; getDisplayFreqRange() resolves/clamps the band to [0, Nyquist]
+- Canvas-based rendering for waveform and spectrogram (spectrogram is cached;
+  cache key includes fftSize, colorScale, zoom, scroll and the displayed band)
+- Markers data structure:
+    point     -> { type:'point', time, freq?, label? }
+    timeRange -> { type:'timeRange', time, endTime, label? }
+    freqRange -> { type:'freqRange', time, endTime, freqMin, freqMax, label? }
+- Undo/redo stacks store op objects: add / remove / clear / replace (import)
+- Import is validated via sanitizeAnnotation(); CSV is parsed with parseCsvLine()
 - See README.md for project-wide conventions
 -->
 <!doctype html>
@@ -289,11 +300,19 @@ Maintenance Notes:
       <div class="control-group">
         <label>Color Scale:</label>
         <select id="colorScaleSelect">
-          <option value="cool" selected>Cool</option>
-          <option value="viridis">Viridis</option>
+          <option value="viridis" selected>Viridis</option>
+          <option value="cool">Cool</option>
           <option value="grayscale">Grayscale</option>
           <option value="hot">Hot</option>
         </select>
+      </div>
+      <div class="control-group">
+        <label title="Limit the frequency band shown on the spectrogram">Freq Range:</label>
+        <input id="freqMinInput" type="number" min="0" step="100" value="0" title="Minimum displayed frequency (Hz)">
+        <span class="hint">–</span>
+        <input id="freqMaxInput" type="number" min="0" step="100" value="0" title="Maximum displayed frequency (Hz)">
+        <span class="hint">Hz</span>
+        <button id="freqResetBtn" class="secondary" title="Show the full frequency range">Full</button>
       </div>
     </div>
 
@@ -385,7 +404,8 @@ Maintenance Notes:
           <li><strong>Zoom:</strong> Zoom in/out to see more detail or overview (scroll wheel also works)</li>
           <li><strong>Amplitude:</strong> Adjust waveform amplitude scaling (1x to 10x)</li>
           <li><strong>FFT Size:</strong> Control spectrogram frequency resolution (256 to 8192)</li>
-          <li><strong>Color Scale:</strong> Choose color mapping for spectrogram (Viridis, Grayscale, Hot, Cool)</li>
+          <li><strong>Color Scale:</strong> Choose color mapping for spectrogram (Cool, Viridis, Grayscale, Hot)</li>
+          <li><strong>Freq Range:</strong> Limit the spectrogram to a frequency band (min–max Hz); click <em>Full</em> to restore the whole range</li>
         </ul>
 
         <p><strong>Annotation Modes:</strong></p>
@@ -464,7 +484,11 @@ Maintenance Notes:
     let scrollOffset = 0;
     let amplitudeScale = 1;
     let fftSize = 2048;
-    let colorScale = 'cool';
+    let colorScale = 'viridis';
+    // Displayed spectrogram frequency band (Hz). displayFreqMax === null means
+    // "full range" (Nyquist) and is resolved against the loaded audio.
+    let displayFreqMin = 0;
+    let displayFreqMax = null;
 
   // Annotations: array of
   //  - point: {type:'point', time, freq?}
@@ -505,6 +529,9 @@ Maintenance Notes:
     const amplitudeValue = document.getElementById('amplitudeValue');
     const fftSizeSelect = document.getElementById('fftSizeSelect');
     const colorScaleSelect = document.getElementById('colorScaleSelect');
+    const freqMinInput = document.getElementById('freqMinInput');
+    const freqMaxInput = document.getElementById('freqMaxInput');
+    const freqResetBtn = document.getElementById('freqResetBtn');
     const undoBtn = document.getElementById('undoBtn');
     const redoBtn = document.getElementById('redoBtn');
     const clearBtn = document.getElementById('clearBtn');
@@ -520,6 +547,7 @@ Maintenance Notes:
     const statDuration = document.getElementById('statDuration');
     const statSampleRate = document.getElementById('statSampleRate');
     const statChannels = document.getElementById('statChannels');
+    const statBitDepth = document.getElementById('statBitDepth');
     const teachBtn = document.getElementById('teachBtn');
     const teachContent = document.getElementById('teachContent');
 
@@ -538,6 +566,34 @@ Maintenance Notes:
     function formatFrequency(hz) {
       if (hz >= 1000) return (hz / 1000).toFixed(1) + ' kHz';
       return Math.round(hz) + ' Hz';
+    }
+
+    // Resolve the currently displayed spectrogram frequency band, clamped to the
+    // valid [0, Nyquist] range of the loaded audio.
+    function getDisplayFreqRange() {
+      const maxFreq = audioBuffer ? audioBuffer.sampleRate / 2 : 0;
+      let fMin = displayFreqMin || 0;
+      let fMax = (displayFreqMax == null) ? maxFreq : displayFreqMax;
+      fMin = Math.max(0, Math.min(fMin, maxFreq));
+      fMax = Math.max(fMin + 1, Math.min(fMax, maxFreq));
+      return { fMin, fMax, maxFreq };
+    }
+
+    // Update the Freq Range number inputs to reflect the current state and the
+    // Nyquist limit of the loaded audio.
+    function updateFreqRangeControls() {
+      if (!audioBuffer) {
+        freqMinInput.value = 0;
+        freqMaxInput.value = 0;
+        freqMinInput.max = 0;
+        freqMaxInput.max = 0;
+        return;
+      }
+      const { fMin, fMax, maxFreq } = getDisplayFreqRange();
+      freqMinInput.max = maxFreq;
+      freqMaxInput.max = maxFreq;
+      freqMinInput.value = Math.round(fMin);
+      freqMaxInput.value = Math.round(fMax);
     }
 
     function clampScrollOffset() {
@@ -657,29 +713,68 @@ Maintenance Notes:
       return null;
     }
 
+    // Read bits-per-sample from a canonical WAV (fmt chunk). Returns null if not WAV.
+    function getWavBitDepth(arrayBuffer) {
+      const view = new DataView(arrayBuffer);
+      if (view.byteLength < 36) return null;
+      const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+      const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+      if (riff !== 'RIFF' || wave !== 'WAVE') return null;
+      // bitsPerSample lives at byte offset 34 in the canonical fmt chunk
+      const bits = view.getUint16(34, true);
+      return bits > 0 ? bits : null;
+    }
+
+    // Create (or reuse) an AudioContext running at the requested sample rate so
+    // that decodeAudioData keeps the file's native rate instead of resampling to
+    // the hardware rate (which would discard high-frequency content — important
+    // for high-sample-rate bioacoustic/ultrasonic recordings). Falls back to a
+    // default context if the requested rate is unsupported.
+    function ensureAudioContext(desiredRate) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (desiredRate && audioContext && audioContext.sampleRate === desiredRate) {
+        return audioContext;
+      }
+      if (desiredRate) {
+        try {
+          if (audioContext) { try { audioContext.close(); } catch (e) {} }
+          audioContext = new Ctx({ sampleRate: desiredRate });
+          return audioContext;
+        } catch (e) {
+          console.warn('Could not open AudioContext at', desiredRate, 'Hz; using default.', e);
+        }
+      }
+      if (!audioContext) audioContext = new Ctx();
+      return audioContext;
+    }
+
     async function loadAudioFile(file) {
       uploadedFilename = file.name;
-      
-      if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      }
 
       const arrayBuffer = await file.arrayBuffer();
-      
-      // Try to get original sample rate from file headers
+
+      // Try to get original sample rate / bit depth from file headers
       const originalSampleRate = getOriginalSampleRate(arrayBuffer);
-      
+      const bitDepth = getWavBitDepth(arrayBuffer);
+
+      // Open a context at the native rate (when known) before decoding so the
+      // full frequency band is preserved.
+      ensureAudioContext(originalSampleRate);
+
       audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
       // Update stats
       statsPanel.style.display = 'block';
       statDuration.textContent = formatTime(audioBuffer.duration);
-      // Display original sample rate if we could detect it, otherwise show buffer rate
-      if (originalSampleRate) {
-        statSampleRate.textContent = originalSampleRate.toLocaleString() + ' Hz';
+      // The buffer rate drives the spectrogram axis; show it, and note when it
+      // differs from the file's declared rate (i.e. a native open wasn't possible).
+      if (originalSampleRate && originalSampleRate !== audioBuffer.sampleRate) {
+        statSampleRate.textContent = audioBuffer.sampleRate.toLocaleString() + ' Hz (resampled from ' +
+          originalSampleRate.toLocaleString() + ' Hz)';
       } else {
-        statSampleRate.textContent = audioBuffer.sampleRate.toLocaleString() + ' Hz (decoded)';
+        statSampleRate.textContent = audioBuffer.sampleRate.toLocaleString() + ' Hz';
       }
+      statBitDepth.textContent = bitDepth ? (bitDepth + '-bit') : '—';
       statChannels.textContent = audioBuffer.numberOfChannels;
       totalTimeLabel.textContent = formatTime(audioBuffer.duration);
 
@@ -695,6 +790,11 @@ Maintenance Notes:
       zoomLevel = 1;
       scrollOffset = 0;
       currentTime = 0;
+
+      // Reset displayed frequency band to the full range of the new audio
+      displayFreqMin = 0;
+      displayFreqMax = audioBuffer.sampleRate / 2;
+      updateFreqRangeControls();
 
       // Clear spectrogram cache
       spectrogramCache = null;
@@ -975,10 +1075,16 @@ Maintenance Notes:
         ctx.lineTo(x, height);
         ctx.stroke();
 
-        // Draw time label
+        // Draw time label (outlined so it stays legible over bright spectrograms)
         const label = time.toFixed(Math.max(0, -Math.floor(Math.log10(niceInterval)))) + 's';
         const textWidth = ctx.measureText(label).width;
-        ctx.fillText(label, Math.max(0, Math.min(width - textWidth, x - textWidth / 2)), height - 12);
+        const lx = Math.max(0, Math.min(width - textWidth, x - textWidth / 2));
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.strokeText(label, lx, height - 12);
+        ctx.fillText(label, lx, height - 12);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#555';
       }
     }
 
@@ -1022,8 +1128,15 @@ Maintenance Notes:
       const height = spectrogramCanvas.height;
       const ctx = spectrogramCtx;
 
-      // Check if we can use cached spectrogram
-      const cacheKey = `${fftSize}_${colorScale}_${zoomLevel}_${scrollOffset}`;
+      const { fMin, fMax, maxFreq } = getDisplayFreqRange();
+
+      // Snapshot all render-affecting settings up front. The compute yields to the
+      // UI across awaits, during which the user may change a control; using these
+      // locals (not the live globals) keeps a single pass internally consistent.
+      const FS = fftSize, CS = colorScale, ZL = zoomLevel, SO = scrollOffset;
+
+      // Check if we can use cached spectrogram (settings include the displayed band)
+      const cacheKey = `${FS}_${CS}_${ZL}_${SO}_${fMin}_${fMax}`;
       if (spectrogramCacheSettings === cacheKey && spectrogramCache) {
         ctx.putImageData(spectrogramCache, 0, 0);
         drawAnnotationsOnCanvas(ctx, width, height, 'spectrogram');
@@ -1046,137 +1159,231 @@ Maintenance Notes:
       const data = audioBuffer.getChannelData(0);
       const sampleRate = audioBuffer.sampleRate;
       const duration = audioBuffer.duration;
-      const timePerPixel = (duration / zoomLevel) / width;
+      const timePerPixel = (duration / ZL) / width;
 
       const imageData = ctx.createImageData(width, height);
       const pixels = imageData.data;
 
-      const maxFreq = sampleRate / 2;
-      const numBins = fftSize / 2;
+      const numBins = FS / 2;
 
       // Pre-compute Hann window
-      const hannWindow = new Float32Array(fftSize);
-      for (let i = 0; i < fftSize; i++) {
-        hannWindow[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+      const hannWindow = new Float32Array(FS);
+      for (let i = 0; i < FS; i++) {
+        hannWindow[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (FS - 1)));
       }
 
-      // Compute spectrogram with reduced resolution for performance
-      const skipX = Math.max(1, Math.floor(width / 600)); // Max 600 columns
-      
-      for (let x = 0; x < width; x += skipX) {
-        const time = scrollOffset + x * timePerPixel;
+      // Reusable FFT buffers (real signal in `re`, scratch imaginary in `im`)
+      const re = new Float32Array(FS);
+      const im = new Float32Array(FS);
+      const mags = new Float32Array(numBins);
+      const magNorm = 1 / (FS / 2);
+
+      // Pre-map each output row to an FFT bin within the displayed [fMin, fMax] band
+      const binForRow = new Int32Array(height);
+      for (let y = 0; y < height; y++) {
+        const freq = fMin + (1 - y / height) * (fMax - fMin);
+        let bin = Math.round((freq / maxFreq) * numBins);
+        if (bin < 0) bin = 0;
+        if (bin >= numBins) bin = numBins - 1;
+        binForRow[y] = bin;
+      }
+
+      // Compute spectrogram with reduced column resolution for performance
+      const skipX = Math.max(1, Math.floor(width / 600)); // Max ~600 FFT columns
+      const numCols = Math.ceil(width / skipX);
+
+      // Pass 1: FFT each column and store dB per output row, tracking the peak.
+      // The display then auto-scales relative to that peak (relative-dB), which
+      // yields good contrast on a dark background regardless of the recording's
+      // absolute level.
+      const dbGrid = new Float32Array(numCols * height);
+      let maxDb = -Infinity;
+
+      for (let c = 0; c < numCols; c++) {
+        const x = c * skipX;
+        const base = c * height;
+        const time = SO + x * timePerPixel;
         const sampleIndex = Math.floor(time * sampleRate);
-        
-        if (sampleIndex + fftSize >= data.length) {
-          // Fill with black for out of range
-          for (let y = 0; y < height; y++) {
-            const pixelIndex = (y * width + x) * 4;
-            for (let dx = 0; dx < skipX && x + dx < width; dx++) {
-              const idx = pixelIndex + dx * 4;
-              pixels[idx] = 17;
-              pixels[idx + 1] = 17;
-              pixels[idx + 2] = 17;
-              pixels[idx + 3] = 255;
-            }
-          }
+
+        if (sampleIndex < 0 || sampleIndex + FS >= data.length) {
+          for (let y = 0; y < height; y++) dbGrid[base + y] = -Infinity; // no data
           continue;
         }
 
-        // Extract window and apply Hann window
-        const window = new Float32Array(fftSize);
-        for (let i = 0; i < fftSize; i++) {
-          window[i] = data[sampleIndex + i] * hannWindow[i];
+        // Window the signal into the (real) FFT input; clear the imaginary part
+        for (let i = 0; i < FS; i++) {
+          re[i] = data[sampleIndex + i] * hannWindow[i];
+          im[i] = 0;
         }
 
-        // Compute FFT using simplified approach
-        const magnitudes = computeSimplifiedFFT(window);
-
-        // Map to pixels
+        // True radix-2 FFT, then normalized magnitude spectrum -> dB
+        fftInPlace(re, im);
+        for (let b = 0; b < numBins; b++) {
+          mags[b] = Math.sqrt(re[b] * re[b] + im[b] * im[b]) * magNorm;
+        }
         for (let y = 0; y < height; y++) {
-          const freq = (1 - y / height) * maxFreq;
-          const bin = Math.floor((freq / maxFreq) * numBins);
-          
-          if (bin >= 0 && bin < magnitudes.length) {
-            const magnitude = magnitudes[bin];
-            const db = 20 * Math.log10(magnitude + 1e-10);
-            const normalizedDb = Math.max(0, Math.min(1, (db + 100) / 100));
-
-            const color = getColorForValue(normalizedDb, colorScale);
-            
-            // Fill skipped columns with same color
-            for (let dx = 0; dx < skipX && x + dx < width; dx++) {
-              const pixelIndex = (y * width + x + dx) * 4;
-              pixels[pixelIndex] = color.r;
-              pixels[pixelIndex + 1] = color.g;
-              pixels[pixelIndex + 2] = color.b;
-              pixels[pixelIndex + 3] = 255;
-            }
-          }
+          const db = 20 * Math.log10(mags[binForRow[y]] + 1e-10);
+          dbGrid[base + y] = db;
+          if (db > maxDb) maxDb = db;
         }
 
-        // Allow UI updates every 50 columns
-        if (x % 50 === 0) {
+        // Yield to the UI periodically so the page stays responsive
+        if (c % 60 === 0) {
           await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+
+      // Choose the display floor automatically: the background noise dominates
+      // the pixel count, so a high percentile of the dB distribution sits just
+      // above the noise. Mapping [floorDb, maxDb] -> [0,1] sends the background
+      // to the dark end of the color scale and lets real signals stand out,
+      // adapting to each recording's noise level. The range is clamped so the
+      // image is never over- or under-compressed.
+      let floorDb, range;
+      if (!isFinite(maxDb)) {
+        range = 70; floorDb = -70;
+      } else {
+        const HIST = 121; // dB below peak, 1 dB bins (0..120)
+        const hist = new Int32Array(HIST);
+        let total = 0;
+        for (let i = 0; i < dbGrid.length; i++) {
+          const db = dbGrid[i];
+          if (!isFinite(db)) continue;
+          let idx = Math.round(maxDb - db);
+          if (idx < 0) idx = 0; else if (idx >= HIST) idx = HIST - 1;
+          hist[idx]++; total++;
+        }
+        const target = total * 0.85;            // ~85% of pixels -> dark floor
+        let cum = 0, floorIdx = 70;
+        for (let idx = HIST - 1; idx >= 0; idx--) {
+          cum += hist[idx];
+          if (cum >= target) { floorIdx = idx; break; }
+        }
+        range = Math.min(95, Math.max(35, floorIdx));
+        floorDb = maxDb - range;
+      }
+      const invRange = 1 / range;
+      for (let c = 0; c < numCols; c++) {
+        const x = c * skipX;
+        const base = c * height;
+        for (let y = 0; y < height; y++) {
+          const db = dbGrid[base + y];
+          let r, g, b;
+          if (!isFinite(db)) {
+            r = 17; g = 17; b = 17; // out-of-range / no data
+          } else {
+            let norm = (db - floorDb) * invRange;
+            if (norm < 0) norm = 0; else if (norm > 1) norm = 1;
+            const color = getColorForValue(norm, CS);
+            r = color.r; g = color.g; b = color.b;
+          }
+          for (let dx = 0; dx < skipX && x + dx < width; dx++) {
+            const pixelIndex = (y * width + x + dx) * 4;
+            pixels[pixelIndex] = r;
+            pixels[pixelIndex + 1] = g;
+            pixels[pixelIndex + 2] = b;
+            pixels[pixelIndex + 3] = 255;
+          }
         }
       }
 
       ctx.putImageData(imageData, 0, 0);
 
-      // Draw frequency labels
-      ctx.fillStyle = '#fff';
-      ctx.font = '10px monospace';
-      const freqLabels = [0, 1000, 2000, 5000, 10000, 15000, 20000];
-      for (const freq of freqLabels) {
-        if (freq > maxFreq) continue;
-        const y = height * (1 - freq / maxFreq);
-        ctx.fillText(formatFrequency(freq), 5, y - 2);
-      }
-
-      // Draw time axis
-      drawTimeAxis(ctx, width, height, duration, scrollOffset, zoomLevel);
+      // Draw frequency + time axes (using the snapshot so they match the pixels)
+      drawFrequencyAxis(ctx, width, height, fMin, fMax);
+      drawTimeAxis(ctx, width, height, duration, SO, ZL);
 
       // Cache the result
       spectrogramCache = ctx.getImageData(0, 0, width, height);
       spectrogramCacheSettings = cacheKey;
+      isComputingSpectrogram = false;
+
+      // If a control changed while we were computing, this image is stale —
+      // recompute so the view converges to the latest settings.
+      const now = getDisplayFreqRange();
+      if (FS !== fftSize || CS !== colorScale || ZL !== zoomLevel || SO !== scrollOffset ||
+          fMin !== now.fMin || fMax !== now.fMax) {
+        spectrogramCache = null;
+        return computeAndRenderSpectrogram();
+      }
 
       // Draw annotations and cursor
       drawAnnotationsOnCanvas(ctx, width, height, 'spectrogram');
       drawPlaybackCursorOnCanvas(ctx, spectrogramCanvas, 'spectrogram');
-
-      isComputingSpectrogram = false;
     }
 
-    // Simplified FFT - using decimation approach for better performance
-    function computeSimplifiedFFT(signal) {
-      const n = signal.length;
-      const numBins = n / 2;
-      const magnitudes = new Float32Array(numBins);
-      
-      // Simplified DFT for only the bins we need (every 4th for speed)
-      const binStep = Math.max(1, Math.floor(numBins / 256)); // Max 256 bins
-      
-      for (let k = 0; k < numBins; k += binStep) {
-        let real = 0;
-        let imag = 0;
-        
-        // Sample every few points for speed
-        const sampleStep = Math.max(1, Math.floor(n / 512));
-        
-        for (let t = 0; t < n; t += sampleStep) {
-          const angle = -2 * Math.PI * k * t / n;
-          real += signal[t] * Math.cos(angle);
-          imag += signal[t] * Math.sin(angle);
-        }
-        
-        const magnitude = Math.sqrt(real * real + imag * imag) / (n / sampleStep);
-        
-        // Fill adjacent bins with interpolated values
-        for (let dk = 0; dk < binStep && k + dk < numBins; dk++) {
-          magnitudes[k + dk] = magnitude;
+    // In-place iterative radix-2 Cooley–Tukey FFT. `re`/`im` must have a
+    // power-of-two length (all selectable FFT sizes are). Produces an accurate
+    // full-resolution spectrum (no decimation), which removes the aliasing
+    // artifacts of the previous approximate DFT.
+    function fftInPlace(re, im) {
+      const n = re.length;
+      // Bit-reversal permutation
+      for (let i = 1, j = 0; i < n; i++) {
+        let bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) {
+          const tr = re[i]; re[i] = re[j]; re[j] = tr;
+          const ti = im[i]; im[i] = im[j]; im[j] = ti;
         }
       }
-      
-      return magnitudes;
+      for (let len = 2; len <= n; len <<= 1) {
+        const ang = -2 * Math.PI / len;
+        const wRe0 = Math.cos(ang), wIm0 = Math.sin(ang);
+        const half = len >> 1;
+        for (let i = 0; i < n; i += len) {
+          let wRe = 1, wIm = 0;
+          for (let k = 0; k < half; k++) {
+            const aRe = re[i + k], aIm = im[i + k];
+            const cRe = re[i + k + half], cIm = im[i + k + half];
+            const bRe = cRe * wRe - cIm * wIm;
+            const bIm = cRe * wIm + cIm * wRe;
+            re[i + k] = aRe + bRe; im[i + k] = aIm + bIm;
+            re[i + k + half] = aRe - bRe; im[i + k + half] = aIm - bIm;
+            const nwRe = wRe * wRe0 - wIm * wIm0;
+            wIm = wRe * wIm0 + wIm * wRe0; wRe = nwRe;
+          }
+        }
+      }
+    }
+
+    // Choose a "nice" tick spacing (1/2/5 × 10^n) for an axis spanning `span`.
+    function niceTickStep(span, target) {
+      if (span <= 0) return 1;
+      const raw = span / target;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const norm = raw / mag;
+      if (norm <= 1) return mag;
+      if (norm <= 2) return 2 * mag;
+      if (norm <= 5) return 5 * mag;
+      return 10 * mag;
+    }
+
+    // Draw frequency tick marks + outlined labels across the displayed band so
+    // they remain legible over any color scale.
+    function drawFrequencyAxis(ctx, width, height, fMin, fMax) {
+      const span = fMax - fMin;
+      if (span <= 0) return;
+      const step = niceTickStep(span, 8);
+      ctx.font = '10px monospace';
+      const first = Math.ceil(fMin / step) * step;
+      for (let f = first; f <= fMax + 1e-6; f += step) {
+        const y = height * (1 - (f - fMin) / span);
+        if (y < 2 || y > height - 14) continue;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(6, y);
+        ctx.stroke();
+        const label = formatFrequency(f);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+        ctx.strokeText(label, 9, y - 2);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, 9, y - 2);
+      }
     }
 
     function getColorForValue(value, scale) {
@@ -1208,8 +1415,9 @@ Maintenance Notes:
       if (!audioBuffer) return;
 
       const duration = audioBuffer.duration;
-      const sampleRate = audioBuffer.sampleRate;
-      const maxFreq = sampleRate / 2;
+      const { fMin, fMax } = getDisplayFreqRange();
+      const fSpan = fMax - fMin;
+      const freqToY = (f) => height * (1 - (f - fMin) / fSpan);
 
       annotations.forEach((anno, index) => {
         const startX = ((anno.time - scrollOffset) / (duration / zoomLevel)) * width;
@@ -1230,9 +1438,10 @@ Maintenance Notes:
               ctx.stroke();
               ctx.setLineDash([]);
             } else if (canvasType === 'spectrogram') {
-              // Draw dot at (time,freq)
-              if (typeof anno.freq === 'number' && isFinite(anno.freq)) {
-                const y = height * (1 - Math.max(0, Math.min(anno.freq, maxFreq)) / maxFreq);
+              // Draw dot at (time,freq) only when the freq is within the band shown
+              if (typeof anno.freq === 'number' && isFinite(anno.freq) &&
+                  anno.freq >= fMin && anno.freq <= fMax) {
+                const y = freqToY(anno.freq);
                 ctx.fillStyle = '#0ff';
                 ctx.beginPath();
                 ctx.arc(startX, y, 3, 0, Math.PI * 2);
@@ -1257,18 +1466,22 @@ Maintenance Notes:
           }
         } else if (anno.type === 'freqRange' && canvasType === 'spectrogram') {
           if (endX >= 0 && startX <= width) {
-            const y1 = height * (1 - anno.freqMax / maxFreq);
-            const y2 = height * (1 - anno.freqMin / maxFreq);
-            
-            ctx.fillStyle = 'rgba(255, 255, 0, 0.2)';
-            ctx.fillRect(Math.max(0, startX), y1, Math.min(width, endX) - Math.max(0, startX), y2 - y1);
-            ctx.strokeStyle = '#ff0';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(Math.max(0, startX), y1, Math.min(width, endX) - Math.max(0, startX), y2 - y1);
-            
-            ctx.fillStyle = '#ff0';
-            ctx.font = '11px sans-serif';
-            ctx.fillText(`F${index + 1}`, Math.max(2, startX + 3), y1 + 12);
+            // Map to the displayed band and clip vertically to the canvas
+            let y1 = Math.max(0, Math.min(height, freqToY(anno.freqMax)));
+            let y2 = Math.max(0, Math.min(height, freqToY(anno.freqMin)));
+            const boxX = Math.max(0, startX);
+            const boxW = Math.min(width, endX) - boxX;
+            if (y2 > y1 && boxW > 0) {
+              ctx.fillStyle = 'rgba(255, 255, 0, 0.2)';
+              ctx.fillRect(boxX, y1, boxW, y2 - y1);
+              ctx.strokeStyle = '#ff0';
+              ctx.lineWidth = 2;
+              ctx.strokeRect(boxX, y1, boxW, y2 - y1);
+
+              ctx.fillStyle = '#ff0';
+              ctx.font = '11px sans-serif';
+              ctx.fillText(`F${index + 1}`, Math.max(2, startX + 3), y1 + 12);
+            }
           }
         }
 
@@ -1290,10 +1503,9 @@ Maintenance Notes:
       if (!audioBuffer) return 0;
       const rect = canvas.getBoundingClientRect();
       const y = clientY - rect.top;
-      const normalizedY = y / rect.height;
-      const sampleRate = audioBuffer.sampleRate;
-      const maxFreq = sampleRate / 2;
-      return maxFreq * (1 - normalizedY);
+      const normalizedY = Math.max(0, Math.min(1, y / rect.height));
+      const { fMin, fMax } = getDisplayFreqRange();
+      return fMin + (1 - normalizedY) * (fMax - fMin);
     }
 
     function setupCanvasInteractions(canvas, canvasType) {
@@ -1503,6 +1715,40 @@ Maintenance Notes:
       computeAndRenderSpectrogram();
     });
 
+    function applyFreqRangeFromInputs() {
+      if (!audioBuffer) return;
+      const maxFreq = audioBuffer.sampleRate / 2;
+      let lo = parseFloat(freqMinInput.value);
+      let hi = parseFloat(freqMaxInput.value);
+      if (!isFinite(lo)) lo = 0;
+      if (!isFinite(hi)) hi = maxFreq;
+      // Clamp and keep a sane ordering / minimum span
+      lo = Math.max(0, Math.min(lo, maxFreq));
+      hi = Math.max(0, Math.min(hi, maxFreq));
+      if (hi - lo < 1) {
+        // Avoid a zero/negative band: nudge to a small valid window
+        if (lo >= maxFreq) lo = Math.max(0, maxFreq - 1);
+        hi = Math.min(maxFreq, lo + Math.max(1, maxFreq * 0.01));
+      }
+      displayFreqMin = lo;
+      displayFreqMax = hi;
+      updateFreqRangeControls();
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    }
+
+    freqMinInput.addEventListener('change', applyFreqRangeFromInputs);
+    freqMaxInput.addEventListener('change', applyFreqRangeFromInputs);
+
+    freqResetBtn.addEventListener('click', () => {
+      if (!audioBuffer) return;
+      displayFreqMin = 0;
+      displayFreqMax = audioBuffer.sampleRate / 2;
+      updateFreqRangeControls();
+      spectrogramCache = null; // Invalidate cache
+      computeAndRenderSpectrogram();
+    });
+
     // ========== Annotations ==========
     function addAnnotation(annotation) {
       annotations.push(annotation);
@@ -1571,6 +1817,8 @@ Maintenance Notes:
         annotations.splice(op.index, 0, op.annotation);
       } else if (op.type === 'clear') {
         annotations = op.annotations.slice();
+      } else if (op.type === 'replace') {
+        annotations = op.before.slice();
       }
 
       redoStack.push(op);
@@ -1589,6 +1837,8 @@ Maintenance Notes:
         if (index >= 0) annotations.splice(index, 1);
       } else if (op.type === 'clear') {
         annotations = [];
+      } else if (op.type === 'replace') {
+        annotations = op.after.slice();
       }
 
       undoStack.push(op);
@@ -1677,59 +1927,117 @@ Maintenance Notes:
       await importAnnotationsFile(file, replace);
     });
 
+    // Validate/normalize one imported record into a known marker shape.
+    // Returns null for anything unrecognized so bad rows are skipped, not stored.
+    function sanitizeAnnotation(a) {
+      if (!a || typeof a !== 'object') return null;
+      const time = Number(a.time);
+      if (!isFinite(time)) return null;
+      const label = (a.label != null && a.label !== '') ? String(a.label) : undefined;
+
+      if (a.type === 'point') {
+        const out = { type: 'point', time };
+        const f = Number(a.freq);
+        if (a.freq != null && a.freq !== '' && isFinite(f)) out.freq = f;
+        if (label) out.label = label;
+        return out;
+      } else if (a.type === 'timeRange') {
+        const endTime = Number(a.endTime);
+        if (!isFinite(endTime)) return null;
+        const out = { type: 'timeRange', time: Math.min(time, endTime), endTime: Math.max(time, endTime) };
+        if (label) out.label = label;
+        return out;
+      } else if (a.type === 'freqRange') {
+        const endTime = Number(a.endTime), fmin = Number(a.freqMin), fmax = Number(a.freqMax);
+        if (!isFinite(endTime) || !isFinite(fmin) || !isFinite(fmax)) return null;
+        const out = {
+          type: 'freqRange',
+          time: Math.min(time, endTime), endTime: Math.max(time, endTime),
+          freqMin: Math.min(fmin, fmax), freqMax: Math.max(fmin, fmax)
+        };
+        if (label) out.label = label;
+        return out;
+      }
+      return null;
+    }
+
+    // Split one CSV line, honoring double-quoted fields (and "" escapes).
+    function parseCsvLine(line) {
+      const out = [];
+      let cur = '', inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (inQuotes) {
+          if (c === '"') {
+            if (line[i + 1] === '"') { cur += '"'; i++; }
+            else inQuotes = false;
+          } else cur += c;
+        } else if (c === '"') {
+          inQuotes = true;
+        } else if (c === ',') {
+          out.push(cur); cur = '';
+        } else cur += c;
+      }
+      out.push(cur);
+      return out;
+    }
+
     async function importAnnotationsFile(file, replace) {
       try {
         const text = await file.text();
         const isJson = /\.json$/i.test(file.name) || /json/.test(file.type);
+        let rawItems = [];
 
         if (isJson) {
           const data = JSON.parse(text);
-          const imported = data.annotations || data;
-          
-          if (replace) {
-            annotations = imported;
-          } else {
-            annotations = annotations.concat(imported);
-          }
+          rawItems = Array.isArray(data) ? data
+                   : (data && Array.isArray(data.annotations)) ? data.annotations
+                   : [];
         } else {
-          // CSV
+          // CSV: type,time,end_time,freq_min,freq_max,label
           const lines = text.split(/\r?\n/).filter(l => l.trim());
-          const header = lines[0].split(',');
-          const rows = lines.slice(1);
-
-          const imported = rows.map(line => {
-            const cols = line.split(',');
-            const anno = {
-              type: cols[0] || 'point',
-              time: parseFloat(cols[1]) || 0
-            };
-
-            if (anno.type === 'point') {
-              // For point, we store optional frequency in freq_min column (index 3)
-              if (cols[3]) anno.freq = parseFloat(cols[3]);
-              if (cols[5]) anno.label = cols[5];
-            } else if (anno.type === 'timeRange') {
-              if (cols[2]) anno.endTime = parseFloat(cols[2]);
-              if (cols[5]) anno.label = cols[5];
-            } else if (anno.type === 'freqRange') {
-              if (cols[2]) anno.endTime = parseFloat(cols[2]);
-              if (cols[3]) anno.freqMin = parseFloat(cols[3]);
-              if (cols[4]) anno.freqMax = parseFloat(cols[4]);
-              if (cols[5]) anno.label = cols[5];
+          // Drop a header row only if it actually looks like one.
+          const startIdx = (lines[0] && /^\s*type\s*,/i.test(lines[0])) ? 1 : 0;
+          rawItems = lines.slice(startIdx).map(line => {
+            const cols = parseCsvLine(line).map(c => c.trim());
+            const type = cols[0] || 'point';
+            const anno = { type, time: parseFloat(cols[1]) };
+            if (type === 'point') {
+              if (cols[3] !== '' && cols[3] != null) anno.freq = parseFloat(cols[3]);
+            } else if (type === 'timeRange') {
+              anno.endTime = parseFloat(cols[2]);
+            } else if (type === 'freqRange') {
+              anno.endTime = parseFloat(cols[2]);
+              anno.freqMin = parseFloat(cols[3]);
+              anno.freqMax = parseFloat(cols[4]);
             }
-
+            if (cols[5]) anno.label = cols[5];
             return anno;
           });
-
-          if (replace) {
-            annotations = imported;
-          } else {
-            annotations = annotations.concat(imported);
-          }
         }
+
+        const imported = rawItems.map(sanitizeAnnotation).filter(Boolean);
+        const skipped = rawItems.length - imported.length;
+
+        if (imported.length === 0) {
+          alert('No valid annotations found in the file.' +
+                (skipped ? ` (${skipped} row(s) could not be parsed.)` : ''));
+          return;
+        }
+
+        const before = annotations.slice();
+        const after = replace ? imported : annotations.concat(imported);
+        annotations = after;
+        // Record as an undoable replacement
+        undoStack.push({ type: 'replace', before, after: after.slice() });
+        redoStack.length = 0;
 
         updateAnnotationsList();
         drawPlaybackCursor();
+
+        if (skipped) {
+          console.warn(`Imported ${imported.length} annotation(s); skipped ${skipped} invalid row(s).`);
+        }
       } catch (err) {
         console.error('Import failed:', err);
         alert('Failed to import annotations: ' + err.message);
