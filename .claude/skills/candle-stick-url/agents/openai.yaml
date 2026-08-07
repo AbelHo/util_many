@@ -1,0 +1,4 @@
+interface:
+  display_name: "Candle-Stick URL"
+  short_description: "Create shareable OHLCV candlestick URLs"
+  default_prompt: "Use $candle-stick-url to turn OHLCV data into a shareable candlestick-chart URL."
