@@ -627,7 +627,7 @@ async function inspectVideoFPS(file) {
           cursor += take*8;
           entries += take;
         }
-        if (totalSamples && totalTicks) {
+        if (totalSamples > 1 && totalTicks) {
           const avg = totalTicks/totalSamples;
           const cv = Math.sqrt(Math.max(0,sumSq/totalSamples-avg*avg))/avg;
           const found = result(timescale/avg, 'MP4/MOV sample timing (stts)', cv > 0.02);
@@ -635,7 +635,7 @@ async function inspectVideoFPS(file) {
         }
       }
     }
-    matches.sort((a,b)=>(b.width||0)-(a.width||0) || b.sampleCount-a.sampleCount);
+    matches.sort((a,b)=>b.sampleCount-a.sampleCount || (b.width||0)-(a.width||0));
     return matches[0] || null;
   }
 
@@ -918,7 +918,14 @@ async function inspectVideoFPS(file) {
 
     // Use exactly the same FPS-detection path as the file picker.
     const videoFile = files.find(file => file.type.startsWith('video/') || /\.(mp4|mov|m4v|3gp|3g2|avi|webm|mkv|ogv|mpeg|mpg|ts|mts|m2t|m2ts|mxf|wmv|flv|vob)$/i.test(file.name));
-    if (videoFile) loadVideoFile(videoFile);
+    if (videoFile) {
+      try {
+        const transfer = new DataTransfer();
+        transfer.items.add(videoFile);
+        fileInput.files = transfer.files;
+      } catch (_) { /* Some browsers disallow programmatic file-picker updates. */ }
+      loadVideoFile(videoFile);
+    }
 
     // Handle annotation files (all .json/.csv)
     const annoFiles = files.filter(file => /\.(json|csv)$/i.test(file.name) || /json|csv/.test(file.type));
@@ -1723,7 +1730,18 @@ async function inspectVideoFPS(file) {
 
   // Manual changes must never be overwritten by an in-flight metadata probe.
   fpsWarn.addEventListener('dblclick', () => fpsInput.focus());
-  fpsInput.addEventListener('input', () => { fpsUserEdited = true; fpsWarn.style.visibility = 'hidden'; updateFrameLabels(); });
+  fpsInput.addEventListener('input', () => {
+    fpsUserEdited = true;
+    const fps = Number(fpsInput.value);
+    const valid = fpsInput.value.trim() !== '' && Number.isFinite(fps) && fps >= 0.1 && fps <= 1000;
+    fpsWarn.style.visibility = valid ? 'hidden' : 'visible';
+    if (!valid) {
+      fpsWarn.textContent = '⚠';
+      fpsWarn.style.color = '#b45309';
+      fpsWarn.title = 'Enter a valid FPS between 0.1 and 1000. Until then, detection or fallback FPS is used.';
+    }
+    updateFrameLabels();
+  });
 
   // small UI update loop to keep labels updated when video playing or seeking
   setInterval(() => {
