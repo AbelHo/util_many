@@ -15,12 +15,12 @@ Key Features:
 - Tag names (tag_name) are editable and exported/imported in both JSON and CSV; tag keys are case-sensitive
 - Export annotations as JSON (with metadata and all marker types) or CSV (one row per marker, type, coordinates, color, tag, tag_name)
 - Import annotations from JSON or CSV files, with option to merge or replace existing; tag_name and color are preserved if present
-- FPS is estimated but user-editable; accurate FPS is critical for correct frame mapping
+- FPS is read from MP4/MOV, WebM/MKV or AVI timing metadata when possible; otherwise sampled from decoded frame presentation timestamps. User override and VFR warnings are supported
 - Minimal CSS, no dependencies, no build step
 
 Usage Instructions:
 - Open the HTML file in a browser
-- Load a video, set FPS if needed
+- Load a video; FPS is detected automatically where possible, and can be overridden manually
 - Select annotation mode, annotate frames as needed
 - Use Undo/Redo, clear, and export as required
 - Use the Tags UI to edit tag names, colors, and alpha; changes apply to all markers with that tag
@@ -60,7 +60,7 @@ Maintenance Notes:
   <div class="row">
     <input id="fileInput" type="file" accept="video/*" />
     <label><input id="frameStepInput" type="number" value="1" min="1" style="width:80px"> frames per step</label>
-    <label title="Estimated FPS (editable)" style="color:red;"><strong>FPS:</strong> <input id="fpsInput" type="number" step="0.01" style="width:80px"> <span id="fpsWarn" style="margin-left:6px; visibility:hidden;" title="FPS is estimated — double-click to edit">⚠</span></label>
+    <label title="Detected FPS (editable)"><strong>FPS:</strong> <input id="fpsInput" type="number" min="0.1" max="1000" step="any" style="width:100px"> <span id="fpsWarn" role="status" aria-live="polite" style="margin-left:6px; visibility:hidden;" title="FPS detection status"></span></label>
   </div>
   <div class="row">
     <strong>Annotation Mode:</strong>
@@ -442,24 +442,11 @@ Maintenance Notes:
     return frame;
   }
 
-  // Heuristic to estimate fps from media (some videos don't expose fps); fallback to 25
+  // User edits take priority over the file's timing metadata.
   function estimateFPS() {
-    // Prefer user-entered FPS, then detectedFPS, otherwise fallback to 25
     const user = parseFloat(fpsInput.value);
-    if (isFinite(user) && user > 0) return user;
-    if (detectedFPS && isFinite(detectedFPS) && detectedFPS > 0) return detectedFPS;
-    const defaultFPS = 25;
-    // Try to infer from video.getVideoPlaybackQuality() if available (best-effort)
-    try {
-      if (video.getVideoPlaybackQuality) {
-        const q = video.getVideoPlaybackQuality();
-        if (q && q.totalVideoFrames && video.duration) {
-          const guessed = q.totalVideoFrames / video.duration;
-          if (isFinite(guessed) && guessed > 1 && guessed < 1000) return Math.round(guessed);
-        }
-      }
-    } catch(e) {}
-    return defaultFPS;
+    if (Number.isFinite(user) && user >= 0.1 && user <= 1000) return user;
+    return Number.isFinite(detectedFPS) && detectedFPS > 0 ? detectedFPS : 25;
   }
 
   // Seek to a specific frame index
@@ -470,7 +457,7 @@ Maintenance Notes:
 
   function updateFrameLabels() {
     const fps = estimateFPS();
-    const totalFrames = Math.max(0, Math.round(video.duration * fps));
+    const totalFrames = Number.isFinite(video.duration) && video.duration >= 0 ? Math.max(0, Math.round(video.duration * fps)) : 0;
     frameCountLabel.textContent = totalFrames;
     frameIndexLabel.textContent = getCurrentFrameIndex();
     // Update scrub slider and time labels
@@ -561,52 +548,364 @@ Maintenance Notes:
     });
   }
 
-  // File input
-  fileInput.addEventListener('change', (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    uploadedFilename = file.name;
-    const url = URL.createObjectURL(file);
-    video.src = url;
-    video.load();
-    video.addEventListener('loadedmetadata', () => {
-      resetCanvasSize();
-      // Attempt to read FPS from file metadata if available via mediaTracks (some browsers expose frameRate)
-      detectedFPS = null;
-      try {
-        const tracks = video.webkitVideoDecodedByteCount !== undefined ? video.webkitDecodedFrameCount : null;
-      } catch(e) {}
-      // Some browsers expose frameRate on the first video track via mediaStreamTrack.getSettings (rare on local files)
-      // We'll also try to probe playback quality after a short play to populate totalVideoFrames
-      drawFrameOverlay();
-      updateFrameLabels();
-      // quick probe: play briefly muted to let getVideoPlaybackQuality gather frames
-      const probe = async () => {
-        try {
-          video.muted = true;
-          await video.play();
-          await new Promise(r => setTimeout(r, 200));
-          video.pause();
-          video.muted = false;
-          // try to compute fps from playbackQuality
-          if (video.getVideoPlaybackQuality) {
-            const q = video.getVideoPlaybackQuality();
-            if (q && q.totalVideoFrames && video.duration) {
-              const guessed = q.totalVideoFrames / video.duration;
-              if (isFinite(guessed) && guessed > 1 && guessed < 1000) detectedFPS = Math.round(guessed);
+  // FPS detection reads the selected local File without uploading it.
+  // FPS probe for a local File. Reads bounded header ranges rather than decoding or uploading the video.
+async function inspectVideoFPS(file) {
+  const name = (file.name || '').toLowerCase();
+  const bytes = async (a, b) => new DataView(await file.slice(a, b).arrayBuffer());
+  const fourcc = (v, p) => String.fromCharCode(v.getUint8(p),v.getUint8(p+1),v.getUint8(p+2),v.getUint8(p+3));
+  const valid = fps => Number.isFinite(fps) && fps >= 0.1 && fps <= 1000;
+  const result = (fps, source, variable=false) => valid(fps) ? { fps, source, variable, reliable: !variable } : null;
+
+  async function* mp4Boxes(start, end) {
+    let p = start, n = 0;
+    while (p + 8 <= end && ++n < 100000) {
+      const h = await bytes(p, Math.min(end, p + 16));
+      if (h.byteLength < 8) break;
+      let size = h.getUint32(0), header = 8;
+      const type = fourcc(h, 4);
+      if (size === 1) {
+        if (h.byteLength < 16) break;
+        size = h.getUint32(8) * 4294967296 + h.getUint32(12);
+        header = 16;
+      } else if (size === 0) size = end - p;
+      if (!Number.isSafeInteger(size) || size < header || p + size > end) break;
+      yield { type, start: p, body: p + header, end: p + size };
+      p += size;
+    }
+  }
+  async function mp4() {
+    const matches = [];
+    for await (const root of mp4Boxes(0, file.size)) {
+      if (root.type !== 'moov') continue;
+      for await (const trak of mp4Boxes(root.body, root.end)) {
+        if (trak.type !== 'trak') continue;
+        let handler = '', timescale = 0, stts = null, width = 0;
+        for await (const t of mp4Boxes(trak.body, trak.end)) {
+          if (t.type === 'tkhd') {
+            const v = await bytes(t.body, Math.min(t.end, t.body + 96));
+            // Fixed 16.16 track display dimensions at end of tkhd (v0/v1).
+            const pos = v.byteLength >= 84 && v.getUint8(0) === 1 ? 88 : 76;
+            if (v.byteLength >= pos+4) width = v.getUint32(pos) / 65536;
+          }
+          if (t.type !== 'mdia') continue;
+          for await (const m of mp4Boxes(t.body, t.end)) {
+            if (m.type === 'hdlr') {
+              const v = await bytes(m.body, Math.min(m.end, m.body + 12));
+              if (v.byteLength >= 12) handler = fourcc(v, 8);
+            } else if (m.type === 'mdhd') {
+              const v = await bytes(m.body, Math.min(m.end, m.body + 28));
+              const off = v.byteLength && v.getUint8(0) === 1 ? 20 : 12;
+              if (v.byteLength >= off + 4) timescale = v.getUint32(off);
+            } else if (m.type === 'minf') {
+              for await (const minf of mp4Boxes(m.body, m.end)) {
+                if (minf.type !== 'stbl') continue;
+                for await (const atom of mp4Boxes(minf.body, minf.end)) {
+                  if (atom.type === 'stts') stts = atom;
+                }
+              }
             }
           }
-        } catch(e) {
-          // ignore probe errors
         }
-        updateFrameLabels();
-        drawFrameOverlay();
-        // reflect detectedFPS in UI
-        if (detectedFPS) { fpsInput.value = detectedFPS; fpsWarn.style.visibility = 'visible'; }
-      };
-      probe();
-    }, { once: true });
+        if (handler !== 'vide' || !timescale || !stts) continue;
+        const head = await bytes(stts.body, Math.min(stts.end, stts.body+8));
+        if (head.byteLength < 8) continue;
+        const groups = head.getUint32(4);
+        if (!groups || stts.body + 8 + groups*8 > stts.end) continue;
+        let totalSamples = 0, totalTicks = 0, sumSq=0, entries = 0;
+        let cursor = stts.body + 8;
+        while (entries < groups) {
+          const take = Math.min(8192, groups - entries);
+          const chunk = await bytes(cursor, cursor+take*8);
+          for (let i=0; i<take; i++) {
+            const count=chunk.getUint32(i*8), delta=chunk.getUint32(i*8+4);
+            if (!count || !delta) continue;
+            totalSamples += count;
+            totalTicks += count*delta;
+            sumSq += count*delta*delta;
+          }
+          cursor += take*8;
+          entries += take;
+        }
+        if (totalSamples && totalTicks) {
+          const avg = totalTicks/totalSamples;
+          const cv = Math.sqrt(Math.max(0,sumSq/totalSamples-avg*avg))/avg;
+          const found = result(timescale/avg, 'MP4/MOV sample timing (stts)', cv > 0.02);
+          if (found) matches.push({...found, width, sampleCount:totalSamples});
+        }
+      }
+    }
+    matches.sort((a,b)=>(b.width||0)-(a.width||0) || b.sampleCount-a.sampleCount);
+    return matches[0] || null;
+  }
+
+  function ebmlVint(v, at, preserveId=false) {
+    if (at >= v.byteLength) return null;
+    const first=v.getUint8(at);
+    if (!first) return null;
+    let len=1, bit=0x80;
+    while (!(first & bit) && len<=8) { bit>>=1; len++; }
+    if (len>8 || at+len>v.byteLength) return null;
+    let num = preserveId ? first : first & (bit-1);
+    for (let i=1;i<len;i++) num=num*256+v.getUint8(at+i);
+    return {value:num,length:len};
+  }
+  function ebmlUint(v,a,b) {
+    if (b-a > 6 || a>=b) return null;
+    let n=0; for (let i=a;i<b;i++) n=n*256+v.getUint8(i); return n;
+  }
+  function ebmlChildren(v, a, b, visit) {
+    let p=a, iterations=0;
+    while (p<b && ++iterations<500000) {
+      const id=ebmlVint(v,p,true); if(!id)break;
+      const sz=ebmlVint(v,p+id.length);if(!sz)break;
+      const body=p+id.length+sz.length, end=body+sz.value;
+      if (end > b || end <= p || !Number.isSafeInteger(end)) break;
+      visit(id.value,body,end);
+      p=end;
+    }
+  }
+  async function webm() {
+    const v=await bytes(0,Math.min(file.size, 8*1024*1024));
+    if (v.byteLength < 8 || v.getUint32(0)!==0x1A45DFA3) return null;
+    let scale=1000000, videoTrack=null, defaultDuration=null;
+    const times=[];
+    function inCluster(a,b) {
+      let clusterTime=0;
+      ebmlChildren(v,a,b,(id,x,y)=>{
+        if (id===0xE7) clusterTime=ebmlUint(v,x,y) || 0;
+      });
+      ebmlChildren(v,a,b,(id,x,y)=>{
+        if (id!==0xA3 && id!==0xA0) return;
+        const block=(aa,bb)=>{
+          const track=ebmlVint(v,aa); if(!track || aa+track.length+3>bb || track.value!==videoTrack) return;
+          const t=v.getInt16(aa+track.length);
+          times.push((clusterTime+t)*scale/1e9);
+        };
+        if(id===0xA3) block(x,y);
+        else ebmlChildren(v,x,y,(bid,bx,by)=>{if(bid===0xA1) block(bx,by);});
+      });
+    }
+    function segment(a,b) {
+      const clusters=[];
+      ebmlChildren(v,a,b,(id,x,y)=>{
+        if (id===0x1549A966) ebmlChildren(v,x,y,(k,l,r)=>{if(k===0x2AD7B1)scale=ebmlUint(v,l,r)||scale;});
+        else if (id===0x1654AE6B) ebmlChildren(v,x,y,(k,l,r)=>{
+          if (k!==0xAE) return;
+          let type=null, num=null, dur=null;
+          ebmlChildren(v,l,r,(k2,l2,r2)=>{
+            if(k2===0x83)type=ebmlUint(v,l2,r2);
+            else if(k2===0xD7)num=ebmlUint(v,l2,r2);
+            else if(k2===0x23E383)dur=ebmlUint(v,l2,r2);
+          });
+          if(type===1 && videoTrack===null) {videoTrack=num;defaultDuration=dur;}
+        });
+        else if (id===0x1F43B675 && clusters.length<8) clusters.push([x,y]);
+      });
+      if (!defaultDuration && videoTrack!==null) for (const [x,y] of clusters) inCluster(x,y);
+    }
+    // Unknown-size segment is common; handle it without assuming its length fits the byte prefix.
+    let p=0;
+    while (p+8<=v.byteLength) {
+      const id=ebmlVint(v,p,true), sz=id && ebmlVint(v,p+id.length);
+      if(!sz)break;
+      const a=p+id.length+sz.length;
+      const allOnes=sz.value===Math.pow(2,7*sz.length)-1;
+      const b=allOnes ? v.byteLength : Math.min(v.byteLength,a+sz.value);
+      if(id.value===0x18538067) {segment(a,b);break;}
+      if(b<=p)break;p=b;
+    }
+    if(defaultDuration) return result(1e9/defaultDuration,'WebM/MKV track duration');
+    const ds=[];
+    times.sort((a,b)=>a-b);
+    for(let i=1;i<times.length;i++) {const d=times[i]-times[i-1];if(d>0.001 && d<10)ds.push(d);}
+    if(ds.length<5) return null;
+    ds.sort((a,b)=>a-b);
+    // Decode / timestamp gaps can be multiples of the frame period; use shorter half.
+    const short=ds.slice(0,Math.max(3,Math.ceil(ds.length/2)));
+    const median=short[Math.floor(short.length/2)];
+    return result(1/median,'WebM/MKV presentation timestamps',ds[ds.length-1]/median>1.1);
+  }
+  async function avi() {
+    const v=await bytes(0,Math.min(file.size,16*1024*1024));
+    if(v.byteLength<12 || fourcc(v,0)!=='RIFF' || fourcc(v,8)!=='AVI ')return null;
+    let detected=null;
+    function chunks(a,b,depth) {
+      if(depth>8)return;
+      let p=a;
+      while(p+8<=b) {
+        const kind=fourcc(v,p),len=v.getUint32(p+4,true);
+        const end=p+8+len;
+        if(!Number.isSafeInteger(end) || end>b || end<=p)break;
+        if ((kind==='RIFF'||kind==='LIST')&&len>=4) {
+          const label=fourcc(v,p+8);
+          if(label==='hdrl'||label==='strl')chunks(p+12,end,depth+1);
+        } else if(kind==='strh' && len>=28 && fourcc(v,p+8)==='vids') {
+          const scale=v.getUint32(p+8+20,true),rate=v.getUint32(p+8+24,true);
+          if(scale && !detected)detected=result(rate/scale,'AVI stream header');
+        }
+        p=end+(len&1);
+      }
+    }
+    chunks(12,v.byteLength,0);
+    return detected;
+  }
+
+  try {
+    const lead=await bytes(0,Math.min(12,file.size));
+    if(lead.byteLength>=8 && ['ftyp','moov','wide','free'].includes(fourcc(lead,4)))return await mp4();
+    if(lead.byteLength>=4 && lead.getUint32(0)===0x1A45DFA3)return await webm();
+    if(lead.byteLength>=12 && fourcc(lead,0)==='RIFF')return await avi();
+    // MOV sometimes begins with non-standard quicktime boxes, including 'skip'.
+    if(/\.(mov|mp4|m4v|3gp|heic)$/i.test(name))return await mp4();
+  } catch(err) { console.warn('FPS metadata read failed:',err); }
+  return null;
+}
+
+  let fpsFileUrl = null;
+  let fpsLoadSequence = 0;
+  let fpsUserEdited = false;
+
+  function showFPSResult(info) {
+    if (fpsUserEdited) return;
+    const fps = info && Number(info.fps);
+    const usable = Number.isFinite(fps) && fps >= 0.1 && fps <= 1000;
+    detectedFPS = usable ? fps : null;
+    // Keep fractional NTSC rates (e.g. 30000/1001), instead of rounding to an integer.
+    fpsInput.value = usable ? String(Number(fps.toFixed(6))) : '25';
+    const decoderProblem = Boolean(video.error);
+    const uncertain = !usable || !info.reliable || decoderProblem;
+    fpsWarn.textContent = uncertain ? '⚠' : '✓';
+    fpsWarn.style.visibility = 'visible';
+    fpsWarn.style.color = uncertain ? '#b45309' : '#047857';
+    const explanation = !usable
+      ? 'Cannot determine FPS from the file or decoded frames. 25 is a fallback, NOT a detected FPS. Edit FPS manually.'
+      : info.variable
+        ? `Variable frame rate: ${fps.toFixed(6)} is an average from ${info.source}. A single FPS cannot precisely map every frame. Manual FPS is available.`
+        : `${fps.toFixed(6)} FPS detected from ${info.source}${info.reliable ? '' : ' (estimated; verify if frame accuracy matters)'}. You can edit FPS manually.`;
+    const fullExplanation = explanation + (decoderProblem ? ' This browser cannot decode the video; try transcoding to a supported codec/container.' : '');
+    fpsWarn.title = fullExplanation;
+    fpsInput.title = fullExplanation;
+    fpsInput.placeholder = '';
+    updateFrameLabels();
+  }
+
+  // For formats without readable timing metadata, use *presentation timestamps* of
+  // decoded frames. Unlike playback frame counts / entire video duration, this
+  // measures the actual interval between adjacent presented video frames.
+  async function probeDecodedFPS(loadId) {
+    if (!video.requestVideoFrameCallback || loadId !== fpsLoadSequence) return null;
+    if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
+      await Promise.race([
+        new Promise(resolve => {
+          video.addEventListener('loadedmetadata', resolve, { once: true });
+          video.addEventListener('error', resolve, { once: true });
+        }),
+        new Promise(resolve => setTimeout(resolve, 5000))
+      ]);
+    }
+    if (loadId !== fpsLoadSequence || video.error || video.readyState < 1) return null;
+    const startedTime = video.currentTime;
+    const wasPaused = video.paused;
+    const wasMuted = video.muted;
+    let intervened = false;
+    const markInteraction = () => { intervened = true; };
+    document.addEventListener('pointerdown', markInteraction, { capture: true });
+    document.addEventListener('keydown', markInteraction, { capture: true });
+    let frameCallbackId = null;
+    const seen = [];
+    try {
+      if (wasPaused) {
+        video.muted = true;
+        await video.play();
+      }
+      await new Promise(resolve => {
+        let timer = null;
+        const finish = () => {
+          clearTimeout(timer);
+          if (frameCallbackId !== null && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameCallbackId);
+          frameCallbackId = null;
+          resolve();
+        };
+        const frame = (_now, metadata) => {
+          if (loadId !== fpsLoadSequence || intervened) { finish(); return; }
+          const timestamp = metadata && metadata.mediaTime;
+          if (Number.isFinite(timestamp) && (!seen.length || timestamp !== seen[seen.length-1])) seen.push(timestamp);
+          if (seen.length >= 65) finish();
+          else frameCallbackId = video.requestVideoFrameCallback(frame);
+        };
+        timer = setTimeout(finish, 2000);
+        frameCallbackId = video.requestVideoFrameCallback(frame);
+      });
+    } catch (_) {
+      // Browser may block autoplay or refuse to decode an unsupported container.
+    } finally {
+      document.removeEventListener('pointerdown', markInteraction, true);
+      document.removeEventListener('keydown', markInteraction, true);
+      if (loadId === fpsLoadSequence && wasPaused && !intervened) {
+        video.pause();
+        video.muted = wasMuted;
+        if (Number.isFinite(startedTime)) video.currentTime = startedTime;
+      } else if (loadId === fpsLoadSequence && wasPaused) {
+        // Don't undo a user's deliberate playback/seek interaction.
+        video.muted = wasMuted;
+      }
+    }
+    if (loadId !== fpsLoadSequence || seen.length < 8) return null;
+    const gaps = [];
+    for (let i = 1; i < seen.length; i++) {
+      const delta = seen[i] - seen[i-1];
+      if (delta > 0.001 && delta < 10) gaps.push(delta);
+    }
+    if (gaps.length < 7) return null;
+    gaps.sort((a,b)=>a-b);
+    // Drop long gaps caused by skipped rendering, then take the median.
+    const small = gaps.slice(0, Math.max(4, Math.ceil(gaps.length / 2)));
+    const delta = small[Math.floor(small.length/2)];
+    const fps = 1 / delta;
+    if (!Number.isFinite(fps) || fps < 0.1 || fps > 1000) return null;
+    return { fps, source: 'decoded presentation timestamps', reliable: false,
+      variable: gaps[Math.floor(gaps.length * 0.75)] > delta * 1.12 };
+  }
+
+  async function loadVideoFile(file) {
+    if (!file) return;
+    const loadId = ++fpsLoadSequence;
+    video.pause();
+    if (fpsFileUrl) URL.revokeObjectURL(fpsFileUrl);
+    uploadedFilename = file.name;
+    detectedFPS = null;
+    fpsUserEdited = false;
+    fpsInput.value = '';
+    fpsInput.placeholder = 'Detecting…';
+    fpsWarn.textContent = '…';
+    fpsWarn.style.color = '#666';
+    fpsWarn.style.visibility = 'visible';
+    fpsWarn.title = 'Reading the video timing information…';
+    fpsFileUrl = URL.createObjectURL(file);
+    video.src = fpsFileUrl;
+    video.load();
+    let found = await inspectVideoFPS(file);
+    if (loadId !== fpsLoadSequence) return;
+    if (!found) found = await probeDecodedFPS(loadId);
+    if (loadId !== fpsLoadSequence) return;
+    showFPSResult(found);
+  }
+
+  video.addEventListener('loadedmetadata', () => {
+    resetCanvasSize();
+    drawFrameOverlay();
+    updateFrameLabels();
   });
+  video.addEventListener('error', () => {
+    if (video.error) {
+      fpsWarn.style.visibility = 'visible';
+      fpsWarn.textContent = '⚠';
+      fpsWarn.style.color = '#b45309';
+      fpsWarn.title = 'The browser cannot decode this video. FPS metadata may still be readable. Convert the video to a browser-supported codec/container to annotate it.';
+    }
+  });
+  fileInput.addEventListener('change', e => loadVideoFile(e.target.files && e.target.files[0]));
 
   // Drag & drop support for the whole document
   ['dragenter','dragover'].forEach(evt => document.addEventListener(evt, (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }));
@@ -615,16 +914,9 @@ Maintenance Notes:
     const files = Array.from(e.dataTransfer.files || []);
     if (!files.length) return;
 
-    // Handle video files (first one)
-    const videoFile = files.find(file => file.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/i.test(file.name));
-    if (videoFile) {
-      fileInput.files = e.dataTransfer.files; // keep default behavior
-      uploadedFilename = videoFile.name;
-      const url = URL.createObjectURL(videoFile);
-      video.src = url;
-      video.load();
-      video.addEventListener('loadedmetadata', () => { resetCanvasSize(); drawFrameOverlay(); updateFrameLabels(); }, { once: true });
-    }
+    // Use exactly the same FPS-detection path as the file picker.
+    const videoFile = files.find(file => file.type.startsWith('video/') || /\\.(mp4|mov|m4v|3gp|avi|webm|mkv|ogv|mpeg|mpg|ts|m2ts)$/i.test(file.name));
+    if (videoFile) loadVideoFile(videoFile);
 
     // Handle annotation files (all .json/.csv)
     const annoFiles = files.filter(file => /\.(json|csv)$/i.test(file.name) || /json|csv/.test(file.type));
@@ -705,6 +997,8 @@ Maintenance Notes:
       // If FPS exists in meta, set it (hint only)
       if (data.meta && data.meta.fps && isFinite(data.meta.fps)) {
         fpsInput.value = Number(data.meta.fps);
+        fpsUserEdited = true;
+        fpsWarn.style.visibility = 'hidden';
       }
     } else if (data && typeof data === 'object') {
       Object.keys(data).forEach(k => {
@@ -1425,9 +1719,9 @@ Maintenance Notes:
   });
   firstFrameBtn.addEventListener('click', () => { seekToFrame(0); });
 
-  // Show FPS warning on hover (tooltip handled by title); make icon visible if fps is estimated
-  fpsWarn.addEventListener('dblclick', () => { fpsInput.removeAttribute('readonly'); fpsInput.focus(); });
-  fpsInput.addEventListener('input', () => { fpsWarn.style.visibility = 'hidden'; });
+  // Manual changes must never be overwritten by an in-flight metadata probe.
+  fpsWarn.addEventListener('dblclick', () => fpsInput.focus());
+  fpsInput.addEventListener('input', () => { fpsUserEdited = true; fpsWarn.style.visibility = 'hidden'; updateFrameLabels(); });
 
   // small UI update loop to keep labels updated when video playing or seeking
   setInterval(() => {
@@ -1521,7 +1815,7 @@ Maintenance Notes:
       <ol>
         <li>Click "Choose file" or drag & drop a video onto the page.</li>
         <li>Optionally import existing annotations (JSON/CSV) using the Import control or by dropping the file anywhere. You'll be asked to Replace or Merge.</li>
-        <li><span style="color:red">Manually set the FPS (frames per seconds) of the video. Currently the FPS auto-detection is typically wrong.</span></li>
+        <li><span style="color:red">FPS is auto-detected from container frame timings where supported, or sampled from decoded frames. Check the warning for variable-frame-rate, estimated or unsupported videos, and override FPS manually if necessary.</span></li>
         <li>Scrub the video with the timeline slider (pauses while dragging, resumes on release) or use the mouse wheel over the canvas to step frames by the configured step size.</li>
         <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, <strong>Circle</strong>, or <strong>Square</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
@@ -1532,7 +1826,7 @@ Maintenance Notes:
       </ol>
 
       <h3>Detailed instructions</h3>
-  <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool will try to estimate the video's FPS; if it shows a warning (⚠), double-click it to edit the FPS manually for exact frame mapping.</p>
+  <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool reads FPS from video frame timing metadata when available and falls back to decoded-frame timestamp sampling. A ⚠ indicates variable-rate, estimated, or unavailable FPS. The FPS field can always be edited; for variable-frame-rate files a single FPS cannot exactly identify all frames.</p>
     <p><strong>Importing annotations:</strong> You can import annotations from JSON or CSV either via the Import control (next to Export) or by dropping the file anywhere on the page. You'll be prompted to <em>Replace</em> existing annotations or <em>Merge</em> into them. Supported formats:
   <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle'|'square', ...coords, r,g,b,a,tag,tag_name?} ] } ] }
   <br>• Legacy JSON: [ { frame, time, points: [ {x,y} ] } ] or { [frame]: [ {x,y} ] }
@@ -1565,7 +1859,7 @@ Maintenance Notes:
         <li>Annotation modes: Point, Bounding Box, Circle, and Square</li>
         <li>Per-frame marking with pixel coordinates</li>
         <li>Visual preview while dragging boxes, circles, and squares</li>
-        <li>Estimated FPS detection; editable FPS override</li>
+        <li>Automatic container FPS detection with timestamp fallback, explicit VFR warning, editable FPS override</li>
         <li>Frame navigation (Prev/Next, keyboard arrows, jump to frame, first frame)</li>
         <li>Undo / Redo for all marker operations</li>
         <li>Export JSON (with metadata and full marker data) or CSV (with type column and all coordinate fields)</li>
