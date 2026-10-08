@@ -904,7 +904,9 @@ async function inspectVideoFPS(file) {
       fpsWarn.style.visibility = 'visible';
       fpsWarn.textContent = '⚠';
       fpsWarn.style.color = '#b45309';
-      fpsWarn.title = 'The browser cannot decode this video. FPS metadata may still be readable. Convert the video to a browser-supported codec/container to annotate it.';
+      const explanation = 'The browser cannot decode this video. FPS metadata may still be readable. Convert the video to a browser-supported codec/container to annotate it.';
+      fpsWarn.title = explanation;
+      fpsInput.title = explanation;
     }
   });
   fileInput.addEventListener('change', e => loadVideoFile(e.target.files && e.target.files[0]));
