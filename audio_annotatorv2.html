@@ -1,0 +1,2321 @@
+<!doctype html>
+<!--
+Programmer Reference Summary — Audio Annotator v2 (clean-room implementation)
+Purpose: annotate local audio with synchronized native-rate waveform/spectrogram views.
+Open this file directly; no server, build, network requests, or external dependencies.
+WAV/RF64/BW64 PCM (8/16/24/32-bit), IEEE float (32/64-bit), and native FLAC are
+read in bounded slices in inline Blob workers, NOT decoded into a whole-file AudioBuffer.
+The file's sample rate is authoritative; Nyquist = sampleRate / 2. Analysis never
+passes through a resampling AudioContext. ensureAudioContext() requests the native
+rate; unsupported output rates fall back explicitly, without changing analysis.
+Playback has its own worker, bounded lookahead, and a windowed-sinc rate converter.
+View work is cancellable/coalesced. LRU byte, decoded-frame and FFT caches are bounded.
+Wide waveform previews are labelled as sampled; Build overview computes an exact,
+bounded min/max index cooperatively. Spectrogram columns use hop-aligned Hann FFTs;
+wide views are time-sampled, not an exhaustive event detector. Zoom for detail.
+Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel zooms frequency; Shift+wheel
+scrubs. Navigate mode drags the view; other modes add points, time ranges, or
+frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
+Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
+JSON/CSV import is validated atomically; merge/replace, tags, metadata and all marker
+types round-trip. History uses bounded transactions rather than per-click snapshots.
+All user text enters the DOM through textContent/value, never interpolated HTML.
+See README.md/AGENTS.md for repository conventions; README is generated, not edited.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Standalone, client-side audio annotation with synchronized native-sample-rate waveform and spectrogram views, bounded-memory WAV and FLAC reading, ultrasonic playback slowdown, editable point/time/frequency markers, case-sensitive tags, undo/redo and JSON/CSV import and export.">
+<meta name="keywords" content="audio annotator, spectrogram, waveform, ultrasound, bioacoustics, WAV, RF64, FLAC, audio labeling, frequency annotation">
+<title>Audio Annotator v2</title>
+<style>
+:root{font:14px system-ui,sans-serif;color:#20252b;background:#f7f8fa;color-scheme:light}*{box-sizing:border-box}body{margin:18px auto;padding:0 16px;max-width:1800px}h1{font-size:23px;margin:0 0 6px}h2{font-size:16px;margin:8px 0}p{margin:6px 0}.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}.grow{flex:1;min-width:120px}.panel{background:white;border:1px solid #d5dbe1;border-radius:5px;padding:10px;margin:10px 0}.hint{font-size:12px;color:#596570}.badge{font-size:12px;padding:3px 7px;background:#e8eef5;border-radius:4px}button,select,input,textarea{font:inherit}textarea{padding:5px 7px;resize:vertical}button,select,input:not([type=range]):not([type=radio]):not([type=checkbox]):not([type=color]){padding:5px 7px}button{cursor:pointer;border:1px solid #b8c2cc;background:#fff;border-radius:4px}button:hover:not(:disabled){background:#edf3f8}button:disabled{opacity:.45;cursor:default}input[type=number]{width:95px}input[type=range]{vertical-align:middle}input[type=color]{width:38px;height:28px;padding:0}label{display:inline-flex;gap:5px;align-items:center}label.stack{display:flex;flex-direction:column;align-items:flex-start}#fileInput{max-width:360px}#status{min-height:22px;white-space:pre-wrap}#status.error{color:#a32222}#status.ok{color:#275b32}#fileInfo{overflow-wrap:anywhere}.plots{min-width:0}.plot{position:relative;width:100%;height:190px;overflow:hidden;border:1px solid #bfc9d1;background:#111b27}.plot.spectral{height:320px;margin-top:8px}.plot canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.plot canvas.overlay{touch-action:none;cursor:crosshair}#scrollSlider,#scrubSlider{flex:1;min-width:160px}#tagInput{width:65px}#labelInput{width:180px}.split{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:12px}.side{min-width:0}.tableWrap{max-height:285px;overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:5px;text-align:left;border-bottom:1px solid #e0e5eb;vertical-align:top;overflow-wrap:anywhere}th{position:sticky;top:0;background:#f3f6f8}tr.selected{background:#e5f1ff}td button{padding:2px 5px}#tagsList .row{flex-wrap:nowrap}#tagsList input[type=text]{min-width:0;width:100%}#tagsList input[type=number]{width:55px}#tagFilter{width:100%}#editor input,#editor textarea{width:100%}#editor .row>label{flex:1;min-width:100px}summary{cursor:pointer;font-weight:600}body.dragging{outline:4px dashed #347cb5;outline-offset:-5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}kbd{font:12px monospace;border:1px solid #c8cfd6;border-radius:3px;padding:1px 4px}progress{max-width:130px}#frequencyLegend{display:inline-block;width:85px;height:9px;background:linear-gradient(90deg,#080923,#322275,#96377a,#e7834a,#fcf3b0)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}@media(max-width:1000px){.split{grid-template-columns:1fr}.plot.spectral{height:280px}body{padding:0 8px;margin:10px auto}.side{display:grid;grid-template-columns:1fr 1fr;gap:8px}}@media(max-width:600px){.side{display:block}input[type=range]{max-width:100%}}
+</style>
+</head>
+<body>
+<header><h1>Audio Annotator v2</h1><p class="hint">Local files only · Native-rate analysis · No upload or installation · WAV / RF64 / BW64 / FLAC</p></header>
+<section class="panel" aria-label="File and transport">
+<div class="row"><label>Audio <input id="fileInput" type="file" accept=".wav,.wave,.flac,audio/wav,audio/flac"></label><span class="hint">Or drop one audio file here; JSON/CSV files import annotations.</span></div>
+<div id="fileInfo">No audio loaded.</div><div id="status" role="status" aria-live="polite">Choose a recording to begin.</div>
+<div class="row"><button id="playPauseBtn" disabled>Play</button><button id="stopBtn" disabled>Stop</button><button id="prevBtn" disabled>◀ Step</button><button id="nextBtn" disabled>Step ▶</button><label>Step (s) <input id="stepInput" type="number" min="0.000001" value="1" step="any"></label><label>Speed <select id="speed"><option>0.01</option><option>0.025</option><option>0.05</option><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option><option>4</option></select>×</label><label>Volume <input id="volume" type="range" min="-60" max="48" value="-12" step="1"><output id="volumeValue">−12 dB</output></label><label><input id="followPlayback" type="checkbox" checked> Follow playback</label></div>
+<div class="row"><input id="scrubSlider" aria-label="Playback position" type="range" min="0" max="1" value="0" step="any" disabled><output id="clock">00:00.000 / 00:00.000</output><label>Go to (s) <input id="gotoInput" type="number" min="0" step="any" value="0"></label><button id="gotoBtn" disabled>Go</button></div>
+<div id="outputInfo" class="hint">Playback output is separate from the file’s native analysis rate. Slow ultrasonic recordings down to hear them.</div>
+</section>
+<section class="panel" aria-label="View settings">
+<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><button id="overviewBtn" disabled>Build exact overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
+<div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
+</section>
+<div class="split">
+<main class="plots">
+<section class="panel" aria-label="Annotation tools">
+<div class="row"><strong>Mode</strong><label><input type="radio" name="mode" value="navigate" checked> Navigate</label><label><input type="radio" name="mode" value="point"> Point</label><label><input type="radio" name="mode" value="time_range"> Time range</label><label><input type="radio" name="mode" value="frequency_range"> Frequency range</label></div>
+<div class="row"><label>Tag <input id="tagInput" type="text" maxlength="64" placeholder="Key"></label><label>Label <textarea id="labelInput" rows="1" maxlength="2000" placeholder="Optional note"></textarea></label><button id="addPointBtn" disabled>Add point at cursor</button><button id="undoBtn" disabled>Undo</button><button id="redoBtn" disabled>Redo</button><button id="clearBtn" disabled>Clear markers</button></div>
+<p class="hint">Wheel: pan · Ctrl/Cmd+wheel: time zoom · Alt+wheel: frequency zoom · Shift+wheel: scrub · Shift+click: remove nearby · Hold an alphanumeric key while drawing to tag.</p>
+</section>
+<div class="plot" id="wavePlot"><canvas id="waveCanvas" aria-hidden="true"></canvas><canvas id="waveOverlay" class="overlay" tabindex="0" aria-label="Waveform annotation surface"></canvas></div>
+<div class="plot spectral" id="specPlot"><canvas id="specCanvas" aria-hidden="true"></canvas><canvas id="specOverlay" class="overlay" tabindex="0" aria-label="Spectrogram annotation surface"></canvas></div>
+<div class="row hint"><span id="renderInfo" class="grow">No analysis yet.</span><output id="hoverInfo"></output></div>
+<section class="panel" aria-label="Annotation import and export">
+<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><label>Import <input id="importInput" type="file" accept=".json,.csv,application/json,text/csv"></label><select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge</option><option value="replace">Replace</option></select><button id="importBtn" disabled>Import</button></div>
+<div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button></div>
+<div class="tableWrap"><table><thead><tr><th>Type</th><th>Time (s)</th><th>Frequency (Hz)</th><th>Tag / label</th><th>Actions</th></tr></thead><tbody id="markerRows"></tbody></table></div>
+</section>
+</main>
+<aside class="side">
+<section class="panel"><h2>Tags</h2><p class="hint">Case-sensitive keys. Changes apply to every marker using that tag and are undoable.</p><input id="tagFilter" type="search" placeholder="Filter tags" aria-label="Filter tags"><div id="tagsList"></div></section>
+<section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
+</aside>
+</div>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>The waveform is exact in sufficiently narrow windows. Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Import validates all records before any change, detects file mismatches and offers merge or replace. Export regularly: annotations are not automatically saved to disk.</p></details>
+<script id="audio-worker" type="text/plain">
+'use strict';
+const MiB = 1048576, PAGE = 65536;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const sleep = () => new Promise(r => setTimeout(r, 0));
+class LRU {
+    constructor(limit) { this.limit = limit; this.bytes = 0; this.map = new Map(); this.hits = 0; }
+    get(k) {
+        const v = this.map.get(k);
+        if (!v)
+            return null;
+        this.map.delete(k);
+        this.map.set(k, v);
+        this.hits++;
+        return v.value;
+    }
+    put(k, value, bytes) {
+        if (bytes > this.limit)
+            return value;
+        if (this.map.has(k)) {
+            this.bytes -= this.map.get(k).bytes;
+            this.map.delete(k);
+        }
+        while (this.bytes + bytes > this.limit && this.map.size) {
+            const key = this.map.keys().next().value;
+            this.bytes -= this.map.get(key).bytes;
+            this.map.delete(key);
+        }
+        this.map.set(k, { value, bytes });
+        this.bytes += bytes;
+        return value;
+    }
+}
+class Bytes {
+    constructor(file) { this.file = file; this.cache = new LRU(8 * MiB); this.readBytes = 0; }
+    async range(offset, length) {
+        if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset + length > this.file.size)
+            throw Error('Truncated audio or invalid byte range.');
+        if (length > 20 * MiB)
+            throw Error('Audio block exceeds the 20 MiB safety bound.');
+        const out = new Uint8Array(length);
+        let done = 0;
+        while (done < length) {
+            const page = Math.floor((offset + done) / PAGE);
+            let data = this.cache.get(page);
+            if (!data) {
+                data = new Uint8Array(await this.file.slice(page * PAGE, Math.min(this.file.size, (page + 1) * PAGE)).arrayBuffer());
+                this.readBytes += data.length;
+                this.cache.put(page, data, data.byteLength);
+            }
+            const from = (offset + done) % PAGE, n = Math.min(length - done, data.length - from);
+            if (n <= 0)
+                throw Error('Unexpected end of audio.');
+            out.set(data.subarray(from, from + n), done);
+            done += n;
+        }
+        return out;
+    }
+}
+const ascii = (b, p, n) => String.fromCharCode(...b.subarray(p, p + n));
+const u64 = (d, p) => {
+    const n = Number(d.getBigUint64(p, true));
+    if (!Number.isSafeInteger(n))
+        throw Error('64-bit WAV length exceeds safe browser indexing.');
+    return n;
+};
+class WavSource {
+    constructor(file, bytes) { this.file = file; this.bytes = bytes; this.segments = []; }
+    async init() {
+        const head = await this.bytes.range(0, 12), kind = ascii(head, 0, 4);
+        if (!['RIFF', 'RF64', 'BW64'].includes(kind) || ascii(head, 8, 4) !== 'WAVE')
+            throw Error('Unsupported WAV header (little-endian RIFF/RF64/BW64 required).');
+        let pos = 12, fmt = null, ds = null, chunks = 0;
+        const sizes = new Map();
+        while (pos + 8 <= this.file.size) {
+            if (++chunks > 100000)
+                throw Error('Too many WAV chunks.');
+            const h = await this.bytes.range(pos, 8), id = ascii(h, 0, 4);
+            let len = new DataView(h.buffer).getUint32(4, true);
+            if (len === 0xffffffff) {
+                if (id === 'data' && ds !== null && this.segments.length === 0)
+                    len = ds;
+                else if (sizes.has(id))
+                    len = sizes.get(id).shift();
+                else
+                    throw Error('RF64 chunk is missing its ds64 size.');
+            }
+            const begin = pos + 8;
+            if (!Number.isSafeInteger(len) || begin + len > this.file.size)
+                throw Error('Truncated WAV ' + id + ' chunk.');
+            if (id === 'ds64') {
+                if (len < 28 || len > MiB)
+                    throw Error('Invalid ds64 metadata.');
+                const b = await this.bytes.range(begin, len), d = new DataView(b.buffer);
+                ds = u64(d, 8);
+                const count = d.getUint32(24, true);
+                if (28 + count * 12 > len)
+                    throw Error('Truncated ds64 table.');
+                for (let i = 0; i < count; i++) {
+                    const k = ascii(b, 28 + i * 12, 4);
+                    if (!sizes.has(k))
+                        sizes.set(k, []);
+                    sizes.get(k).push(u64(d, 32 + i * 12));
+                }
+            }
+            if (id === 'fmt ') {
+                if (len < 16 || len > MiB)
+                    throw Error('Invalid WAV format chunk.');
+                const b = await this.bytes.range(begin, Math.min(len, 64)), d = new DataView(b.buffer);
+                let code = d.getUint16(0, true);
+                const channels = d.getUint16(2, true), rate = d.getUint32(4, true), align = d.getUint16(12, true), bits = d.getUint16(14, true);
+                let validBits = bits;
+                if (code === 65534) {
+                    if (len < 40 || d.getUint16(16, true) < 22)
+                        throw Error('Truncated extensible WAV format.');
+                    validBits = d.getUint16(18, true) || bits;
+                    const guid = [0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
+                    if (guid.some((x, i) => b[26 + i] !== x))
+                        throw Error('Unsupported extensible WAV subtype GUID.');
+                    code = d.getUint16(24, true);
+                }
+                if (!channels || channels > 64 || !rate || rate > 10000000 || !([1, 3].includes(code)) || (code === 1 && ![8, 16, 24, 32].includes(bits)) || (code === 3 && ![32, 64].includes(bits)) || align !== channels * bits / 8 || validBits < 1 || validBits > bits)
+                    throw Error('Unsupported WAV encoding, channel layout or sample rate.');
+                fmt = { sampleRate: rate, channels, bits, validBits, code, align };
+            }
+            if (id === 'data')
+                this.segments.push({ offset: begin, bytes: len });
+            pos = begin + len + (len % 2);
+        }
+        if (!fmt || !this.segments.length)
+            throw Error('WAV needs fmt and data chunks.');
+        Object.assign(this, fmt);
+        let frames = 0;
+        for (const seg of this.segments) {
+            if (seg.bytes % this.align)
+                throw Error('WAV data ends in a partial sample frame.');
+            seg.start = frames;
+            seg.frames = seg.bytes / this.align;
+            frames += seg.frames;
+        }
+        if (!frames)
+            throw Error('The recording is empty.');
+        this.frames = frames;
+        this.format = kind + ' ' + (this.code === 3 ? 'float' : 'PCM') + ' ' + this.bits + '-bit';
+        return this;
+    }
+    async read(start, count, channel) {
+        if (count > 4194304)
+            throw Error('Sample request exceeds the bounded window.');
+        const out = new Float32Array(count), first = Math.max(0, start), end = Math.min(this.frames, start + count), sampleBytes = this.bits / 8;
+        for (const seg of this.segments) {
+            let p = Math.max(first, seg.start), last = Math.min(end, seg.start + seg.frames);
+            while (p < last) {
+                const n = Math.min(last - p, Math.max(1, Math.floor(MiB / this.align))), raw = await this.bytes.range(seg.offset + (p - seg.start) * this.align, n * this.align), d = new DataView(raw.buffer);
+                let at = (channel < 0 ? 0 : channel) * sampleBytes;
+                for (let i = 0; i < n; i++) {
+                    let value = 0;
+                    const c0 = channel < 0 ? 0 : channel, c1 = channel < 0 ? this.channels : channel + 1;
+                    for (let c = c0; c < c1; c++) {
+                        const k = i * this.align + c * sampleBytes;
+                        let v;
+                        if (this.code === 3)
+                            v = this.bits === 32 ? d.getFloat32(k, true) : d.getFloat64(k, true);
+                        else if (this.bits === 8)
+                            v = (raw[k] - 128) / 128;
+                        else if (this.bits === 16)
+                            v = d.getInt16(k, true) / 32768;
+                        else if (this.bits === 24) {
+                            let z = raw[k] + raw[k + 1] * 256 + raw[k + 2] * 65536;
+                            if (z >= 8388608)
+                                z -= 16777216;
+                            v = z / 8388608;
+                        }
+                        else
+                            v = d.getInt32(k, true) / 2147483648;
+                        value += Number.isFinite(v) ? v : 0;
+                    }
+                    out[p - start + i] = value / (c1 - c0);
+                }
+                p += n;
+            }
+        }
+        return out;
+    }
+}
+function crc8(b, start, end) {
+    let c = 0;
+    for (let i = start; i < end; i++) {
+        c ^= b[i];
+        for (let j = 0; j < 8; j++)
+            c = (c & 128) ? ((c << 1) ^ 7) & 255 : (c << 1) & 255;
+    }
+    return c;
+}
+const crc16Table = Array.from({ length: 256 }, (_, i) => {
+    let c = i << 8;
+    for (let j = 0; j < 8; j++)
+        c = c & 32768 ? ((c << 1) ^ 0x8005) & 65535 : (c << 1) & 65535;
+    return c;
+});
+function crc16(b, end) {
+    let c = 0;
+    for (let i = 0; i < end; i++)
+        c = ((c << 8) ^ crc16Table[((c >> 8) ^ b[i]) & 255]) & 65535;
+    return c;
+}
+class Bits {
+    constructor(data, byte) { this.data = data; this.pos = byte * 8; }
+    read(n) {
+        if (n < 0 || n > 53 || this.pos + n > this.data.length * 8)
+            throw Error('Truncated FLAC bitstream.');
+        let value = 0;
+        while (n) {
+            const bit = this.pos % 8, take = Math.min(n, 8 - bit);
+            value = value * 2 ** take + ((this.data[Math.floor(this.pos / 8)] >> (8 - bit - take)) & ((1 << take) - 1));
+            this.pos += take;
+            n -= take;
+        }
+        return value;
+    }
+    signed(n) { const v = this.read(n); return n && v >= 2 ** (n - 1) ? v - 2 ** n : v; }
+    unary() {
+        let n = 0;
+        while (true) {
+            if (this.pos >= this.data.length * 8)
+                throw Error('Truncated FLAC unary code.');
+            if (this.pos % 8 === 0 && this.data[this.pos / 8] === 0) {
+                this.pos += 8;
+                n += 8;
+            }
+            else if (this.read(1))
+                return n;
+            else
+                n++;
+            if (n > 16777216)
+                throw Error('FLAC unary code exceeds safety bound.');
+        }
+    }
+}
+class FlacSource {
+    constructor(file, bytes) { this.file = file; this.bytes = bytes; this.seek = []; this.index = []; this.decoded = new LRU(12 * MiB); }
+    async init() {
+        let pos = 4, last = false, info = null;
+        while (!last) {
+            const h = await this.bytes.range(pos, 4);
+            last = !!(h[0] & 128);
+            const type = h[0] & 127, len = h[1] * 65536 + h[2] * 256 + h[3];
+            pos += 4;
+            if (pos + len > this.file.size)
+                throw Error('Truncated FLAC metadata.');
+            if (type === 0) {
+                if (info || len !== 34)
+                    throw Error('Invalid FLAC STREAMINFO.');
+                const b = await this.bytes.range(pos, 34), d = new DataView(b.buffer);
+                const packed = d.getBigUint64(10, false);
+                info = { sampleRate: Number(packed >> 44n), channels: Number((packed >> 41n) & 7n) + 1, bits: Number((packed >> 36n) & 31n) + 1, frames: Number(packed & 0xfffffffffn), maxBlock: d.getUint16(2, false), maxFrame: b[7] * 65536 + b[8] * 256 + b[9] };
+            }
+            if (type === 3) {
+                if (len % 18 || len > 16 * MiB)
+                    throw Error('Invalid FLAC seek table.');
+                const b = await this.bytes.range(pos, len), d = new DataView(b.buffer);
+                for (let i = 0; i < len; i += 18) {
+                    const sample = d.getBigUint64(i, false);
+                    if (sample === 0xffffffffffffffffn)
+                        continue;
+                    const offset = Number(d.getBigUint64(i + 8, false));
+                    if (!Number.isSafeInteger(offset))
+                        throw Error('Invalid FLAC seek offset.');
+                    this.seek.push({ sample: Number(sample), offset });
+                }
+            }
+            pos += len;
+        }
+        if (!info || !info.sampleRate || !info.frames || info.bits < 4 || info.bits > 32 || !info.maxBlock)
+            throw Error('FLAC requires valid STREAMINFO with a known total sample count.');
+        Object.assign(this, info);
+        this.dataOffset = pos;
+        this.frameBound = Math.min(20 * MiB, this.maxFrame || Math.ceil(this.maxBlock * this.channels * (this.bits + 1) / 8) + 4096);
+        this.seek = this.seek.filter(x => x.sample < this.frames && x.offset < this.file.size - pos).map(x => ({ ...x, offset: x.offset + pos })).sort((a, b) => a.sample - b.sample);
+        const first = await this.header(pos);
+        if (first.sample !== 0)
+            throw Error('FLAC does not start at sample zero.');
+        this.first = first;
+        this.format = 'FLAC ' + this.bits + '-bit';
+        return this;
+    }
+    parseHeader(b, p = 0) {
+        const begin = p;
+        if (b[p++] !== 255 || (b[p] & 254) !== 248)
+            throw Error('Invalid FLAC sync.');
+        const variable = b[p++] & 1, blockCode = b[p] >> 4, rateCode = b[p++] & 15, assignment = b[p] >> 4, bitCode = (b[p] >> 1) & 7;
+        if (b[p++] & 1 || assignment > 10 || !blockCode || rateCode === 15 || bitCode === 3)
+            throw Error('Reserved FLAC frame code.');
+        let first = b[p++], number = 0, n = 0;
+        if (first < 128)
+            number = first;
+        else {
+            let mask = 128;
+            while (first & mask) {
+                n++;
+                mask >>= 1;
+            }
+            if (n < 2 || n > 7)
+                throw Error('Invalid FLAC sample number.');
+            number = first & ((1 << (7 - n)) - 1);
+            for (let i = 1; i < n; i++) {
+                const c = b[p++];
+                if ((c & 192) !== 128)
+                    throw Error('Invalid FLAC sample number continuation.');
+                number = number * 64 + (c & 63);
+            }
+        }
+        let block = blockCode === 1 ? 192 : blockCode <= 5 ? 576 * 2 ** (blockCode - 2) : blockCode === 6 ? b[p++] + 1 : blockCode === 7 ? (b[p++] * 256 + b[p++] + 1) : 256 * 2 ** (blockCode - 8);
+        const rates = [this.sampleRate, 88200, 176400, 192000, 8000, 16000, 22050, 24000, 32000, 44100, 48000, 96000];
+        let rate = rateCode < 12 ? rates[rateCode] : rateCode === 12 ? b[p++] * 1000 : rateCode === 13 ? b[p++] * 256 + b[p++] : (b[p++] * 256 + b[p++]) * 10;
+        const bits = [this.bits, 8, 12, 0, 16, 20, 24, 32][bitCode], channels = assignment < 8 ? assignment + 1 : 2;
+        if (p >= b.length || crc8(b, begin, p) !== b[p++])
+            throw Error('FLAC header CRC mismatch.');
+        if (rate !== this.sampleRate || bits !== this.bits || channels !== this.channels || block > this.maxBlock)
+            throw Error('Changing or inconsistent FLAC stream format is unsupported.');
+        const sample = variable ? number : number * this.maxBlock;
+        if (!Number.isSafeInteger(sample) || sample < 0 || sample + block > this.frames)
+            throw Error('FLAC sample index outside recording.');
+        return { sample, block, assignment, headerBytes: p - begin };
+    }
+    async header(offset) { const b = await this.bytes.range(offset, Math.min(32, this.file.size - offset)); return { ...this.parseHeader(b), offset }; }
+    async nextHeader(offset, limit = this.file.size) {
+        let p = offset;
+        while (p < limit) {
+            const n = Math.min(PAGE, limit - p), b = await this.bytes.range(p, Math.min(n + 32, this.file.size - p));
+            for (let i = 0; i < n - 1; i++)
+                if (b[i] === 255 && (b[i + 1] & 254) === 248) {
+                    try {
+                        return { ...this.parseHeader(b, i), offset: p + i };
+                    }
+                    catch { }
+                }
+            p += Math.max(1, n - 1);
+        }
+        return null;
+    }
+    remember(h) {
+        let lo = 0, hi = this.index.length;
+        while (lo < hi) {
+            const m = (lo + hi) >> 1;
+            if (this.index[m].sample < h.sample)
+                lo = m + 1;
+            else
+                hi = m;
+        }
+        if (this.index[lo]?.sample !== h.sample)
+            this.index.splice(lo, 0, { sample: h.sample, offset: h.offset, block: h.block });
+        if (this.index.length > 8192)
+            this.index = this.index.filter((_, i) => i % 2 === 0);
+    }
+    async decode(offset, channel) {
+        const key = offset + ':' + channel, cached = this.decoded.get(key);
+        if (cached)
+            return cached;
+        const b = await this.bytes.range(offset, Math.min(this.frameBound, this.file.size - offset)), h = { ...this.parseHeader(b), offset }, reader = new Bits(b, h.headerBytes), streams = [];
+        for (let c = 0; c < this.channels; c++) {
+            let bits = this.bits;
+            if ((h.assignment === 8 && c === 1) || (h.assignment === 9 && c === 0) || (h.assignment === 10 && c === 1))
+                bits++;
+            if (reader.read(1))
+                throw Error('Invalid FLAC subframe padding.');
+            const type = reader.read(6), wasted = reader.read(1) ? reader.unary() + 1 : 0;
+            bits -= wasted;
+            if (bits < 1)
+                throw Error('Invalid FLAC wasted-bit count.');
+            const a = new Float64Array(h.block);
+            if (type === 0)
+                a.fill(reader.signed(bits));
+            else if (type === 1) {
+                for (let i = 0; i < h.block; i++)
+                    a[i] = reader.signed(bits);
+            }
+            else {
+                let order, coef, shift = 0;
+                if (type >= 8 && type <= 12) {
+                    order = type - 8;
+                    coef = [[], [1], [2, -1], [3, -3, 1], [4, -6, 4, -1]][order];
+                }
+                else if (type >= 32)
+                    order = type - 31;
+                else
+                    throw Error('Reserved FLAC subframe type.');
+                if (order > h.block)
+                    throw Error('FLAC predictor exceeds block.');
+                for (let i = 0; i < order; i++)
+                    a[i] = reader.signed(bits);
+                if (type >= 32) {
+                    const precision = reader.read(4) + 1;
+                    if (precision === 16)
+                        throw Error('Invalid FLAC LPC precision.');
+                    shift = reader.signed(5);
+                    coef = Array.from({ length: order }, () => reader.signed(precision));
+                }
+                const method = reader.read(2), partitionOrder = reader.read(4), partitions = 2 ** partitionOrder, partitionSize = h.block / partitions;
+                if (method > 1 || !Number.isInteger(partitionSize) || partitionSize < order)
+                    throw Error('Invalid FLAC residual partition.');
+                let i = order;
+                for (let part = 0; part < partitions; part++) {
+                    const k = reader.read(method ? 5 : 4), escape = k === (method ? 31 : 15), rawBits = escape ? reader.read(5) : 0, n = partitionSize - (part === 0 ? order : 0);
+                    for (let j = 0; j < n; j++, i++) {
+                        let residual;
+                        if (escape)
+                            residual = reader.signed(rawBits);
+                        else {
+                            const folded = reader.unary() * 2 ** k + reader.read(k);
+                            if (folded > 4294967294)
+                                throw Error('FLAC residual overflow.');
+                            residual = folded % 2 ? -(folded + 1) / 2 : folded / 2;
+                        }
+                        let prediction = 0;
+                        for (let k2 = 0; k2 < order; k2++)
+                            prediction += coef[k2] * a[i - k2 - 1];
+                        a[i] = residual + Math.floor(prediction * 2 ** (-shift));
+                    }
+                }
+            }
+            if (wasted)
+                for (let i = 0; i < a.length; i++)
+                    a[i] *= 2 ** wasted;
+            streams.push(a);
+        }
+        while (reader.pos % 8)
+            if (reader.read(1))
+                throw Error('Nonzero FLAC frame padding.');
+        const end = reader.pos / 8;
+        if (end + 2 > b.length || crc16(b, end) !== (b[end] * 256 + b[end + 1]))
+            throw Error('FLAC frame CRC mismatch.');
+        const out = new Float32Array(h.block), scale = 2 ** (this.bits - 1);
+        for (let i = 0; i < h.block; i++) {
+            if (h.assignment === 8)
+                streams[1][i] = streams[0][i] - streams[1][i];
+            else if (h.assignment === 9)
+                streams[0][i] += streams[1][i];
+            else if (h.assignment === 10) {
+                const side = streams[1][i], mid = streams[0][i] * 2 + (side % 2 !== 0 ? 1 : 0);
+                streams[0][i] = (mid + side) / 2;
+                streams[1][i] = (mid - side) / 2;
+            }
+            let value = 0;
+            if (channel < 0) {
+                for (const stream of streams)
+                    value += stream[i];
+                value /= this.channels;
+            }
+            else
+                value = streams[channel][i];
+            out[i] = value / scale;
+        }
+        const frame = { ...h, data: out, next: offset + end + 2 };
+        this.remember(h);
+        return this.decoded.put(key, frame, out.byteLength + 96);
+    }
+    async locate(sample, channel) {
+        let low = this.first, highOffset = this.file.size, highSample = this.frames;
+        for (const list of [this.seek, this.index]) {
+            let lo = 0, hi = list.length;
+            while (lo < hi) {
+                const m = (lo + hi) >> 1;
+                if (list[m].sample <= sample)
+                    lo = m + 1;
+                else
+                    hi = m;
+            }
+            if (lo && list[lo - 1].sample >= low.sample)
+                low = list[lo - 1];
+            if (lo < list.length && list[lo].sample < highSample) {
+                highSample = list[lo].sample;
+                highOffset = list[lo].offset;
+            }
+        }
+        low = await this.header(low.offset);
+        for (let tries = 0; sample >= low.sample + low.block && highOffset - low.offset > 2 * this.frameBound && tries < 28; tries++) {
+            const fraction = clamp((sample - low.sample) / (highSample - low.sample), .05, .95), guess = Math.floor(low.offset + (highOffset - low.offset) * fraction);
+            const found = await this.nextHeader(guess, highOffset);
+            if (!found) {
+                highOffset = guess;
+                continue;
+            }
+            if (found.sample <= sample) {
+                if (found.offset === low.offset)
+                    break;
+                low = found;
+                this.remember(found);
+            }
+            else {
+                highOffset = found.offset;
+                highSample = found.sample;
+            }
+        }
+        let frame = await this.decode(low.offset, channel);
+        while (sample >= frame.sample + frame.block) {
+            if (frame.next >= this.file.size)
+                throw Error('FLAC sample not found.');
+            const next = await this.decode(frame.next, channel);
+            if (next.sample !== frame.sample + frame.block)
+                throw Error('Discontinuous FLAC frame sequence.');
+            frame = next;
+        }
+        return frame;
+    }
+    async read(start, count, channel) {
+        if (count > 4194304)
+            throw Error('Sample request exceeds bounded window.');
+        const out = new Float32Array(count), first = Math.max(0, start), end = Math.min(this.frames, start + count);
+        if (first >= end)
+            return out;
+        let frame = await this.locate(first, channel), p = first;
+        while (p < end) {
+            const a = p - frame.sample, n = Math.min(end - p, frame.block - a);
+            if (a < 0 || n <= 0)
+                throw Error('Invalid FLAC sample mapping.');
+            out.set(frame.data.subarray(a, a + n), p - start);
+            p += n;
+            if (p < end) {
+                const next = await this.decode(frame.next, channel);
+                if (next.sample !== frame.sample + frame.block)
+                    throw Error('Discontinuous FLAC samples.');
+                frame = next;
+            }
+        }
+        return out;
+    }
+}
+let source = null, renderBusy = false, pendingRender = null, renderToken = 0, overview = null, overviewToken = 0;
+const spectra = new LRU(32 * MiB), fftPlans = new LRU(2 * MiB), resamplers = new LRU(2 * MiB);
+function fftPlan(n) {
+    let plan = fftPlans.get(n);
+    if (plan)
+        return plan;
+    const window = new Float64Array(n), reverse = new Uint32Array(n), cos = new Float64Array(n / 2), sin = new Float64Array(n / 2);
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+        window[i] = .5 - .5 * Math.cos(2 * Math.PI * i / (n - 1));
+        sum += window[i];
+        let v = i, r = 0;
+        for (let j = 0; j < Math.log2(n); j++) {
+            r = (r << 1) | (v & 1);
+            v >>= 1;
+        }
+        reverse[i] = r;
+    }
+    for (let i = 0; i < n / 2; i++) {
+        cos[i] = Math.cos(-2 * Math.PI * i / n);
+        sin[i] = Math.sin(-2 * Math.PI * i / n);
+    }
+    plan = { window, reverse, cos, sin, sum };
+    return fftPlans.put(n, plan, n * 20);
+}
+function spectrum(samples, n) {
+    const plan = fftPlan(n), re = new Float64Array(n), im = new Float64Array(n);
+    for (let i = 0; i < n; i++)
+        re[plan.reverse[i]] = samples[i] * plan.window[i];
+    for (let len = 2; len <= n; len *= 2) {
+        const half = len / 2, step = n / len;
+        for (let offset = 0; offset < n; offset += len)
+            for (let j = 0; j < half; j++) {
+                const a = offset + j, b = a + half, k = j * step, tr = re[b] * plan.cos[k] - im[b] * plan.sin[k], ti = re[b] * plan.sin[k] + im[b] * plan.cos[k];
+                re[b] = re[a] - tr;
+                im[b] = im[a] - ti;
+                re[a] += tr;
+                im[a] += ti;
+            }
+    }
+    const db = new Float32Array(n / 2 + 1);
+    for (let k = 0; k < db.length; k++)
+        db[k] = 20 * Math.log10(Math.max(1e-9, Math.hypot(re[k], im[k]) * (k === 0 || k === n / 2 ? 1 : 2) / plan.sum));
+    return db;
+}
+function palette(name) { const stops = name === 'gray' ? [[0, 0, 0], [255, 255, 255]] : name === 'ocean' ? [[4, 12, 31], [14, 59, 98], [18, 133, 142], [120, 207, 164], [242, 248, 204]] : [[8, 9, 35], [50, 34, 117], [150, 55, 122], [231, 131, 74], [252, 243, 176]]; return Array.from({ length: 256 }, (_, i) => { const x = i / 255 * (stops.length - 1), j = Math.min(stops.length - 2, Math.floor(x)), t = x - j; return stops[j].map((v, c) => Math.round(v * (1 - t) + stops[j + 1][c] * t)); }); }
+function guard(token) {
+    if (token !== renderToken)
+        throw Error('CANCELLED');
+}
+async function envelope(start, end, width, channel, token) {
+    const first = Math.floor(start * source.sampleRate), last = Math.min(source.frames, Math.ceil(end * source.sampleRate)), span = Math.max(1, last - first), wave = new Float32Array(width * 2);
+    wave.fill(NaN);
+    let mode = 'exact';
+    if (span <= 2097152) {
+        const lo = new Float32Array(width).fill(Infinity), hi = new Float32Array(width).fill(-Infinity);
+        for (let p = first; p < last; p += 65536) {
+            guard(token);
+            const a = await source.read(p, Math.min(65536, last - p), channel);
+            for (let i = 0; i < a.length; i++) {
+                const x = Math.min(width - 1, Math.floor((p + i - first) / span * width));
+                lo[x] = Math.min(lo[x], a[i]);
+                hi[x] = Math.max(hi[x], a[i]);
+            }
+            await sleep();
+        }
+        for (let x = 0; x < width; x++) {
+            if (lo[x] === Infinity) {
+                const p = first + Math.min(span - 1, Math.floor((x + .5) / width * span)), a = await source.read(p, 1, channel);
+                wave[x * 2] = wave[x * 2 + 1] = a[0];
+            }
+            else {
+                wave[x * 2] = lo[x];
+                wave[x * 2 + 1] = hi[x];
+            }
+        }
+    }
+    else if (overview?.complete && overview.channel === channel) {
+        mode = 'indexed';
+        for (let x = 0; x < width; x++) {
+            const a = Math.floor((first + x / width * span) / overview.block), b = Math.min(overview.min.length - 1, Math.floor((first + (x + 1) / width * span) / overview.block));
+            let lo = Infinity, hi = -Infinity;
+            for (let j = a; j <= b; j++) {
+                lo = Math.min(lo, overview.min[j]);
+                hi = Math.max(hi, overview.max[j]);
+            }
+            wave[x * 2] = lo;
+            wave[x * 2 + 1] = hi;
+        }
+    }
+    else {
+        mode = 'sampled';
+        const n = Math.max(1, Math.min(2048, Math.floor(1048576 / width)));
+        for (let x = 0; x < width; x++) {
+            guard(token);
+            const center = Math.floor(first + (x + .5) / width * span), a = await source.read(Math.max(first, center - Math.floor(n / 2)), Math.min(n, span), channel);
+            let lo = Infinity, hi = -Infinity;
+            for (const v of a) {
+                lo = Math.min(lo, v);
+                hi = Math.max(hi, v);
+            }
+            wave[x * 2] = lo;
+            wave[x * 2 + 1] = hi;
+            if (x % 12 === 0)
+                await sleep();
+        }
+    }
+    guard(token);
+    return { wave, mode };
+}
+function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overview ? overview.min.byteLength + overview.max.byteLength : 0, renderBusy }; }
+async function render(p, token) {
+    const started = performance.now(), width = clamp(Math.round(p.width), 32, 1600), height = clamp(Math.round(p.height), 64, 512), n = p.fft;
+    if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(n))
+        throw Error('Unsupported FFT size.');
+    const end = Math.min(source.frames / source.sampleRate, p.start + p.span), start = clamp(p.start, 0, end);
+    if (!(end > start))
+        throw Error('Invalid display window.');
+    const { wave, mode } = await envelope(start, end, width, p.channel, token), spanSamples = (end - start) * source.sampleRate, columns = Math.min(width, spanSamples > 50000000 ? 192 : 640), pixels = new Uint8ClampedArray(columns * height * 4), colors = palette(p.color), hop = n / 4;
+    const bins = new Array(height);
+    for (let y = 0; y < height; y++) {
+        const f1 = p.fmax - (y + 1) / height * (p.fmax - p.fmin), f2 = p.fmax - y / height * (p.fmax - p.fmin);
+        bins[y] = [clamp(Math.floor(f1 * n / source.sampleRate), 0, n / 2), clamp(Math.ceil(f2 * n / source.sampleRate), 0, n / 2)];
+    }
+    for (let x = 0; x < columns; x++) {
+        guard(token);
+        const center = Math.round((start + (x + .5) / columns * (end - start)) * source.sampleRate / hop) * hop, key = p.channel + ':' + n + ':' + center;
+        let db = spectra.get(key);
+        if (!db) {
+            const a = await source.read(center - n / 2, n, p.channel);
+            db = spectrum(a, n);
+            spectra.put(key, db, db.byteLength);
+        }
+        for (let y = 0; y < height; y++) {
+            const [a, b] = bins[y];
+            let value = -180;
+            for (let k = a; k <= b; k++)
+                value = Math.max(value, db[k]);
+            const c = colors[clamp(Math.round((value - p.dbMin) / (p.dbMax - p.dbMin) * 255), 0, 255)], i = (y * columns + x) * 4;
+            pixels[i] = c[0];
+            pixels[i + 1] = c[1];
+            pixels[i + 2] = c[2];
+            pixels[i + 3] = 255;
+        }
+        if (x % 8 === 0)
+            await sleep();
+    }
+    guard(token);
+    return { start, span: end - start, fmin: p.fmin, fmax: p.fmax, wave, mode, width, columns, height, pixels, fft: n, elapsedMs: performance.now() - started, stats: statistics() };
+}
+async function renderLoop() {
+    if (renderBusy)
+        return;
+    renderBusy = true;
+    while (pendingRender) {
+        const job = pendingRender;
+        pendingRender = null;
+        try {
+            const result = await render(job.p, job.token);
+            postMessage({ id: job.id, result }, [result.wave.buffer, result.pixels.buffer]);
+        }
+        catch (e) {
+            postMessage({ id: job.id, ...(e.message === 'CANCELLED' ? { result: { cancelled: true } } : { error: e.message }) });
+        }
+    }
+    renderBusy = false;
+}
+async function overviewLoop(token) {
+    try {
+        while (overview && overview.active && token === overviewToken) {
+            if (renderBusy) {
+                await new Promise(r => setTimeout(r, 25));
+                continue;
+            }
+            const o = overview, p = o.position, n = Math.min(65536, source.frames - p), a = await source.read(p, n, o.channel);
+            if (token !== overviewToken || !o.active)
+                return;
+            for (let i = 0; i < a.length; i++) {
+                const k = Math.floor((p + i) / o.block);
+                o.min[k] = Math.min(o.min[k], a[i]);
+                o.max[k] = Math.max(o.max[k], a[i]);
+            }
+            o.position += n;
+            o.complete = o.position === source.frames;
+            if (o.complete)
+                o.active = false;
+            const now = performance.now();
+            if (now - (o.lastReport || 0) > 250 || o.complete) {
+                o.lastReport = now;
+                postMessage({ event: 'overview', progress: o.position / source.frames, active: o.active, complete: o.complete, channel: o.channel });
+            }
+            await sleep();
+        }
+    }
+    catch (e) {
+        if (overview)
+            overview.active = false;
+        postMessage({ event: 'overviewError', error: e.message });
+    }
+}
+function resamplePlan(ratio) {
+    const key = ratio.toPrecision(12), old = resamplers.get(key);
+    if (old)
+        return old;
+    const taps = 64, phases = 512, kernels = new Float32Array(taps * phases), cutoff = Math.min(1, 1 / ratio) * .94;
+    for (let p = 0; p < phases; p++) {
+        let sum = 0;
+        for (let k = 0; k < taps; k++) {
+            const x = k - 31 - p / phases, z = Math.PI * x * cutoff, w = .5 + .5 * Math.cos(Math.PI * x / 32), v = (Math.abs(z) < 1e-12 ? 1 : Math.sin(z) / z) * cutoff * w;
+            kernels[p * taps + k] = v;
+            sum += v;
+        }
+        for (let k = 0; k < taps; k++)
+            kernels[p * taps + k] /= sum;
+    }
+    return resamplers.put(key, kernels, kernels.byteLength);
+}
+async function audioChunk(p) {
+    const ratio = source.sampleRate * p.speed / p.outputRate;
+    if (!Number.isFinite(ratio) || ratio <= 0 || p.position < 0 || p.position > source.frames)
+        throw Error('Invalid playback request.');
+    const frames = Math.max(0, Math.min(Math.floor(p.frames), Math.ceil((source.frames - p.position) / ratio), Math.floor(262144 / ratio)));
+    if (!frames)
+        return { data: new Float32Array(), next: source.frames };
+    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await source.read(first, count, p.channel), out = new Float32Array(frames);
+    if (ratio === 1 && Number.isInteger(p.position))
+        out.set(a.subarray(32, 32 + frames));
+    else {
+        const kernels = resamplePlan(ratio);
+        for (let i = 0; i < frames; i++) {
+            const at = p.position + i * ratio - first, base = Math.floor(at), phase = Math.min(511, Math.floor((at - base) * 512)), k0 = phase * 64;
+            let v = 0;
+            for (let k = 0; k < 64; k++)
+                v += a[base - 31 + k] * kernels[k0 + k];
+            out[i] = v;
+        }
+    }
+    return { data: out, next: Math.min(source.frames, p.position + frames * ratio) };
+}
+self.onmessage = async ({ data: m }) => {
+    try {
+        if (m.type === 'init') {
+            const bytes = new Bytes(m.file), head = await bytes.range(0, Math.min(12, m.file.size));
+            source = ascii(head, 0, 4) === 'fLaC' ? await new FlacSource(m.file, bytes).init() : await new WavSource(m.file, bytes).init();
+            postMessage({ id: m.id, result: { sampleRate: source.sampleRate, channels: source.channels, bits: source.bits, frames: source.frames, duration: source.frames / source.sampleRate, format: source.format } });
+            return;
+        }
+        if (!source)
+            throw Error('No audio source.');
+        if (m.type === 'render') {
+            renderToken++;
+            if (pendingRender)
+                postMessage({ id: pendingRender.id, result: { cancelled: true } });
+            pendingRender = { id: m.id, p: m.params, token: renderToken };
+            renderLoop();
+            return;
+        }
+        if (m.type === 'cancelRender') {
+            renderToken++;
+            if (pendingRender)
+                postMessage({ id: pendingRender.id, result: { cancelled: true } });
+            pendingRender = null;
+            postMessage({ id: m.id, result: true });
+            return;
+        }
+        let result;
+        if (m.type === 'audio') {
+            result = await audioChunk(m.params);
+            postMessage({ id: m.id, result }, [result.data.buffer]);
+            return;
+        }
+        else if (m.type === 'read') {
+            const p = m.params;
+            if (p.count > 65536 || p.count < 0 || !Number.isInteger(p.start) || !Number.isInteger(p.count) || p.channel < -1 || p.channel >= source.channels)
+                throw Error('Invalid diagnostic sample window.');
+            result = await source.read(p.start, p.count, p.channel);
+            postMessage({ id: m.id, result }, [result.buffer]);
+            return;
+        }
+        else if (m.type === 'spectrum') {
+            const p = m.params;
+            if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(p.fft) || !Number.isFinite(p.time) || !Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels)
+                throw Error('Invalid spectral probe.');
+            const data = await source.read(Math.round(p.time * source.sampleRate) - p.fft / 2, p.fft, p.channel), db = spectrum(data, p.fft);
+            postMessage({ id: m.id, result: { sampleRate: source.sampleRate, db } }, [db.buffer]);
+            return;
+        }
+        else if (m.type === 'stats')
+            result = statistics();
+        else if (m.type === 'overview') {
+            const channel = m.params.channel;
+            overviewToken++;
+            if (overview?.channel === channel && !overview.complete) {
+                overview.active = !overview.active;
+            }
+            else {
+                const block = Math.max(1, Math.ceil(source.frames / 65536)), n = Math.ceil(source.frames / block);
+                overview = { channel, block, min: new Float32Array(n).fill(Infinity), max: new Float32Array(n).fill(-Infinity), position: 0, active: true, complete: false };
+            }
+            result = { active: overview.active, progress: overview.position / source.frames, complete: overview.complete };
+            if (overview.active)
+                overviewLoop(overviewToken);
+        }
+        else if (m.type === 'clearOverview') {
+            overviewToken++;
+            overview = null;
+            result = true;
+        }
+        else
+            throw Error('Unknown audio worker request.');
+        postMessage({ id: m.id, result });
+    }
+    catch (e) {
+        postMessage({ id: m.id, error: e.message || String(e) });
+    }
+};
+</script>
+<script>
+'use strict';
+(() => {
+    const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+    const MAX_MARKERS = 50000, HISTORY_BYTES = 16 * 1048576, MAX_IMPORT_BYTES = 32 * 1048576;
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
+    const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
+    class RPC {
+        constructor() {
+            this.worker = new Worker(workerURL);
+            this.pending = new Map();
+            this.next = 1;
+            this.closed = false;
+            this.worker.onmessage = ({ data: m }) => {
+                if (m.event) {
+                    onWorkerEvent(m);
+                    return;
+                }
+                const p = this.pending.get(m.id);
+                if (p) {
+                    this.pending.delete(m.id);
+                    m.error ? p.reject(Error(m.error)) : p.resolve(m.result);
+                }
+            };
+            this.worker.onerror = e => {
+                const error = Error(e.message || 'Audio worker crashed.');
+                for (const p of this.pending.values())
+                    p.reject(error);
+                this.pending.clear();
+                status(error.message, true);
+            };
+        }
+        call(type, params) {
+            if (this.closed)
+                return Promise.reject(Error('Worker closed.'));
+            const id = this.next++;
+            return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage(type === 'init' ? { id, type, file: params } : { id, type, params }); });
+        }
+        close() {
+            this.closed = true;
+            this.worker.terminate();
+            for (const p of this.pending.values())
+                p.reject(Error('Worker closed.'));
+            this.pending.clear();
+        }
+    }
+    function status(text, error = false) { $('status').textContent = text; $('status').className = error ? 'error' : 'ok'; }
+    function report(e) {
+        if (e.message !== 'Worker closed.')
+            status(e.message || String(e), true);
+    }
+    function formatTime(seconds) { seconds = Math.max(0, finite(seconds)); const ms = Math.round(seconds * 1000), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60; return (h ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + '.' + String(ms % 1000).padStart(3, '0'); }
+    function fmt(v, digits = 6) { return Number(v.toFixed(digits)).toString(); }
+    function uid() { return globalThis.crypto?.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); }
+    function channel() { return Number($('channel').value); }
+    function getDisplayFreqRange() {
+        const nyquist = app.meta ? app.meta.sampleRate / 2 : 48000;
+        let min = clamp(finite($('displayFreqMin').value, 0), 0, nyquist), max = clamp(finite($('displayFreqMax').value, nyquist), 0, nyquist);
+        if (max <= min) {
+            max = nyquist;
+            min = Math.min(min, Math.max(0, nyquist - Math.max(1, nyquist / 1000)));
+        }
+        return { min, max };
+    }
+    function updateFreqControls() { const f = getDisplayFreqRange(); $('displayFreqMin').value = fmt(f.min); $('displayFreqMax').value = fmt(f.max); $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000; return f; }
+    const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'addPointBtn', 'exportJson', 'exportCsv', 'importBtn'];
+    function ready(enabled) {
+        for (const id of readyControls)
+            $(id).disabled = !enabled;
+        $('clearBtn').disabled = !enabled || !app.markers.size;
+    }
+    async function loadAudio(file) {
+        if (!(file instanceof File))
+            throw Error('Choose an audio file.');
+        if (app.dirty && !confirm('Discard unexported annotation changes and load a different recording?'))
+            return false;
+        const epoch = ++app.loadEpoch;
+        pause();
+        app.analysis?.close();
+        app.playback?.close();
+        app.analysis = app.playback = null;
+        app.file = null;
+        app.meta = null;
+        app.cursor = 0;
+        app.start = 0;
+        updateTransport();
+        app.lastRender = null;
+        app.renderPending = false;
+        app.renderSerial++;
+        clearTimeout(app.renderTimer);
+        app.gesture = null;
+        ready(false);
+        status('Reading audio metadata…');
+        $('fileInfo').textContent = file.name;
+        app.markers.clear();
+        app.tags.clear();
+        app.selected = null;
+        app.undo = [];
+        app.redo = [];
+        app.historyBytes = 0;
+        app.dirty = false;
+        app.held = null;
+        app.overview = { active: false, progress: 0 };
+        $('overviewProgress').value = 0;
+        $('overviewBtn').textContent = 'Build exact overview';
+        refreshAnnotations();
+        paintAll();
+        const analysis = new RPC(), playback = new RPC();
+        app.analysis = analysis;
+        app.playback = playback;
+        try {
+            const meta = await analysis.call('init', file);
+            await playback.call('init', file);
+            if (epoch !== app.loadEpoch)
+                return false;
+            app.file = file;
+            app.meta = meta;
+            app.cursor = 0;
+            app.start = 0;
+            app.span = Math.min(10, meta.duration);
+            app.viewChannel = 0;
+            $('channel').replaceChildren();
+            for (let c = 0; c < meta.channels; c++) {
+                const o = new Option('Channel ' + (c + 1), String(c));
+                $('channel').append(o);
+            }
+            if (meta.channels > 1)
+                $('channel').append(new Option('Mix (average)', '-1'));
+            $('displayFreqMin').value = 0;
+            $('displayFreqMax').value = meta.sampleRate / 2;
+            $('gotoInput').max = meta.duration;
+            $('scrubSlider').max = meta.duration;
+            $('scrubSlider').step = 1 / meta.sampleRate;
+            $('fileInfo').textContent = file.name + ' · ' + fmt(file.size / 1048576, 2) + ' MiB · ' + meta.format + ' · ' + meta.channels + ' channel' + (meta.channels > 1 ? 's' : '') + ' · Native ' + meta.sampleRate.toLocaleString() + ' Hz · Nyquist ' + (meta.sampleRate / 2).toLocaleString() + ' Hz · ' + formatTime(meta.duration);
+            $('outputInfo').textContent = 'Native analysis: ' + meta.sampleRate.toLocaleString() + ' Hz. Press Play to initialize playback output.';
+            ready(true);
+            updateFreqControls();
+            setView(0, app.span);
+            updateTransport();
+            status('Ready. Audio stays on this device; export annotations to save them.');
+            return true;
+        }
+        catch (e) {
+            if (epoch === app.loadEpoch) {
+                analysis.close();
+                playback.close();
+                app.analysis = app.playback = null;
+                app.file = null;
+                app.meta = null;
+                ready(false);
+                status('Cannot open ' + file.name + ': ' + e.message, true);
+                paintAll();
+            }
+            return false;
+        }
+    }
+    // Serialize output-context changes. A stale Play request must never replace
+    // the context/gain of a newer file while awaiting the previous context.close().
+    async function ensureAudioContext() {
+        if (!app.meta)
+            throw Error('Load an audio file first.');
+        const native = app.meta.sampleRate, loadEpoch = app.loadEpoch;
+        const previous = app.contextTask;
+        const task = (async () => {
+            if (previous) {
+                try {
+                    await previous;
+                }
+                catch { }
+            }
+            if (loadEpoch !== app.loadEpoch || !app.meta)
+                throw Error('Playback initialization cancelled.');
+            if (app.context && app.context.state !== 'closed' && app.contextNative === native)
+                return app.context;
+            if (app.context && app.context.state !== 'closed')
+                await app.context.close();
+            if (loadEpoch !== app.loadEpoch || !app.meta)
+                throw Error('Playback initialization cancelled.');
+            const C = window.AudioContext || window.webkitAudioContext;
+            if (!C)
+                throw Error('This browser has no Web Audio support.');
+            let context;
+            try {
+                context = new C({ sampleRate: native, latencyHint: 'interactive' });
+            }
+            catch (e) {
+                if (e.name !== 'NotSupportedError' && e.name !== 'RangeError')
+                    throw e;
+                context = new C({ latencyHint: 'interactive' });
+            }
+            app.context = context;
+            app.contextNative = native;
+            app.gain = context.createGain();
+            app.analyser = context.createAnalyser();
+            app.analyser.fftSize = 2048;
+            app.gain.connect(app.analyser);
+            app.analyser.connect(context.destination);
+            updateVolume();
+            const rate = context.sampleRate;
+            $('outputInfo').textContent = 'Native analysis ' + native.toLocaleString() + ' Hz · Playback context ' + rate.toLocaleString() + ' Hz' + (rate !== native ? ' (native output rate unsupported; playback-only conversion, full analysis band preserved).' : ' · Native-rate context; hardware output may still resample.');
+            return context;
+        })();
+        app.contextTask = task;
+        try {
+            return await task;
+        }
+        finally {
+            if (app.contextTask === task)
+                app.contextTask = null;
+        }
+    }
+    function updateVolume() {
+        const db = clamp(finite($('volume').value, -12), -60, 48);
+        $('volumeValue').textContent = db + ' dB';
+        if (app.gain)
+            app.gain.gain.setTargetAtTime(10 ** (db / 20), app.context.currentTime, .01);
+    }
+    function playbackTime() {
+        if (!app.playing || !app.context || !app.segments.length)
+            return app.cursor;
+        const now = app.context.currentTime;
+        let time = app.segments[0].start;
+        for (const s of app.segments) {
+            if (now < s.when)
+                return time;
+            if (now < s.when + s.duration)
+                return Math.min(s.end, s.start + (now - s.when) * s.speed);
+            time = s.end;
+        }
+        return time;
+    }
+    function pause() {
+        if (app.playing)
+            app.cursor = playbackTime();
+        app.playing = false;
+        app.playEpoch++;
+        for (const node of app.nodes) {
+            try {
+                node.stop();
+                node.disconnect();
+            }
+            catch { }
+        }
+        app.nodes.clear();
+        app.segments = [];
+        app.pumpBusy = false;
+        $('playPauseBtn').textContent = 'Play';
+        updateTransport();
+    }
+    async function play() {
+        if (!app.meta)
+            return;
+        if (app.playing) {
+            pause();
+            return;
+        }
+        if (app.cursor >= app.meta.duration)
+            app.cursor = 0;
+        const epoch = ++app.playEpoch, loadEpoch = app.loadEpoch;
+        try {
+            const context = await ensureAudioContext();
+            await context.resume();
+            if (epoch !== app.playEpoch || loadEpoch !== app.loadEpoch)
+                return;
+            app.playing = true;
+            app.nextPosition = app.cursor * app.meta.sampleRate;
+            app.nextWhen = context.currentTime + .07;
+            app.segments = [];
+            $('playPauseBtn').textContent = 'Pause';
+            pump(epoch);
+            requestAnimationFrame(() => playAnimation(epoch));
+        }
+        catch (e) {
+            if (epoch === app.playEpoch) {
+                pause();
+                report(e);
+            }
+        }
+    }
+    async function pump(epoch) {
+        if (!app.playing || epoch !== app.playEpoch || app.pumpBusy)
+            return;
+        app.pumpBusy = true;
+        try {
+            const context = app.context;
+            while (app.playing && epoch === app.playEpoch && app.nextWhen < context.currentTime + .9 && app.nextPosition < app.meta.frames) {
+                const position = app.nextPosition, speed = Number($('speed').value), result = await app.playback.call('audio', { position, frames: Math.max(1, Math.round(context.sampleRate * .3)), speed, outputRate: context.sampleRate, channel: channel() });
+                if (!app.playing || epoch !== app.playEpoch)
+                    return;
+                if (!result.data.length) {
+                    app.nextPosition = app.meta.frames;
+                    break;
+                }
+                const buffer = context.createBuffer(1, result.data.length, context.sampleRate);
+                buffer.copyToChannel(result.data, 0);
+                const node = context.createBufferSource();
+                node.buffer = buffer;
+                node.connect(app.gain);
+                const when = Math.max(app.nextWhen, context.currentTime + .03);
+                const segment = { when, start: position / app.meta.sampleRate, end: result.next / app.meta.sampleRate, duration: buffer.duration, speed };
+                app.segments.push(segment);
+                app.nodes.add(node);
+                node.onended = () => { node.disconnect(); app.nodes.delete(node); };
+                node.start(when);
+                app.nextWhen = when + buffer.duration;
+                app.nextPosition = result.next;
+            }
+            const now = context.currentTime;
+            while (app.segments.length > 1 && app.segments[0].when + app.segments[0].duration < now - 1)
+                app.segments.shift();
+            if (app.nextPosition >= app.meta.frames && now >= app.nextWhen) {
+                app.cursor = app.meta.duration;
+                pause();
+                updateTransport();
+                return;
+            }
+        }
+        catch (e) {
+            if (epoch === app.playEpoch) {
+                pause();
+                report(e);
+            }
+        }
+        finally {
+            if (epoch === app.playEpoch) {
+                app.pumpBusy = false;
+                if (app.playing)
+                    setTimeout(() => pump(epoch), 35);
+            }
+        }
+    }
+    function playAnimation(epoch) {
+        if (!app.playing || epoch !== app.playEpoch)
+            return;
+        app.cursor = playbackTime();
+        if ($('followPlayback').checked && (app.cursor < app.start || app.cursor > app.start + app.span))
+            setView(Math.floor(app.cursor / app.span) * app.span, app.span);
+        updateTransport();
+        paintOverlays();
+        requestAnimationFrame(() => playAnimation(epoch));
+    }
+    function seek(time, restart = true) {
+        if (!app.meta)
+            return;
+        const was = app.playing;
+        pause();
+        app.cursor = clamp(finite(time), 0, app.meta.duration);
+        if (app.cursor < app.start || app.cursor > app.start + app.span)
+            setView(app.cursor - app.span / 2, app.span);
+        updateTransport();
+        paintOverlays();
+        if (was && restart)
+            play();
+    }
+    function updateTransport() {
+        if (!$('clock'))
+            return;
+        const duration = app.meta?.duration || 0;
+        $('clock').textContent = formatTime(app.cursor) + ' / ' + formatTime(duration);
+        $('scrubSlider').value = app.cursor;
+        if (document.activeElement !== $('gotoInput'))
+            $('gotoInput').value = fmt(app.cursor);
+    }
+    function setView(start, span) {
+        if (!app.meta)
+            return;
+        app.span = clamp(finite(span, app.span), Math.min(app.meta.duration, Math.max(.000001, 4 / app.meta.sampleRate)), app.meta.duration);
+        app.start = clamp(finite(start), 0, Math.max(0, app.meta.duration - app.span));
+        $('windowSeconds').value = fmt(app.span, 9);
+        $('scrollSlider').max = Math.max(0, app.meta.duration - app.span);
+        $('scrollSlider').step = 1 / app.meta.sampleRate;
+        $('scrollSlider').value = app.start;
+        $('viewLabel').textContent = fmt(app.start, 4) + ' – ' + fmt(app.start + app.span, 4) + ' s';
+        if ($('visibleOnly').checked)
+            renderMarkerTable();
+        requestRender();
+    }
+    function zoom(factor, anchor = app.start + app.span / 2) {
+        if (!app.meta)
+            return;
+        const fraction = (anchor - app.start) / app.span, span = clamp(app.span * factor, Math.max(.000001, 4 / app.meta.sampleRate), app.meta.duration);
+        setView(anchor - fraction * span, span);
+    }
+    function requestRender() {
+        const gradients = { ember: '#080923,#322275,#96377a,#e7834a,#fcf3b0', gray: '#000,#fff', ocean: '#040c1f,#0e3b62,#12858e,#78cfa4,#f2f8cc' };
+        $('frequencyLegend').style.background = 'linear-gradient(90deg,' + gradients[$('colorMap').value] + ')';
+        if (!app.meta)
+            return;
+        app.renderSerial++;
+        app.renderPending = true;
+        clearTimeout(app.renderTimer);
+        app.analysis.call('cancelRender').catch(() => { });
+        paintAll();
+        const serial = app.renderSerial;
+        app.renderTimer = setTimeout(() => doRender(serial), 70);
+    }
+    async function doRender(serial) {
+        if (!app.meta || serial !== app.renderSerial)
+            return;
+        const loadEpoch = app.loadEpoch, f = updateFreqControls(), geometry = geom($('specCanvas'));
+        let dbMin = clamp(finite($('dbMin').value, -100), -180, 0), dbMax = clamp(finite($('dbMax').value, 0), -179, 20);
+        if (dbMax <= dbMin)
+            dbMax = Math.min(20, dbMin + 1);
+        $('dbMin').value = dbMin;
+        $('dbMax').value = dbMax;
+        try {
+            const result = await app.analysis.call('render', { start: app.start, span: app.span, width: Math.ceil(geometry.w), height: Math.ceil(geometry.h), channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max, dbMin, dbMax, color: $('colorMap').value });
+            if (result.cancelled || serial !== app.renderSerial || loadEpoch !== app.loadEpoch)
+                return;
+            result.image = document.createElement('canvas');
+            result.image.width = result.columns;
+            result.image.height = result.height;
+            result.image.getContext('2d').putImageData(new ImageData(result.pixels, result.columns, result.height), 0, 0);
+            result.pixels = null;
+            app.lastRender = result;
+            app.renderPending = false;
+            const s = result.stats;
+            $('renderInfo').textContent = 'Waveform: ' + result.mode + (result.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' + fmt(app.meta.sampleRate / result.fft, 2) + ' Hz · FFT hop ' + fmt(result.fft / 4 / app.meta.sampleRate, 5) + ' s · ' + result.columns + ' sampled time columns · ' + Math.round(result.elapsedMs) + ' ms · caches ' + fmt((s.byteCache + s.frameCache + s.fftCache + s.overviewBytes) / 1048576, 1) + ' MiB';
+            paintAll();
+        }
+        catch (e) {
+            if (serial === app.renderSerial && loadEpoch === app.loadEpoch) {
+                app.renderPending = false;
+                report(e);
+                paintAll();
+            }
+        }
+    }
+    function onWorkerEvent(m) {
+        if (m.event === 'overview') {
+            if (m.channel !== channel())
+                return;
+            app.overview = m;
+            $('overviewProgress').value = m.progress;
+            $('overviewBtn').textContent = m.complete ? 'Rebuild overview' : m.active ? 'Pause overview' : 'Resume overview';
+            if (m.complete)
+                requestRender();
+        }
+        else if (m.event === 'overviewError') {
+            app.overview.active = false;
+            $('overviewBtn').textContent = 'Resume overview';
+            status('Overview indexing failed: ' + m.error, true);
+        }
+    }
+    const canvases = ['waveCanvas', 'waveOverlay', 'specCanvas', 'specOverlay'];
+    function geom(canvas) { const box = canvas.getBoundingClientRect(); return { left: 64, top: 23, w: Math.max(20, box.width - 80), h: Math.max(20, box.height - 51), width: box.width, height: box.height }; }
+    function sizedContext(canvas) {
+        const g = geom(canvas), dpr = Math.min(devicePixelRatio || 1, 2), w = Math.max(1, Math.round(g.width * dpr)), h = Math.max(1, Math.round(g.height * dpr));
+        if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { ctx, g };
+    }
+    function tX(time, g) { return g.left + (time - app.start) / app.span * g.w; }
+    function fY(f, g) { const band = getDisplayFreqRange(); return g.top + (band.max - f) / (band.max - band.min) * g.h; }
+    function drawBase(canvas, isSpec) {
+        const { ctx, g } = sizedContext(canvas);
+        ctx.clearRect(0, 0, g.width, g.height);
+        ctx.fillStyle = '#111b27';
+        ctx.fillRect(0, 0, g.width, g.height);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(g.left, g.top, g.w, g.h);
+        ctx.clip();
+        const r = app.lastRender;
+        if (r && app.meta) {
+            const x = tX(r.start, g), w = r.span / app.span * g.w;
+            if (isSpec) {
+                const y = fY(r.fmax, g), h = (r.fmax - r.fmin) / (getDisplayFreqRange().max - getDisplayFreqRange().min) * g.h;
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(r.image, x, y, w, h);
+            }
+            else {
+                const amp = Number($('amplitude').value);
+                ctx.strokeStyle = '#66d3b7';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                for (let i = 0; i < r.width; i++) {
+                    const px = x + (i + .5) / r.width * w, lo = r.wave[i * 2], hi = r.wave[i * 2 + 1];
+                    if (!Number.isFinite(lo) || !Number.isFinite(hi))
+                        continue;
+                    const y1 = g.top + g.h / 2 - hi * amp * g.h / 2, y2 = g.top + g.h / 2 - lo * amp * g.h / 2;
+                    ctx.moveTo(px, y1);
+                    ctx.lineTo(px, Math.max(y1 + .7, y2));
+                }
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+        ctx.font = '11px system-ui';
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#455365';
+        ctx.fillStyle = '#d8e3ef';
+        ctx.textAlign = 'center';
+        const ticks = Math.max(2, Math.min(6, Math.floor(g.w / 100)));
+        for (let i = 0; i <= ticks; i++) {
+            const x = g.left + i * g.w / ticks;
+            ctx.beginPath();
+            ctx.moveTo(x, g.top);
+            ctx.lineTo(x, g.top + g.h);
+            ctx.globalAlpha = .25;
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.fillText(app.meta ? fmt(app.start + i * app.span / ticks, app.span < .01 ? 6 : app.span < 1 ? 4 : 2) : '0', x, g.height - 8);
+        }
+        ctx.textAlign = 'right';
+        const f = getDisplayFreqRange();
+        for (let i = 0; i <= 4; i++) {
+            const y = g.top + i * g.h / 4;
+            ctx.fillText(isSpec ? fmt((f.max - i / 4 * (f.max - f.min)) / 1000, 2) : fmt((1 - i / 2) / Number($('amplitude').value), 2), g.left - 7, y + 4);
+            ctx.beginPath();
+            ctx.moveTo(g.left, y);
+            ctx.lineTo(g.left + g.w, y);
+            ctx.globalAlpha = .2;
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+        ctx.textAlign = 'left';
+        ctx.fillText(isSpec ? 'Spectrogram · kHz' : 'Waveform · full scale', 8, 14);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = app.renderPending ? '#ffda86' : '#d8e3ef';
+        ctx.fillText(app.renderPending ? 'Updating preview…' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
+    }
+    function styleFor(marker) { return app.tags.get(marker.tag) || { name: marker.tag || '', color: marker.color || '#69df98', alpha: marker.alpha ?? .75 }; }
+    function drawMarker(ctx, g, m, isSpec, preview = false) {
+        const style = styleFor(m);
+        ctx.strokeStyle = style.color;
+        ctx.fillStyle = style.color;
+        ctx.lineWidth = m.id === app.selected ? 2.5 : 1.4;
+        ctx.globalAlpha = preview ? .8 : style.alpha;
+        const x1 = tX(m.start, g), x2 = tX(m.end, g);
+        if (m.type === 'point') {
+            if (isSpec && m.frequency !== null) {
+                const y = fY(m.frequency, g);
+                ctx.beginPath();
+                ctx.arc(x1, y, 5, 0, 2 * Math.PI);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(x1 - 8, y);
+                ctx.lineTo(x1 + 8, y);
+                ctx.moveTo(x1, y - 8);
+                ctx.lineTo(x1, y + 8);
+                ctx.stroke();
+            }
+            else {
+                ctx.beginPath();
+                ctx.moveTo(x1, g.top);
+                ctx.lineTo(x1, g.top + g.h);
+                ctx.stroke();
+            }
+        }
+        else {
+            const y = isSpec && m.type === 'frequency_range' ? fY(m.freqMax, g) : g.top, h = isSpec && m.type === 'frequency_range' ? fY(m.freqMin, g) - y : g.h;
+            ctx.globalAlpha = style.alpha * .16;
+            ctx.fillRect(x1, y, Math.max(1, x2 - x1), h);
+            ctx.globalAlpha = style.alpha;
+            ctx.strokeRect(x1, y, Math.max(1, x2 - x1), h);
+        }
+        if (m.tag || m.label) {
+            ctx.font = '11px system-ui';
+            ctx.fillText((style.name || m.tag || m.label).slice(0, 50), Math.max(g.left + 2, x1 + 4), g.top + 12);
+        }
+        ctx.globalAlpha = 1;
+    }
+    function paintOverlay(canvas, isSpec) {
+        const { ctx, g } = sizedContext(canvas);
+        ctx.clearRect(0, 0, g.width, g.height);
+        if (!app.meta)
+            return;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(g.left, g.top, g.w, g.h);
+        ctx.clip();
+        let drawn = 0;
+        for (const marker of app.markers.values()) {
+            if (marker.end < app.start || marker.start > app.start + app.span)
+                continue;
+            if (++drawn > 5000)
+                break;
+            drawMarker(ctx, g, marker, isSpec);
+        }
+        if (app.gesture?.kind === 'annotate' && app.gesture.current) {
+            const marker = gestureMarker(app.gesture);
+            if (marker)
+                drawMarker(ctx, g, marker, isSpec, true);
+        }
+        const x = tX(app.cursor, g);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, g.top);
+        ctx.lineTo(x, g.top + g.h);
+        ctx.stroke();
+        ctx.restore();
+        if (drawn > 5000) {
+            ctx.fillStyle = '#ffda86';
+            ctx.font = '11px system-ui';
+            ctx.fillText('Overlay limited to 5,000 visible markers; zoom/filter the table.', g.left, g.top + g.h - 8);
+        }
+    }
+    function paintOverlays() { paintOverlay($('waveOverlay'), false); paintOverlay($('specOverlay'), true); }
+    function paintAll() { drawBase($('waveCanvas'), false); drawBase($('specCanvas'), true); paintOverlays(); }
+    function tagColor(key) {
+        let hash = 0;
+        for (const c of key)
+            hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+        const hue = hash % 360, s = .72, l = .59, a = s * Math.min(l, 1 - l);
+        const component = n => { const k = (n + hue / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); };
+        return '#' + component(0) + component(8) + component(4);
+    }
+    function tagDefinition(key) { return { name: key, color: tagColor(key), alpha: .8 }; }
+    function cleanText(value, max, name) {
+        if (typeof value !== 'string' || value.length > max)
+            throw Error(name + ' must be text of at most ' + max + ' characters.');
+        return value;
+    }
+    function requiredNumber(value, name) {
+        if (value === null || value === undefined || value === '' || typeof value === 'boolean' || !Number.isFinite(Number(value)))
+            throw Error(name + ' must be a finite number.');
+        return Number(value);
+    }
+    function normalizeMarker(raw) {
+        if (!raw || typeof raw !== 'object' || !['point', 'time_range', 'frequency_range'].includes(raw.type))
+            throw Error('Unknown annotation type.');
+        const duration = app.meta.duration, nyquist = app.meta.sampleRate / 2, tolerance = 1 / app.meta.sampleRate;
+        let start = requiredNumber(raw.start, 'Start time'), end = raw.type === 'point' ? start : requiredNumber(raw.end, 'End time');
+        if (start > end)
+            [start, end] = [end, start];
+        if (start < -tolerance || end > duration + tolerance)
+            throw Error('Annotation time is outside this recording.');
+        start = clamp(start, 0, duration);
+        end = clamp(end, 0, duration);
+        if (raw.type !== 'point' && start === end)
+            throw Error('A range must have nonzero duration.');
+        let frequency = null, freqMin = null, freqMax = null;
+        if (raw.type === 'point' && raw.frequency !== null && raw.frequency !== undefined && raw.frequency !== '')
+            frequency = requiredNumber(raw.frequency, 'Point frequency');
+        if (raw.type === 'frequency_range') {
+            freqMin = requiredNumber(raw.freqMin, 'Minimum frequency');
+            freqMax = requiredNumber(raw.freqMax, 'Maximum frequency');
+            if (freqMin > freqMax)
+                [freqMin, freqMax] = [freqMax, freqMin];
+            if (freqMin === freqMax)
+                throw Error('A frequency range must have nonzero height.');
+        }
+        for (const f of [frequency, freqMin, freqMax])
+            if (f !== null && (f < 0 || f > nyquist))
+                throw Error('Annotation frequency is outside [0, Nyquist].');
+        const color = raw.color ?? '#69df98';
+        if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color))
+            throw Error('Marker color must be #RRGGBB.');
+        const alpha = raw.alpha === undefined ? .75 : requiredNumber(raw.alpha, 'Alpha');
+        if (alpha < 0 || alpha > 1)
+            throw Error('Alpha must be between zero and one.');
+        return { id: raw.id ? cleanText(raw.id, 128, 'Marker id') : uid(), type: raw.type, start, end, frequency, freqMin, freqMax, tag: cleanText(raw.tag ?? '', 64, 'Tag'), label: cleanText(raw.label ?? '', 2000, 'Label'), color, alpha, createdAt: cleanText(raw.createdAt ?? new Date().toISOString(), 100, 'Creation timestamp') };
+    }
+    function normalizeTag(raw) {
+        const key = cleanText(raw.key, 64, 'Tag key');
+        if (!key)
+            throw Error('Tag key is empty.');
+        const name = cleanText(raw.name ?? key, 256, 'Tag name'), color = raw.color ?? tagColor(key), alpha = raw.alpha === undefined ? .8 : requiredNumber(raw.alpha, 'Tag alpha');
+        if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color) || alpha < 0 || alpha > 1)
+            throw Error('Invalid tag color or alpha.');
+        return { key, value: { name, color, alpha } };
+    }
+    function applyTransaction(tx, forward) {
+        for (const change of tx.markers || []) {
+            const value = forward ? change.after : change.before;
+            if (value === null)
+                app.markers.delete(change.id);
+            else
+                app.markers.set(change.id, { ...value });
+        }
+        for (const change of tx.tags || []) {
+            const value = forward ? change.after : change.before;
+            if (value === null)
+                app.tags.delete(change.key);
+            else
+                app.tags.set(change.key, { ...value });
+        }
+        app.selected = forward ? tx.afterSelection : tx.beforeSelection;
+        if (!app.markers.has(app.selected))
+            app.selected = null;
+        app.dirty = true;
+        refreshAnnotations();
+    }
+    function transact(tx) {
+        tx.beforeSelection = app.selected;
+        tx.afterSelection = tx.afterSelection ?? app.selected;
+        tx.bytes = JSON.stringify(tx).length * 2;
+        if (tx.bytes > HISTORY_BYTES)
+            throw Error('This change exceeds the undo memory budget; import a smaller batch.');
+        let count = app.markers.size;
+        for (const c of tx.markers || []) {
+            if (c.before === null && c.after !== null)
+                count++;
+            if (c.before !== null && c.after === null)
+                count--;
+        }
+        if (count > MAX_MARKERS)
+            throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
+        app.redo = [];
+        app.undo.push(tx);
+        app.historyBytes = app.undo.reduce((n, x) => n + x.bytes, 0);
+        while (app.undo.length > 200 || app.historyBytes > HISTORY_BYTES) {
+            app.historyBytes -= app.undo.shift().bytes;
+        }
+        applyTransaction(tx, true);
+    }
+    function history(forward) {
+        const from = forward ? app.redo : app.undo, to = forward ? app.undo : app.redo, tx = from.pop();
+        if (!tx)
+            return;
+        to.push(tx);
+        applyTransaction(tx, forward);
+    }
+    function addMarker(raw) { const m = normalizeMarker({ ...raw, id: uid(), tag: raw.tag ?? app.held ?? $('tagInput').value, label: raw.label ?? $('labelInput').value }); const tags = m.tag && !app.tags.has(m.tag) ? [{ key: m.tag, before: null, after: tagDefinition(m.tag) }] : []; transact({ markers: [{ id: m.id, before: null, after: m }], tags, afterSelection: m.id }); }
+    function removeMarker(id) {
+        const m = app.markers.get(id);
+        if (m)
+            transact({ markers: [{ id, before: m, after: null }], afterSelection: null });
+    }
+    function selectMarker(id, jump = false) {
+        app.selected = app.markers.has(id) ? id : null;
+        const m = app.markers.get(app.selected);
+        if (jump && m) {
+            seek(m.start, false);
+            if (m.start < app.start || m.end > app.start + app.span)
+                setView(Math.max(0, m.start - (m.end - m.start) * .1), Math.max(app.span, (m.end - m.start) * 1.2));
+        }
+        renderMarkerTable();
+        renderEditor();
+        paintOverlays();
+    }
+    function button(text, action, title) {
+        const b = document.createElement('button');
+        b.textContent = text;
+        if (title)
+            b.title = title;
+        b.addEventListener('click', () => {
+            try {
+                action();
+            }
+            catch (e) {
+                report(e);
+            }
+        });
+        return b;
+    }
+    function renderMarkerTable() {
+        const query = $('markerFilter').value.toLowerCase(), visible = $('visibleOnly').checked;
+        const rows = Array.from(app.markers.values()).filter(m => (!visible || (m.end >= app.start && m.start <= app.start + app.span)) && (!query || [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query)))).sort((a, b) => a.start - b.start || a.end - b.end);
+        const pages = Math.max(1, Math.ceil(rows.length / 100));
+        app.page = clamp(app.page, 0, pages - 1);
+        $('markerCount').textContent = app.markers.size + ' markers' + (rows.length !== app.markers.size ? ' · ' + rows.length + ' shown' : '');
+        $('pageLabel').textContent = (app.page + 1) + ' / ' + pages;
+        $('pagePrev').disabled = app.page === 0;
+        $('pageNext').disabled = app.page === pages - 1;
+        const fragment = document.createDocumentFragment();
+        for (const m of rows.slice(app.page * 100, (app.page + 1) * 100)) {
+            const tr = document.createElement('tr');
+            tr.dataset.id = m.id;
+            if (m.id === app.selected)
+                tr.className = 'selected';
+            for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), m.type === 'frequency_range' ? fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2) : m.frequency === null ? '—' : fmt(m.frequency, 2)]) {
+                const td = document.createElement('td');
+                td.textContent = text;
+                tr.append(td);
+            }
+            const desc = document.createElement('td'), swatch = document.createElement('span');
+            swatch.className = 'swatch';
+            swatch.style.background = styleFor(m).color;
+            desc.append(swatch, document.createTextNode((m.tag ? '[' + m.tag + '] ' + styleFor(m).name + ' ' : '') + m.label));
+            tr.append(desc);
+            const actions = document.createElement('td');
+            actions.append(button('Select', () => selectMarker(m.id), 'Select marker'), document.createTextNode(' '), button('Go', () => selectMarker(m.id, true), 'Jump to marker'), document.createTextNode(' '), button('×', () => removeMarker(m.id), 'Delete marker'));
+            tr.append(actions);
+            fragment.append(tr);
+        }
+        if (!rows.length) {
+            const tr = document.createElement('tr'), td = document.createElement('td');
+            td.colSpan = 5;
+            td.textContent = 'No matching markers.';
+            tr.append(td);
+            fragment.append(tr);
+        }
+        $('markerRows').replaceChildren(fragment);
+    }
+    function renderTags() {
+        const q = $('tagFilter').value.toLowerCase(), entries = Array.from(app.tags.entries()).filter(([k, v]) => k.toLowerCase().includes(q) || v.name.toLowerCase().includes(q)).sort((a, b) => a[0].localeCompare(b[0]));
+        const frag = document.createDocumentFragment();
+        for (const [key, tag] of entries.slice(0, 100)) {
+            const row = document.createElement('div');
+            row.className = 'row';
+            const color = document.createElement('input');
+            color.type = 'color';
+            color.value = tag.color;
+            color.setAttribute('aria-label', 'Color for tag ' + key);
+            const label = document.createElement('strong');
+            label.textContent = key;
+            label.style.maxWidth = '45px';
+            label.style.overflowWrap = 'anywhere';
+            const name = document.createElement('input');
+            name.type = 'text';
+            name.maxLength = 256;
+            name.value = tag.name;
+            name.setAttribute('aria-label', 'Name for tag ' + key);
+            const alpha = document.createElement('input');
+            alpha.type = 'number';
+            alpha.min = 0;
+            alpha.max = 1;
+            alpha.step = .05;
+            alpha.value = tag.alpha;
+            alpha.setAttribute('aria-label', 'Alpha for tag ' + key);
+            const save = () => {
+                try {
+                    const updated = normalizeTag({ key, name: name.value, color: color.value, alpha: alpha.value }).value;
+                    transact({ tags: [{ key, before: app.tags.get(key), after: updated }] });
+                }
+                catch (e) {
+                    report(e);
+                    renderTags();
+                }
+            };
+            for (const input of [color, name, alpha])
+                input.addEventListener('change', save);
+            row.append(color, label, name, alpha);
+            frag.append(row);
+        }
+        const note = document.createElement('p');
+        note.className = 'hint';
+        note.textContent = !entries.length ? 'Hold a letter/number while drawing, or enter a tag above.' : entries.length > 100 ? 'First 100 of ' + entries.length + ' tags. Filter to find others.' : '';
+        frag.append(note);
+        $('tagsList').replaceChildren(frag);
+    }
+    function renderEditor() {
+        const m = app.markers.get(app.selected);
+        $('editFields').disabled = !m;
+        $('selectionInfo').textContent = m ? m.type.replaceAll('_', ' ') + ' · ' + m.id : 'Select a marker from the table, or click one in Navigate mode.';
+        if (!m)
+            return;
+        $('editStart').value = String(m.start);
+        $('editEnd').value = String(m.end);
+        $('editEnd').disabled = m.type === 'point';
+        $('editMin').value = m.type === 'point' ? (m.frequency === null ? '' : String(m.frequency)) : m.freqMin === null ? '' : String(m.freqMin);
+        $('editMax').value = m.freqMax === null ? '' : String(m.freqMax);
+        $('editMin').disabled = m.type === 'time_range';
+        $('editMax').disabled = m.type !== 'frequency_range';
+        $('editTag').value = m.tag;
+        $('editLabel').value = m.label;
+    }
+    function refreshAnnotations() { renderMarkerTable(); renderTags(); renderEditor(); $('undoBtn').disabled = !app.undo.length; $('redoBtn').disabled = !app.redo.length; $('clearBtn').disabled = !app.markers.size; paintOverlays(); }
+    function exportObject() {
+        if (!app.meta)
+            throw Error('Load audio first.');
+        return { schema: 'audio-annotator-v2', version: 1, meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta, nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() }, view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value), frequency: getDisplayFreqRange() }, tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })), markers: Array.from(app.markers.values(), m => { const s = styleFor(m); return { ...m, tagName: s.name, color: s.color, alpha: s.alpha }; }) };
+    }
+    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json'];
+    const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
+    function exportCSV() {
+        const data = exportObject(), metadata = { ...data, csvTextEncoding: 'apostrophe-prefix' };
+        delete metadata.markers;
+        const row = Array(csvHeader.length).fill('');
+        row[0] = 'metadata';
+        row[14] = JSON.stringify(metadata);
+        const lines = [csvHeader.map(csvCell).join(','), row.map(csvCell).join(',')];
+        for (const m of data.markers) {
+            const text = v => "'" + v;
+            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), ''].map(csvCell).join(','));
+        }
+        return lines.join('\r\n') + '\r\n';
+    }
+    function parseCSV(text) {
+        text = text.replace(/^\uFEFF/, '');
+        const rows = [];
+        let row = [], field = '', quoted = false, closed = false;
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if (quoted) {
+                if (c === '"') {
+                    if (text[i + 1] === '"') {
+                        field += '"';
+                        i++;
+                    }
+                    else {
+                        quoted = false;
+                        closed = true;
+                    }
+                }
+                else
+                    field += c;
+            }
+            else if (c === '"') {
+                if (field || closed)
+                    throw Error('Malformed CSV quote.');
+                quoted = true;
+            }
+            else if (c === ',') {
+                row.push(field);
+                field = '';
+                closed = false;
+            }
+            else if (c === '\n' || c === '\r') {
+                if (c === '\r' && text[i + 1] === '\n')
+                    i++;
+                row.push(field);
+                if (row.some(x => x !== ''))
+                    rows.push(row);
+                row = [];
+                field = '';
+                closed = false;
+            }
+            else {
+                if (closed)
+                    throw Error('Unexpected text after CSV quote.');
+                field += c;
+            }
+            if (rows.length > MAX_MARKERS + 2)
+                throw Error('Too many CSV rows.');
+        }
+        if (quoted)
+            throw Error('Unterminated CSV quoted field.');
+        if (field || row.length) {
+            row.push(field);
+            rows.push(row);
+        }
+        return rows;
+    }
+    function parseImport(text, format) {
+        if (text.length * 2 > MAX_IMPORT_BYTES)
+            throw Error('Annotation text exceeds the import memory limit.');
+        let data;
+        if (format === 'json')
+            data = JSON.parse(text.replace(/^\uFEFF/, ''));
+        else {
+            const rows = parseCSV(text);
+            if (!rows.length)
+                throw Error('Empty CSV.');
+            const header = rows.shift(), col = name => header.indexOf(name);
+            if (new Set(header).size !== header.length || csvHeader.some(h => col(h) < 0))
+                throw Error('CSV needs the Audio Annotator v2 column headers.');
+            const metadataRows = rows.filter(r => r[col('record_type')] === 'metadata');
+            if (metadataRows.length !== 1)
+                throw Error('CSV requires exactly one metadata row.');
+            data = JSON.parse(metadataRows[0][col('metadata_json')]);
+            data.markers = [];
+            for (const row of rows) {
+                if (row.length !== header.length)
+                    throw Error('CSV row has the wrong number of columns.');
+                const get = k => row[col(k)], record = get('record_type');
+                if (record === 'metadata')
+                    continue;
+                if (record !== 'marker')
+                    throw Error('Unknown CSV record type.');
+                const textField = k => {
+                    const value = get(k);
+                    if (data.csvTextEncoding === 'apostrophe-prefix') {
+                        if (!value.startsWith("'"))
+                            throw Error('CSV text is missing its safety prefix.');
+                        return value.slice(1);
+                    }
+                    return value;
+                };
+                data.markers.push({ id: textField('id'), type: get('type'), start: get('start_seconds'), end: get('end_seconds'), frequency: get('frequency_hz') === '' ? null : get('frequency_hz'), freqMin: get('freq_min_hz') === '' ? null : get('freq_min_hz'), freqMax: get('freq_max_hz') === '' ? null : get('freq_max_hz'), tag: textField('tag'), label: textField('label'), color: get('color'), alpha: get('alpha'), createdAt: textField('created_at') });
+            }
+        }
+        if (!data || data.schema !== 'audio-annotator-v2' || data.version !== 1 || !Array.isArray(data.markers) || !Array.isArray(data.tags) || !data.meta)
+            throw Error('Not an Audio Annotator v2 annotation document.');
+        if (data.markers.length > MAX_MARKERS || data.tags.length > 2000)
+            throw Error('Too many markers or tags.');
+        const markers = data.markers.map(normalizeMarker), tags = new Map();
+        for (const raw of data.tags) {
+            const tag = normalizeTag(raw);
+            if (tags.has(tag.key))
+                throw Error('Duplicate tag definition.');
+            tags.set(tag.key, tag.value);
+        }
+        for (const m of markers)
+            if (m.tag && !tags.has(m.tag))
+                tags.set(m.tag, { name: m.tag, color: m.color, alpha: m.alpha });
+        return { meta: data.meta, markers, tags };
+    }
+    function importText(text, format, mode, ask = true) {
+        if (!app.meta)
+            throw Error('Load the matching audio before importing annotations.');
+        const data = parseImport(text, format), meta = data.meta, mismatch = meta.filename !== app.file.name || Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate || Number(meta.frames) !== app.meta.frames;
+        if (mismatch && ask && !confirm('The annotation metadata does not match this audio file. Coordinates are valid here. Import anyway?'))
+            return false;
+        const replace = mode === 'replace';
+        if (replace && app.markers.size && ask && !confirm('Replace all current annotations and tags? This is undoable.'))
+            return false;
+        const conflicts = Array.from(data.tags).filter(([k, v]) => app.tags.has(k) && JSON.stringify(app.tags.get(k)) !== JSON.stringify(v)).length;
+        if (!replace && conflicts && ask && !confirm('Update ' + conflicts + ' existing tag definitions? Their colors/names also change on existing markers.'))
+            return false;
+        const markers = new Map(replace ? [] : app.markers), tags = new Map(replace ? [] : app.tags);
+        for (const m0 of data.markers) {
+            let m = m0;
+            if (markers.has(m.id))
+                m = { ...m, id: uid() };
+            markers.set(m.id, m);
+        }
+        for (const [k, v] of data.tags)
+            tags.set(k, v);
+        if (tags.size > 2000)
+            throw Error('The tag limit is 2,000.');
+        const changes = { markers: [], tags: [], afterSelection: null };
+        for (const id of new Set([...app.markers.keys(), ...markers.keys()])) {
+            const before = app.markers.get(id) ?? null, after = markers.get(id) ?? null;
+            if (before !== after)
+                changes.markers.push({ id, before, after });
+        }
+        for (const key of new Set([...app.tags.keys(), ...tags.keys()])) {
+            const before = app.tags.get(key) ?? null, after = tags.get(key) ?? null;
+            if (before !== after)
+                changes.tags.push({ key, before, after });
+        }
+        transact(changes);
+        status((replace ? 'Replaced with ' : 'Merged ') + data.markers.length + ' annotations. Undo is available.');
+        return true;
+    }
+    async function importFile(file, mode = $('importMode').value) {
+        if (file.size > MAX_IMPORT_BYTES)
+            throw Error('Annotation file exceeds 32 MiB.');
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['json', 'csv'].includes(ext))
+            throw Error('Choose JSON or CSV annotations.');
+        const epoch = app.loadEpoch, text = await file.text();
+        if (epoch !== app.loadEpoch)
+            throw Error('Import cancelled because the audio file changed.');
+        return importText(text, ext, mode);
+    }
+    function downloadAnnotations(format) {
+        try {
+            const text = format === 'json' ? JSON.stringify(exportObject(), null, 2) : exportCSV(), url = URL.createObjectURL(new Blob([text], { type: format === 'json' ? 'application/json' : 'text/csv;charset=utf-8' })), a = document.createElement('a');
+            a.href = url;
+            a.download = app.file.name.replace(/\.[^.]+$/, '') + '.annotations.' + format;
+            document.body.append(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            app.dirty = false;
+            status('Exported ' + app.markers.size + ' annotations as ' + format.toUpperCase() + '.');
+        }
+        catch (e) {
+            report(e);
+        }
+    }
+    function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), f = getDisplayFreqRange(), frequency = clamp(f.max - (y - g.top) / g.h * (f.max - f.min), f.min, f.max); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
+    function nearestMarker(p, isSpec) {
+        let best = null, distance = 11;
+        for (const m of app.markers.values()) {
+            if (m.end < app.start || m.start > app.start + app.span)
+                continue;
+            const x1 = tX(m.start, p.g), x2 = tX(m.end, p.g);
+            let d;
+            if (m.type === 'point')
+                d = isSpec && m.frequency !== null ? Math.hypot(p.x - x1, p.y - fY(m.frequency, p.g)) : Math.abs(p.x - x1);
+            else {
+                const y1 = isSpec && m.type === 'frequency_range' ? fY(m.freqMax, p.g) : p.g.top, y2 = isSpec && m.type === 'frequency_range' ? fY(m.freqMin, p.g) : p.g.top + p.g.h;
+                d = Math.hypot(Math.max(x1 - p.x, 0, p.x - x2), Math.max(y1 - p.y, 0, p.y - y2));
+            }
+            if (d <= distance) {
+                distance = d;
+                best = m;
+            }
+        }
+        return best;
+    }
+    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8 }; }
+    function cancelGesture() {
+        const g = app.gesture;
+        app.gesture = null;
+        if (g) {
+            try {
+                g.canvas.releasePointerCapture(g.pointerId);
+            }
+            catch { }
+        }
+        paintOverlays();
+    }
+    for (const [id, isSpec] of [['waveOverlay', false], ['specOverlay', true]]) {
+        const canvas = $(id);
+        canvas.addEventListener('pointerdown', e => {
+            if (!app.meta || e.button > 1)
+                return;
+            const point = canvasPoint(e, canvas);
+            if (!point.inside)
+                return;
+            e.preventDefault();
+            canvas.focus({ preventScroll: true });
+            const nearby = nearestMarker(point, isSpec);
+            if (e.shiftKey && !app.held) {
+                if (nearby)
+                    removeMarker(nearby.id);
+                return;
+            }
+            const mode = document.querySelector('input[name=mode]:checked').value, pan = mode === 'navigate' || e.button === 1 || e.altKey;
+            if (mode === 'frequency_range' && !isSpec && !pan) {
+                status('Draw frequency ranges in the spectrogram.', true);
+                return;
+            }
+            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
+            canvas.setPointerCapture(e.pointerId);
+            paintOverlays();
+        });
+        canvas.addEventListener('pointermove', e => {
+            if (!app.meta)
+                return;
+            const p = canvasPoint(e, canvas);
+            $('hoverInfo').textContent = p.inside ? fmt(p.time, 6) + ' s' + (isSpec ? ' · ' + fmt(p.frequency, 2) + ' Hz' : '') : '';
+            const g = app.gesture;
+            if (!g || g.canvas !== canvas || g.pointerId !== e.pointerId)
+                return;
+            g.current = p;
+            if (Math.hypot(p.x - g.point.x, p.y - g.point.y) > 3)
+                g.moved = true;
+            if (g.kind === 'pan' && g.moved)
+                setView(g.viewStart - (p.x - g.point.x) / p.g.w * g.span, g.span);
+            paintOverlays();
+        });
+        canvas.addEventListener('pointerup', e => {
+            const g = app.gesture;
+            if (!g || g.canvas !== canvas || g.pointerId !== e.pointerId)
+                return;
+            g.current = canvasPoint(e, canvas);
+            app.gesture = null;
+            try {
+                canvas.releasePointerCapture(e.pointerId);
+            }
+            catch { }
+            try {
+                if (g.kind === 'pan') {
+                    if (!g.moved) {
+                        if (g.nearby)
+                            selectMarker(g.nearby);
+                        else
+                            seek(g.point.time);
+                    }
+                }
+                else if (g.mode === 'point') {
+                    if (!g.moved)
+                        addMarker(gestureMarker(g));
+                }
+                else {
+                    const marker = gestureMarker(g);
+                    if (marker.end - marker.start >= 1 / app.meta.sampleRate && (marker.type !== 'frequency_range' || marker.freqMax > marker.freqMin))
+                        addMarker(marker);
+                }
+            }
+            catch (error) {
+                report(error);
+            }
+            paintOverlays();
+        });
+        canvas.addEventListener('pointercancel', cancelGesture);
+        canvas.addEventListener('lostpointercapture', () => {
+            if (app.gesture?.canvas === canvas)
+                cancelGesture();
+        });
+        canvas.addEventListener('wheel', e => {
+            if (!app.meta)
+                return;
+            e.preventDefault();
+            if (app.gesture)
+                cancelGesture();
+            const p = canvasPoint(e, canvas), delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? p.g.h : 1);
+            if (e.ctrlKey || e.metaKey)
+                zoom(Math.exp(clamp(delta * .002, -1, 1)), p.time);
+            else if (e.altKey) {
+                const f = getDisplayFreqRange(), ny = app.meta.sampleRate / 2, span = clamp((f.max - f.min) * Math.exp(clamp(delta * .002, -1, 1)), Math.max(.001, ny / 1000000), ny), fraction = (p.frequency - f.min) / (f.max - f.min), min = clamp(p.frequency - fraction * span, 0, ny - span);
+                $('displayFreqMin').value = min;
+                $('displayFreqMax').value = min + span;
+                requestRender();
+            }
+            else if (e.shiftKey)
+                seek(app.cursor + Math.sign(delta) * Math.max(1 / app.meta.sampleRate, finite($('stepInput').value, 1)), false);
+            else
+                setView(app.start + delta / p.g.w * app.span, app.span);
+        }, { passive: false });
+    }
+    function handle(id, event, fn) {
+        $(id).addEventListener(event, e => {
+            try {
+                const value = fn(e);
+                if (value?.catch)
+                    value.catch(report);
+            }
+            catch (error) {
+                report(error);
+            }
+        });
+    }
+    handle('fileInput', 'change', () => {
+        const file = $('fileInput').files[0];
+        $('fileInput').value = '';
+        if (file)
+            return loadAudio(file);
+    });
+    handle('playPauseBtn', 'click', play);
+    handle('stopBtn', 'click', () => seek(0, false));
+    handle('prevBtn', 'click', () => seek(app.cursor - Math.max(1 / app.meta.sampleRate, finite($('stepInput').value, 1))));
+    handle('nextBtn', 'click', () => seek(app.cursor + Math.max(1 / app.meta.sampleRate, finite($('stepInput').value, 1))));
+    handle('gotoBtn', 'click', () => seek($('gotoInput').value));
+    handle('gotoInput', 'keydown', e => {
+        if (e.key === 'Enter')
+            seek($('gotoInput').value);
+    });
+    handle('volume', 'input', updateVolume);
+    handle('speed', 'change', () => {
+        if (app.playing) {
+            pause();
+            return play();
+        }
+    });
+    let scrubResume = false;
+    handle('scrubSlider', 'pointerdown', () => { scrubResume = app.playing; pause(); });
+    handle('scrubSlider', 'input', () => seek($('scrubSlider').value, false));
+    handle('scrubSlider', 'change', () => {
+        if (scrubResume) {
+            scrubResume = false;
+            return play();
+        }
+    });
+    handle('scrubSlider', 'pointercancel', () => { scrubResume = false; });
+    handle('zoomIn', 'click', () => zoom(.5));
+    handle('zoomOut', 'click', () => zoom(2));
+    handle('fitBtn', 'click', () => setView(0, app.meta.duration));
+    handle('windowSeconds', 'change', () => setView(app.start, $('windowSeconds').value));
+    handle('scrollSlider', 'input', () => setView($('scrollSlider').value, app.span));
+    handle('panLeft', 'click', () => setView(app.start - app.span * .8, app.span));
+    handle('panRight', 'click', () => setView(app.start + app.span * .8, app.span));
+    handle('fullBandBtn', 'click', () => { $('displayFreqMin').value = 0; $('displayFreqMax').value = app.meta.sampleRate / 2; requestRender(); });
+    for (const id of ['fftSize', 'displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
+        handle(id, 'change', requestRender);
+    handle('amplitude', 'change', paintAll);
+    handle('channel', 'change', async () => {
+        const was = app.playing;
+        pause();
+        app.viewChannel = channel();
+        app.lastRender = null;
+        await app.analysis.call('clearOverview');
+        app.overview = { active: false, progress: 0 };
+        $('overviewProgress').value = 0;
+        $('overviewBtn').textContent = 'Build exact overview';
+        requestRender();
+        if (was)
+            await play();
+    });
+    handle('overviewBtn', 'click', async () => { const result = await app.analysis.call('overview', { channel: channel() }); app.overview = result; $('overviewProgress').value = result.progress; $('overviewBtn').textContent = result.active ? 'Pause overview' : result.complete ? 'Rebuild overview' : 'Resume overview'; });
+    handle('addPointBtn', 'click', () => addMarker({ type: 'point', start: app.cursor, end: app.cursor, frequency: null }));
+    handle('undoBtn', 'click', () => history(false));
+    handle('redoBtn', 'click', () => history(true));
+    handle('clearBtn', 'click', () => {
+        if (confirm('Clear all markers? Tags are retained. This is undoable.'))
+            transact({ markers: Array.from(app.markers, ([id, m]) => ({ id, before: m, after: null })), afterSelection: null });
+    });
+    handle('exportJson', 'click', () => downloadAnnotations('json'));
+    handle('exportCsv', 'click', () => downloadAnnotations('csv'));
+    handle('importBtn', 'click', () => {
+        const file = $('importInput').files[0];
+        if (!file)
+            throw Error('Choose an annotation file first.');
+        return importFile(file);
+    });
+    for (const id of ['markerFilter', 'visibleOnly'])
+        handle(id, id === 'markerFilter' ? 'input' : 'change', () => { app.page = 0; renderMarkerTable(); });
+    handle('tagFilter', 'input', renderTags);
+    handle('pagePrev', 'click', () => { app.page--; renderMarkerTable(); });
+    handle('pageNext', 'click', () => { app.page++; renderMarkerTable(); });
+    handle('deleteMarker', 'click', () => removeMarker(app.selected));
+    handle('saveMarker', 'click', () => {
+        const old = app.markers.get(app.selected);
+        if (!old)
+            return;
+        // Preserve unchanged imported CRLF labels; textarea.value normalizes them to LF.
+        const label = $('editLabel').value === old.label.replace(/\r\n?/g, '\n') ? old.label : $('editLabel').value;
+        const tag = $('editTag').value === old.tag.replace(/[\r\n]/g, '') ? old.tag : $('editTag').value;
+        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value, frequency: old.type === 'point' ? $('editMin').value : null, freqMin: old.type === 'frequency_range' ? $('editMin').value : null, freqMax: old.type === 'frequency_range' ? $('editMax').value : null, tag, label });
+        transact({ markers: [{ id: m.id, before: old, after: m }], tags: m.tag && !app.tags.has(m.tag) ? [{ key: m.tag, before: null, after: tagDefinition(m.tag) }] : [] });
+    });
+    const editing = target => target instanceof HTMLElement && (target.matches('textarea,select,input:not([type=radio]):not([type=checkbox]):not([type=file])') || target.isContentEditable);
+    document.addEventListener('keydown', e => {
+        if (editing(e.target) || !app.meta || (e.target instanceof HTMLElement && e.target.matches('button,input[type=radio],input[type=checkbox],input[type=file]') && [' ', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)))
+            return;
+        const mod = e.ctrlKey || e.metaKey;
+        try {
+            if (mod && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                history(e.shiftKey);
+                return;
+            }
+            if (mod && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                history(true);
+                return;
+            }
+            if (mod)
+                return;
+            if (e.key === ' ') {
+                e.preventDefault();
+                if (!e.repeat)
+                    play();
+            }
+            else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                seek(app.cursor + (e.key === 'ArrowLeft' ? -1 : 1) * Math.max(1 / app.meta.sampleRate, finite($('stepInput').value, 1)));
+            }
+            else if (e.key === 'Home') {
+                e.preventDefault();
+                seek(0);
+            }
+            else if (e.key === 'End') {
+                e.preventDefault();
+                seek(app.meta.duration, false);
+            }
+            else if (e.key === '+' || e.key === '=') {
+                e.preventDefault();
+                zoom(.5);
+            }
+            else if (e.key === '-') {
+                e.preventDefault();
+                zoom(2);
+            }
+            else if (e.key === 'Delete' || e.key === 'Backspace') {
+                e.preventDefault();
+                removeMarker(app.selected);
+            }
+            else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelGesture();
+            }
+            else if (/^[a-zA-Z0-9]$/.test(e.key))
+                app.held = e.key;
+        }
+        catch (error) {
+            report(error);
+        }
+    });
+    document.addEventListener('keyup', e => {
+        if (app.held?.toLowerCase() === e.key.toLowerCase())
+            app.held = null;
+    });
+    window.addEventListener('blur', () => { app.held = null; cancelGesture(); });
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            app.held = null;
+            cancelGesture();
+        }
+    });
+    for (const type of ['dragenter', 'dragover'])
+        document.addEventListener(type, e => {
+            e.preventDefault();
+            if (e.dataTransfer)
+                e.dataTransfer.dropEffect = 'copy';
+            document.body.classList.add('dragging');
+        });
+    document.addEventListener('dragleave', e => {
+        if (!e.relatedTarget)
+            document.body.classList.remove('dragging');
+    });
+    document.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        document.body.classList.remove('dragging');
+        try {
+            const files = Array.from(e.dataTransfer?.files || []), annotations = files.filter(f => /\.(json|csv)$/i.test(f.name)), audio = files.filter(f => !annotations.includes(f));
+            if (audio.length > 1)
+                throw Error('Drop one audio recording at a time.');
+            if (audio.length && !await loadAudio(audio[0]))
+                return;
+            for (let i = 0; i < annotations.length; i++)
+                await importFile(annotations[i], i ? 'merge' : $('importMode').value);
+        }
+        catch (error) {
+            report(error);
+        }
+    });
+    window.addEventListener('beforeunload', e => {
+        if (app.dirty) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+    window.addEventListener('pagehide', e => { pause(); if (e.persisted)
+        return; app.analysis?.close(); app.playback?.close(); app.context?.close(); URL.revokeObjectURL(workerURL); });
+    new ResizeObserver(() => {
+        paintAll();
+        if (app.meta)
+            requestRender();
+    }).observe($('wavePlot'));
+    window.AudioAnnotatorV2 = Object.freeze({ inspect: () => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markers: Array.from(app.markers.values(), m => ({ ...m })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+            if (!app.analyser)
+                return 0;
+            const a = new Float32Array(app.analyser.fftSize);
+            app.analyser.getFloatTimeDomainData(a);
+            return Math.sqrt(a.reduce((s, x) => s + x * x, 0) / a.length);
+        } });
+    refreshAnnotations();
+    paintAll();
+})();
+</script>
+</body>
+</html>
