@@ -38,13 +38,13 @@ See README.md/AGENTS.md for repository conventions; README is generated, not edi
 <section class="panel" aria-label="File and transport">
 <div class="row"><label>Audio <input id="fileInput" type="file" accept=".wav,.wave,.flac,audio/wav,audio/flac"></label><span class="hint">Or drop one audio file here; JSON/CSV files import annotations.</span></div>
 <div id="fileInfo">No audio loaded.</div><div id="status" role="status" aria-live="polite">Choose a recording to begin.</div>
-<div class="row"><button id="playPauseBtn" disabled>Play</button><button id="stopBtn" disabled>Stop</button><button id="prevBtn" disabled>◀ Step</button><button id="nextBtn" disabled>Step ▶</button><label>Step (s) <input id="stepInput" type="number" min="0.000001" value="1" step="any"></label><label>Speed <select id="speed"><option>0.01</option><option>0.025</option><option>0.05</option><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option><option>4</option></select>×</label><label>Volume <input id="volume" type="range" min="-60" max="6" value="-12" step="1"><output id="volumeValue">−12 dB</output></label><label><input id="followPlayback" type="checkbox" checked> Follow playback</label></div>
+<div class="row"><button id="playPauseBtn" disabled>Play</button><button id="stopBtn" disabled>Stop</button><button id="prevBtn" disabled>◀ Step</button><button id="nextBtn" disabled>Step ▶</button><label>Step (s) <input id="stepInput" type="number" min="0.000001" value="1" step="any"></label><label>Speed <select id="speed"><option>0.01</option><option>0.025</option><option>0.05</option><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option><option>4</option></select>×</label><label>Volume <input id="volume" type="range" min="-60" max="48" value="-12" step="1"><output id="volumeValue">−12 dB</output></label><label><input id="followPlayback" type="checkbox" checked> Follow playback</label></div>
 <div class="row"><input id="scrubSlider" aria-label="Playback position" type="range" min="0" max="1" value="0" step="any" disabled><output id="clock">00:00.000 / 00:00.000</output><label>Go to (s) <input id="gotoInput" type="number" min="0" step="any" value="0"></label><button id="gotoBtn" disabled>Go</button></div>
 <div id="outputInfo" class="hint">Playback output is separate from the file’s native analysis rate. Slow ultrasonic recordings down to hear them.</div>
 </section>
 <section class="panel" aria-label="View settings">
-<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select>×</label><button id="overviewBtn" disabled>Build exact overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
-<div class="row"><label>FFT <select id="fftSize"><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
+<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><button id="overviewBtn" disabled>Build exact overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
 <div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
 </section>
 <div class="split">
@@ -710,7 +710,7 @@ async function envelope(start, end, width, channel, token) {
 function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overview ? overview.min.byteLength + overview.max.byteLength : 0, renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), width = clamp(Math.round(p.width), 32, 1600), height = clamp(Math.round(p.height), 64, 512), n = p.fft;
-    if (![256, 512, 1024, 2048, 4096, 8192, 16384].includes(n))
+    if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(n))
         throw Error('Unsupported FFT size.');
     const end = Math.min(source.frames / source.sampleRate, p.start + p.span), start = clamp(p.start, 0, end);
     if (!(end > start))
@@ -878,7 +878,7 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'spectrum') {
             const p = m.params;
-            if (![256, 512, 1024, 2048, 4096, 8192, 16384].includes(p.fft) || !Number.isFinite(p.time) || !Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels)
+            if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(p.fft) || !Number.isFinite(p.time) || !Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels)
                 throw Error('Invalid spectral probe.');
             const data = await source.read(Math.round(p.time * source.sampleRate) - p.fft / 2, p.fft, p.channel), db = spectrum(data, p.fft);
             postMessage({ id: m.id, result: { sampleRate: source.sampleRate, db } }, [db.buffer]);
@@ -1126,7 +1126,7 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     function updateVolume() {
-        const db = clamp(finite($('volume').value, -12), -60, 6);
+        const db = clamp(finite($('volume').value, -12), -60, 48);
         $('volumeValue').textContent = db + ' dB';
         if (app.gain)
             app.gain.gain.setTargetAtTime(10 ** (db / 20), app.context.currentTime, .01);
