@@ -12,3 +12,7 @@
 dist/
 build/
 node_modules/
+
+# Python specific
+__pycache__/
+*.pyc
