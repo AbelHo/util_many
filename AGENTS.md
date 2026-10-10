@@ -1,4 +1,4 @@
-# Copilot Instructions for `util_many`
+# Instructions for `util_many` Repository
 
 This repository contains small, self-contained web utilities, primarily implemented as single-file HTML+JS apps. The project is designed for simplicity, discoverability, and ease of use via GitHub Pages.
 
