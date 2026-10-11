@@ -1557,7 +1557,7 @@ self.onmessage = async ({ data: m }) => {
         ctx.fillStyle = style.color;
         ctx.lineWidth = m.id === app.selected ? 2.5 : 1.4;
         ctx.globalAlpha = preview ? .8 : style.alpha;
-        const x1 = tX(m.start, g), x2 = tX(m.end, g);
+        const x1 = tX(m.start, g), x2 = tX(m.end, g), spectralPoint = m.type === 'point' && (m.freqMin !== null || m.freqMax !== null);
         if (m.type === 'point') {
             if (isSpec && m.frequency !== null) {
                 const y = fY(m.frequency, g);
@@ -1572,18 +1572,29 @@ self.onmessage = async ({ data: m }) => {
                 ctx.stroke();
             }
             else {
+                const top = isSpec && spectralPoint ? fY(m.freqMax ?? app.meta.sampleRate / 2, g) : g.top;
+                const bottom = isSpec && spectralPoint ? fY(m.freqMin ?? 0, g) : g.top + g.h;
                 ctx.beginPath();
-                ctx.moveTo(x1, g.top);
-                ctx.lineTo(x1, g.top + g.h);
+                ctx.moveTo(x1, top);
+                ctx.lineTo(x1, bottom);
+                if (isSpec && spectralPoint) {
+                    ctx.moveTo(x1 - 5, top);
+                    ctx.lineTo(x1 + 5, top);
+                    ctx.moveTo(x1 - 5, bottom);
+                    ctx.lineTo(x1 + 5, bottom);
+                }
                 ctx.stroke();
             }
         }
         else {
-            const y = isSpec && m.type === 'frequency_range' ? fY(m.freqMax, g) : g.top, h = isSpec && m.type === 'frequency_range' ? fY(m.freqMin, g) - y : g.h;
+            const selectedFreq = isSpec && m.type === 'frequency_range';
+            const y = selectedFreq ? fY(m.freqMax ?? app.meta.sampleRate / 2, g) : g.top;
+            const h = selectedFreq ? Math.max(1, fY(m.freqMin ?? 0, g) - y) : g.h;
+            const width = Math.max(1, x2 - x1);
             ctx.globalAlpha = style.alpha * .16;
-            ctx.fillRect(x1, y, Math.max(1, x2 - x1), h);
+            ctx.fillRect(x1, y, width, h);
             ctx.globalAlpha = style.alpha;
-            ctx.strokeRect(x1, y, Math.max(1, x2 - x1), h);
+            ctx.strokeRect(x1, y, width, h);
         }
         if (m.tag || m.label) {
             ctx.font = '11px system-ui';
@@ -1776,6 +1787,17 @@ self.onmessage = async ({ data: m }) => {
         });
         return b;
     }
+    function markerFrequencyText(m) {
+        if (m.type === 'point' && m.frequency !== null)
+            return fmt(m.frequency, 2);
+        if (m.freqMin === null && m.freqMax === null)
+            return '—';
+        if (m.freqMin === null)
+            return '≤ ' + fmt(m.freqMax, 2);
+        if (m.freqMax === null)
+            return '≥ ' + fmt(m.freqMin, 2);
+        return fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2);
+    }
     function renderMarkerTable() {
         const query = $('markerFilter').value.toLowerCase(), visible = $('visibleOnly').checked;
         const rows = Array.from(app.markers.values()).filter(m => (!visible || (m.end >= app.start && m.start <= app.start + app.span)) && (!query || [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query)))).sort((a, b) => a.start - b.start || a.end - b.end);
@@ -1791,7 +1813,7 @@ self.onmessage = async ({ data: m }) => {
             tr.dataset.id = m.id;
             if (m.id === app.selected)
                 tr.className = 'selected';
-            for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), m.type === 'frequency_range' ? fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2) : m.frequency === null ? '—' : fmt(m.frequency, 2)]) {
+            for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), markerFrequencyText(m)]) {
                 const td = document.createElement('td');
                 td.textContent = text;
                 tr.append(td);
@@ -1871,10 +1893,10 @@ self.onmessage = async ({ data: m }) => {
         $('editStart').value = String(m.start);
         $('editEnd').value = String(m.end);
         $('editEnd').disabled = m.type === 'point';
-        $('editMin').value = m.type === 'point' ? (m.frequency === null ? '' : String(m.frequency)) : m.freqMin === null ? '' : String(m.freqMin);
+        $('editMin').value = m.type === 'point' && m.frequency !== null ? String(m.frequency) : m.freqMin === null ? '' : String(m.freqMin);
         $('editMax').value = m.freqMax === null ? '' : String(m.freqMax);
         $('editMin').disabled = m.type === 'time_range';
-        $('editMax').disabled = m.type !== 'frequency_range';
+        $('editMax').disabled = m.type === 'time_range';
         $('editTag').value = m.tag;
         $('editLabel').value = m.label;
     }
@@ -2183,10 +2205,20 @@ self.onmessage = async ({ data: m }) => {
                 continue;
             const x1 = tX(m.start, p.g), x2 = tX(m.end, p.g);
             let d;
-            if (m.type === 'point')
-                d = isSpec && m.frequency !== null ? Math.hypot(p.x - x1, p.y - fY(m.frequency, p.g)) : Math.abs(p.x - x1);
+            if (m.type === 'point') {
+                if (isSpec && m.frequency !== null)
+                    d = Math.hypot(p.x - x1, p.y - fY(m.frequency, p.g));
+                else if (isSpec && (m.freqMin !== null || m.freqMax !== null)) {
+                    const y1 = fY(m.freqMax ?? app.meta.sampleRate / 2, p.g), y2 = fY(m.freqMin ?? 0, p.g);
+                    d = Math.hypot(Math.abs(p.x - x1), Math.max(y1 - p.y, 0, p.y - y2));
+                }
+                else
+                    d = Math.abs(p.x - x1);
+            }
             else {
-                const y1 = isSpec && m.type === 'frequency_range' ? fY(m.freqMax, p.g) : p.g.top, y2 = isSpec && m.type === 'frequency_range' ? fY(m.freqMin, p.g) : p.g.top + p.g.h;
+                const selectedFreq = isSpec && m.type === 'frequency_range';
+                const y1 = selectedFreq ? fY(m.freqMax ?? app.meta.sampleRate / 2, p.g) : p.g.top;
+                const y2 = selectedFreq ? fY(m.freqMin ?? 0, p.g) : p.g.top + p.g.h;
                 d = Math.hypot(Math.max(x1 - p.x, 0, p.x - x2), Math.max(y1 - p.y, 0, p.y - y2));
             }
             if (d <= distance) {
@@ -2417,7 +2449,12 @@ self.onmessage = async ({ data: m }) => {
         // Preserve unchanged imported CRLF labels; textarea.value normalizes them to LF.
         const label = $('editLabel').value === old.label.replace(/\r\n?/g, '\n') ? old.label : $('editLabel').value;
         const tag = $('editTag').value === old.tag.replace(/[\r\n]/g, '') ? old.tag : $('editTag').value;
-        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value, frequency: old.type === 'point' ? $('editMin').value : null, freqMin: old.type === 'frequency_range' ? $('editMin').value : null, freqMax: old.type === 'frequency_range' ? $('editMax').value : null, tag, label });
+        const min = $('editMin').value, max = $('editMax').value;
+        // Preserve imported point spectral ranges even when one end is undefined.
+        const pair = old.type === 'frequency_range' || old.type === 'point' && (old.freqMin !== null || old.freqMax !== null || max !== '');
+        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value,
+            frequency: old.type === 'point' && !pair ? min : null,
+            freqMin: pair ? min : null, freqMax: pair ? max : null, tag, label });
         transact({ markers: [{ id: m.id, before: old, after: m }], tags: m.tag && !app.tags.has(m.tag) ? [{ key: m.tag, before: null, after: tagDefinition(m.tag) }] : [] });
     });
     const editing = target => target instanceof HTMLElement && (target.matches('textarea,select,input:not([type=radio]):not([type=checkbox]):not([type=file])') || target.isContentEditable);
