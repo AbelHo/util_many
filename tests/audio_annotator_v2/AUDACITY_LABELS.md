@@ -17,7 +17,7 @@ Standard: one line per label:
 The first and second columns are **start** and **end** times in seconds.
 When equal, the label is a **point**. The third column is the label text;
 Audacity normally emits it even when empty. Audacity also accepts legacy
-point lines of the form \`start<TAB>label\`, and even a start alone.
+point lines of the form `start<TAB>label`, and even a start alone.
 For a legacy two-field line whose second token parses as a number, Audacity
 interprets it as **end time** rather than label text.
 
@@ -37,7 +37,7 @@ have a stored frequency selection**:
 
 The continuation line has three tab-separated fields:
 **literal backslash**, **low frequency (Hz)**, **high frequency (Hz)**.
-\`-1\` denotes an undefined bound, not minus-one hertz. Defined values may
+`-1` denotes an undefined bound, not minus-one hertz. Defined values may
 be equal, and one bound can be missing. Audacity ignores additional unknown
 backslash-prefixed continuation lines, but **this importer rejects unsupported
 extensions** so no metadata is silently discarded.
@@ -48,7 +48,7 @@ label tracks into the same file, losing the track boundaries.
 
 ## Implementation
 
-- **Import:** Use the annotation Import file picker or drop one or more \`.txt\`
+- **Import:** Use the annotation Import file picker or drop one or more `.txt`
   files. Load the corresponding audio first. Merge and Replace use the same
   undoable transactions as JSON/CSV. All rows, including time range, frequency
   bounds, marker count and undo-size limits, are validated **before** changes.
@@ -93,6 +93,6 @@ coordinates, invalid UTF-8, drag-and-drop, undo/redo, and lossy-text warning.
 - [Audacity manual: Import / Export Preferences](https://manual.audacityteam.org/man/import_export_preferences.html)
 - [Audacity source: LabelStruct::Import / LabelStruct::Export](https://github.com/audacity/audacity/blob/master/au3/libraries/au3-label-track/LabelTrack.cpp)
 
-SubRip (\`.srt\`), WebVTT (\`.vtt\`) and podcast-chapters JSON are separate
+SubRip (`.srt`), WebVTT (`.vtt`) and podcast-chapters JSON are separate
 subtitle/chapter formats in Audacity, not label TXT, and are not handled by
 this import/export button.
