@@ -22,13 +22,16 @@ with sync_playwright() as p:
     def count(n):
         page.wait_for_function('(n) => AudioAnnotatorV2.inspect().markers.length === n', arg=n)
 
-    def upload(text, name='annotations.labels.txt', mode='replace'):
+    def upload(text, name='annotations.labels.txt', mode='replace', expect_failure=False):
+        before_undo = state()['undo']
         page.locator('#importMode').select_option(mode)
         page.locator('#importInput').set_input_files({
             'name': name, 'mimeType': 'text/plain',
             'buffer': text.encode('utf-8') if isinstance(text, str) else text
         })
         page.locator('#importBtn').click()
+        if not expect_failure:
+            page.wait_for_function('(n) => AudioAnnotatorV2.inspect().undo > n', arg=before_undo)
 
     def export(style='extended'):
         page.locator('#audacityLabelStyle').select_option(style)
@@ -104,10 +107,10 @@ with sync_playwright() as p:
 
     # Atomic failure: first record is valid, second falls beyond this WAV.
     snapshot = canonical()
-    upload(f'{t[0]}\t{t[0]}\tOK\n{duration + 100}\t{duration + 101}\tInvalid\n')
+    upload(f'{t[0]}\t{t[0]}\tOK\n{duration + 100}\t{duration + 101}\tInvalid\n', expect_failure=True)
     page.wait_for_function("document.getElementById('status').textContent.includes('outside')")
     assert canonical() == snapshot
-    upload(b'1\t1\tUTF8\xffbroken\n')
+    upload(b'1\t1\tUTF8\xffbroken\n', expect_failure=True)
     page.wait_for_function("document.getElementById('status').textContent.includes('UTF') || document.getElementById('status').textContent.includes('encoded')")
     assert canonical() == snapshot
     results.append('invalid TXT, out-of-bounds times and invalid UTF-8 leave state untouched')
