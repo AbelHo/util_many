@@ -1661,17 +1661,17 @@ self.onmessage = async ({ data: m }) => {
         end = clamp(end, 0, duration);
         if (raw.type !== 'point' && start === end)
             throw Error('A range must have nonzero duration.');
-        let frequency = null, freqMin = null, freqMax = null;
-        if (raw.type === 'point' && raw.frequency !== null && raw.frequency !== undefined && raw.frequency !== '')
-            frequency = requiredNumber(raw.frequency, 'Point frequency');
-        if (raw.type === 'frequency_range') {
-            freqMin = requiredNumber(raw.freqMin, 'Minimum frequency');
-            freqMax = requiredNumber(raw.freqMax, 'Maximum frequency');
-            if (freqMin > freqMax)
-                [freqMin, freqMax] = [freqMax, freqMin];
-            if (freqMin === freqMax)
-                throw Error('A frequency range must have nonzero height.');
-        }
+        const optionalNumber = (value, name) => value === null || value === undefined || value === '' ? null : requiredNumber(value, name);
+        const frequency = raw.type === 'point' ? optionalNumber(raw.frequency, 'Point frequency') : null;
+        let freqMin = raw.type === 'point' || raw.type === 'frequency_range' ? optionalNumber(raw.freqMin, 'Minimum frequency') : null;
+        let freqMax = raw.type === 'point' || raw.type === 'frequency_range' ? optionalNumber(raw.freqMax, 'Maximum frequency') : null;
+        if (frequency !== null && (freqMin !== null || freqMax !== null))
+            throw Error('A point cannot mix one frequency with frequency boundaries.');
+        if (raw.type === 'frequency_range' && freqMin === null && freqMax === null)
+            throw Error('A frequency range needs at least one frequency boundary.');
+        if (freqMin !== null && freqMax !== null && freqMin > freqMax)
+            [freqMin, freqMax] = [freqMax, freqMin];
+        // Audacity extended labels permit equal frequencies and undefined boundaries.
         for (const f of [frequency, freqMin, freqMax])
             if (f !== null && (f < 0 || f > nyquist))
                 throw Error('Annotation frequency is outside [0, Nyquist].');
@@ -1884,6 +1884,87 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Load audio first.');
         return { schema: 'audio-annotator-v2', version: 1, meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta, nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() }, view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value), frequencyScale: currentScale(), frequency: getDisplayFreqRange() }, tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })), markers: Array.from(app.markers.values(), m => { const s = styleFor(m); return { ...m, tagName: s.name, color: s.color, alpha: s.alpha }; }) };
     }
+    // AUDACITY_LABEL_IO_START
+    // Source: https://manual.audacityteam.org/man/importing_and_exporting_labels.html
+    // Audacity's LabelStruct::Import/Export, au3/libraries/au3-label-track/LabelTrack.cpp
+    function audacityBounds(marker) {
+        if (marker.type === 'point' && marker.frequency !== null && marker.frequency !== undefined)
+            return [marker.frequency, marker.frequency];
+        return marker.type === 'point' || marker.type === 'frequency_range'
+            ? [marker.freqMin ?? null, marker.freqMax ?? null] : [null, null];
+    }
+    function parseAudacityLabels(text) {
+        if (text.length * 2 > MAX_IMPORT_BYTES)
+            throw Error('Annotation text exceeds the import memory limit.');
+        const numeric = token => /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
+        const number = (token, what, line) => {
+            if (token === undefined || !numeric(token))
+                throw Error('Audacity TXT line ' + line + ': invalid ' + what + '.');
+            return Number(token);
+        };
+        const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/), markers = [];
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line)
+                continue;
+            if (line.startsWith('\\'))
+                throw Error('Audacity TXT line ' + (i + 1) + ': orphan or unsupported frequency continuation.');
+            const fields = line.split('\t'), lineNumber = i + 1;
+            if (fields.length > 3)
+                throw Error('Audacity TXT line ' + lineNumber + ': labels cannot contain tabs.');
+            const start = number(fields[0], 'start time', lineNumber);
+            let end = start, label = '';
+            if (fields.length === 2) {
+                // Audacity accepts legacy start<TAB>label point records.
+                if (numeric(fields[1]))
+                    end = number(fields[1], 'end time', lineNumber);
+                else
+                    label = fields[1];
+            }
+            else if (fields.length === 3) {
+                end = number(fields[1], 'end time', lineNumber);
+                label = fields[2];
+            }
+            if (start < 0 || end < start)
+                throw Error('Audacity TXT line ' + lineNumber + ': expected 0 ≤ start ≤ end.');
+            let low = null, high = null;
+            if (i + 1 < lines.length && lines[i + 1].startsWith('\\')) {
+                const frequencyLine = ++i + 1, parts = lines[i].split('\t');
+                if (parts.length !== 3 || parts[0] !== '\\')
+                    throw Error('Audacity TXT line ' + frequencyLine + ': expected backslash, low Hz, high Hz.');
+                const f0 = number(parts[1], 'low frequency', frequencyLine);
+                const f1 = number(parts[2], 'high frequency', frequencyLine);
+                if (f0 !== -1 && f0 < 0 || f1 !== -1 && f1 < 0 || f0 !== -1 && f1 !== -1 && f0 > f1)
+                    throw Error('Audacity TXT line ' + frequencyLine + ': invalid frequency boundaries (use -1 for undefined).');
+                low = f0 === -1 ? null : f0;
+                high = f1 === -1 ? null : f1;
+            }
+            const point = start === end, spectral = low !== null || high !== null;
+            const oneFrequency = point && low !== null && high !== null && low === high;
+            markers.push({ type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
+                start, end, frequency: oneFrequency ? low : null,
+                freqMin: oneFrequency ? null : low, freqMax: oneFrequency ? null : high,
+                tag: '', label });
+            if (markers.length > MAX_MARKERS)
+                throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS + '.');
+        }
+        return markers;
+    }
+    function exportAudacityLabels(markers, extended = true, flattenText = false) {
+        const lines = [], sorted = Array.from(markers).sort((a, b) => a.start - b.start || a.end - b.end);
+        for (const marker of sorted) {
+            const label = marker.label ?? '';
+            if (/[\t\r\n]/.test(label) && !flattenText)
+                throw Error('Audacity TXT cannot represent tabs/newlines in a label. Confirm conversion or use JSON/CSV.');
+            const plainLabel = flattenText ? label.replace(/[\t\r\n]+/g, ' ') : label;
+            lines.push(String(marker.start) + '\t' + String(marker.end) + '\t' + plainLabel);
+            const [low, high] = audacityBounds(marker);
+            if (extended && (low !== null || high !== null))
+                lines.push('\\\t' + String(low ?? -1) + '\t' + String(high ?? -1));
+        }
+        return lines.length ? lines.join('\n') + '\n' : '';
+    }
+    // AUDACITY_LABEL_IO_END
     const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json'];
     const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
     function exportCSV() {
