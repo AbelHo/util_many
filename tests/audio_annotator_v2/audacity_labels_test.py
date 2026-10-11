@@ -108,7 +108,7 @@ with sync_playwright() as p:
     page.wait_for_function("document.getElementById('status').textContent.includes('outside')")
     assert canonical() == snapshot
     upload(b'1\t1\tUTF8\xffbroken\n')
-    page.wait_for_function("document.getElementById('status').textContent.includes('UTF') or document.getElementById('status').textContent.includes('encoded')")
+    page.wait_for_function("document.getElementById('status').textContent.includes('UTF') || document.getElementById('status').textContent.includes('encoded')")
     assert canonical() == snapshot
     results.append('invalid TXT, out-of-bounds times and invalid UTF-8 leave state untouched')
 
