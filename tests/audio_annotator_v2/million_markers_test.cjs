@@ -74,6 +74,7 @@ const { parseAudacityLabels, forEachVisibleMarker, transactSnapshot, transact, h
 
     // Boundary enforcement without paying for an additional 1m-row parse.
     env.MAX_MARKERS = 3;
+    assert.equal((await parseAudacityLabels('0\t0\ta\n1\t1\tb\n2\t2\tc')).length, 3);
     await assert.rejects(parseAudacityLabels('0\t0\ta\n1\t1\tb\n2\t2\tc\n3\t3\td'), /annotation limit/);
     env.MAX_MARKERS = total;
 
@@ -84,23 +85,26 @@ const { parseAudacityLabels, forEachVisibleMarker, transactSnapshot, transact, h
     forEachVisibleMarker(500, 500.2, m => hits.push(m.start));
     assert.deepEqual(hits, [500, 500.1, 500.2]);
     // A range starting far before the window still overlaps and must be found.
-    const long = { ...parsed[0], id: 'long', start: 0, end: 1000 };
-    byId.set(long.id, long);
-    env.tests.invalidateMarkers?.(); // see manual invalidation below
+    const long = byId.get(parsed[0].id);
+    long.end = 1000;
     app.markerIndex = null;
-    assert.ok((() => { let found = false; forEachVisibleMarker(900, 901, m => { if (m.id === 'long') found = true; }); return found; })());
+    assert.ok((() => { let found = false; forEachVisibleMarker(900, 901, m => { if (m.id === long.id) found = true; }); return found; })());
 
     const original = new Map([['old', { id: 'old' }]]);
     app.markers = original; app.markerIndex = null;
     transactSnapshot(byId, new Map());
-    assert.equal(app.markers.size, total + 1);
+    assert.equal(app.markers.size, total);
     history(false); assert.equal(app.markers.size, 1);
-    history(true); assert.equal(app.markers.size, total + 1);
-    transact({ markers: [{ id: 'extra', before: null, after: { id: 'extra' } }] });
-    assert.equal(byId.has('extra'), false, 'An edit must not mutate a saved bulk snapshot');
+    history(true); assert.equal(app.markers.size, total);
+    const editBefore = app.markers.get(long.id);
+    transact({ markers: [{ id: long.id, before: editBefore,
+        after: { ...editBefore, label: 'edited after import' } }] });
+    assert.equal(byId.get(long.id).label, editBefore.label,
+        'An edit must not mutate a saved bulk snapshot');
     history(false); history(false);
     assert.equal(app.markers.size, 1);
     history(true); history(true);
-    assert.equal(app.markers.size, total + 2);
+    assert.equal(app.markers.size, total);
+    assert.equal(app.markers.get(long.id).label, 'edited after import');
     console.log('PASS indexed overlap search, snapshot undo/redo, copy-on-write edits');
 })().catch(e => { console.error(e); process.exitCode = 1; });

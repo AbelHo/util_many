@@ -14,6 +14,29 @@ Tested HTML Git blob: `0f821b441d6b77140541f0ce799ab764370bb7a2`.
 
 Tested HTML SHA-256: `1006171d79968c42996f433d44337c407f5ec199dc7313e94cffe19faa375edf`.
 
+## Million-marker follow-up validation (2026-10-12)
+
+The follow-up feature branch was checked with the complete `--large` Playwright
+suite and the million-marker Node regression script. All existing suites passed:
+numeric decoding, browser interactions, frequency scales, Audacity TXT, and the
+large-file regressions. The real-browser run used Chrome **155.0.8059.39** with
+the complete HTML injected into a Chromium page for this restricted workspace.
+
+An additional browser test imported **1,000,000** mixed point, time-range and
+spectral labels from a **24,522,765-byte** UTF-8 Audacity TXT file containing
+mixed LF/CRLF line endings and Unicode labels. Import completed in **16.519 s**;
+the UI showed the full count, bulk undo removed the import, redo restored it,
+and the page emitted no errors. The Node regression separately parsed one
+million labels in about **4.8 s** and passed the exact-limit, over-limit,
+overlap-index, snapshot undo/redo and copy-on-write checks.
+
+To reproduce all existing and million-marker browser tests, run
+`python tests/audio_annotator_v2/run.py --large`. The focused million-marker
+browser test is also available as
+`python tests/audio_annotator_v2/run.py --suite million_markers_browser`.
+`node --max-old-space-size=4096 tests/audio_annotator_v2/million_markers_test.cjs`
+runs the dependency-free Node regression.
+
 ## Requested recordings
 
 | Source / recording | Bytes | Native sample rate | Channels | Duration | Result |
@@ -82,7 +105,7 @@ The twelve additional regression groups cover native FFT accuracy and channel/mi
 
 Audio is not decoded into a whole-file AudioBuffer. Native PCM reads and the FLAC decoder run in inline workers, separately from playback scheduling. Analysis uses the original file rate; `ensureAudioContext()` is only responsible for playback output. Unsupported output rates therefore do not discard ultrasound from the spectrogram.
 
-Configured retained-cache bounds are **8 MiB raw bytes per worker**, **12 MiB decoded FLAC frames per worker**, **32 MiB analysis FFT results**, and small bounded FFT/rate-conversion plans. Undo/redo transactions have a 16 MiB / 200-operation budget. Playback has a separate worker, approximately 0.9 s of lookahead, and at most 262,144 native source frames per chunk. These are component budgets, **not** a claim that total browser-process memory is their simple sum; temporary arrays, canvases, browser internals and object overhead are additional.
+Configured retained-cache bounds are **8 MiB raw bytes per worker**, **12 MiB decoded FLAC frames per worker**, **32 MiB analysis FFT results**, and small bounded FFT/rate-conversion plans. Undo/redo history has a **256 MiB / 200-operation budget**, including compact bulk-import snapshots. Playback has a separate worker, approximately 0.9 s of lookahead, and at most 262,144 native source frames per chunk. These are component budgets, **not** a claim that total browser-process memory is their simple sum; temporary arrays, canvases, browser internals and object overhead are additional.
 
 During the numeric RF64 case, the analysis worker read about **32.2 MB** of source bytes across its tested operations, rather than allocating the 4.8 GB recording. The exact waveform overview for `FKW_small.wav` occupied **518,824 bytes**.
 
@@ -95,7 +118,7 @@ A cold, whole-recording view of the dense 484 MB FLAC took **5.880 s** to finish
 - The 64-tap windowed-sinc playback converter is a finite filter, not an ideal brick-wall filter. Slowing down changes pitch. Hardware/output conversion and physical frequency response are distinct from analysis accuracy.
 - Source formats are WAV/RF64/BW64 PCM/float and native FLAC. Other formats need conversion to WAV/FLAC first. FLAC requires a known total sample count. Ogg-FLAC, changing stream formats, and malformed or unusually oversized blocks are rejected explicitly.
 - JSON/CSV use the explicit v2 annotation schema; no automatic conversion of unspecified legacy annotation formats is attempted.
-- Annotations are bounded at 50,000, tags at 2,000, and the table is paginated. Overlays cap dense visible marker drawing and display a warning; export retains all stored annotations.
+- Annotations are bounded at **1,000,000**, tags at 2,000, and the table is paginated. Overlays cap dense visible marker drawing and display a warning; export retains all stored annotations.
 - Save regularly with Export. The tool does not silently write to local disk or upload anything.
 
 ## Reproduction
