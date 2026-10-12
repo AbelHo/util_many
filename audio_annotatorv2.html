@@ -2622,7 +2622,7 @@ self.onmessage = async ({ data: m }) => {
     handle('tagFilter', 'input', renderTags);
     handle('pagePrev', 'click', () => { app.page--; renderMarkerTable(); });
     handle('pageNext', 'click', () => { app.page++; renderMarkerTable(); });
-    handle('pageJump', 'change', () => { app.page = Math.max(0, Math.floor(finite($('pageJump').value, 1)) - 1); renderMarkerTable(); });
+    handle('pageJump', 'change', () => { app.page = Math.max(0, Math.floor(finite($('pageJump').value, 1)) - 1); renderMarkerTable(); $('pageJump').value = String(app.page + 1); });
     handle('deleteMarker', 'click', () => removeMarker(app.selected));
     handle('saveMarker', 'click', () => {
         const old = app.markers.get(app.selected);
