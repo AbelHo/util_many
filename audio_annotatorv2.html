@@ -2042,23 +2042,23 @@ self.onmessage = async ({ data: m }) => {
     async function parseAudacityLabels(text, epoch = app.loadEpoch) {
         if (text.length > MAX_IMPORT_BYTES)
             throw Error('Annotation text exceeds the import memory limit.');
-        const numeric = token => /^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
+        const numeric = token => /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
         const number = (token, what, line) => {
             if (token === undefined || !numeric(token))
                 throw Error('Audacity TXT line ' + line + ': invalid ' + what + '.');
             return Number(token);
         };
         // Walk the original string without splitting it into a million short strings.
-        // Also preserve Audacity's optional following \\ frequency-bound line.
+        // Also preserve Audacity's optional following \ frequency-bound line.
         let offset = text.charCodeAt(0) === 0xFEFF ? 1 : 0, lineNumber = 0, pending = null;
         const nextLine = () => {
             if (offset >= text.length) return null;
-            let lf = text.indexOf('\\n', offset), cr = text.indexOf('\\r', offset);
+            let lf = text.indexOf('\n', offset), cr = text.indexOf('\r', offset);
             if (lf < 0) lf = text.length;
             if (cr < 0) cr = text.length;
             const end = Math.min(lf, cr);
             const line = text.slice(offset, end);
-            offset = end < text.length ? end + (text[end] === '\\r' && text[end + 1] === '\\n' ? 2 : 1) : end;
+            offset = end < text.length ? end + (text[end] === '\r' && text[end + 1] === '\n' ? 2 : 1) : end;
             return { line, number: ++lineNumber };
         };
         const markers = [], createdAt = new Date().toISOString();
@@ -2067,9 +2067,9 @@ self.onmessage = async ({ data: m }) => {
             pending = null;
             const { line, number: lineNo } = entry;
             if (!line) continue;
-            if (line.startsWith('\\\\'))
+            if (line.startsWith('\\'))
                 throw Error('Audacity TXT line ' + lineNo + ': orphan or unsupported frequency continuation.');
-            const fields = line.split('\\t');
+            const fields = line.split('\t');
             if (fields.length > 3)
                 throw Error('Audacity TXT line ' + lineNo + ': labels cannot contain tabs.');
             const start = number(fields[0], 'start time', lineNo);
@@ -2086,9 +2086,9 @@ self.onmessage = async ({ data: m }) => {
                 throw Error('Audacity TXT line ' + lineNo + ': expected 0 ≤ start ≤ end.');
             let low = null, high = null;
             const next = nextLine();
-            if (next?.line.startsWith('\\\\')) {
-                const parts = next.line.split('\\t');
-                if (parts.length !== 3 || parts[0] !== '\\\\')
+            if (next?.line.startsWith('\\')) {
+                const parts = next.line.split('\t');
+                if (parts.length !== 3 || parts[0] !== '\\')
                     throw Error('Audacity TXT line ' + next.number + ': expected backslash, low Hz, high Hz.');
                 const f0 = number(parts[1], 'low frequency', next.number);
                 const f1 = number(parts[2], 'high frequency', next.number);
