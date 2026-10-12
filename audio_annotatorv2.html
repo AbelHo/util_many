@@ -934,8 +934,8 @@ self.onmessage = async ({ data: m }) => {
 'use strict';
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
-    const MAX_MARKERS = 50000, HISTORY_BYTES = 16 * 1048576, MAX_IMPORT_BYTES = 32 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
+    const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, tableTimer: 0, importBusy: false, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1077,8 +1077,9 @@ self.onmessage = async ({ data: m }) => {
         ready(false);
         status('Reading audio metadata…');
         $('fileInfo').textContent = file.name;
-        app.markers.clear();
-        app.tags.clear();
+        app.markers = new Map();
+        app.tags = new Map();
+        invalidateMarkers();
         app.selected = null;
         app.undo = [];
         app.redo = [];
@@ -1357,7 +1358,7 @@ self.onmessage = async ({ data: m }) => {
         $('scrollSlider').value = app.start;
         $('viewLabel').textContent = fmt(app.start, 4) + ' – ' + fmt(app.start + app.span, 4) + ' s';
         if ($('visibleOnly').checked)
-            renderMarkerTable();
+            scheduleMarkerTable();
         requestRender();
     }
     function zoom(factor, anchor = app.start + app.span / 2) {
@@ -1550,6 +1551,45 @@ self.onmessage = async ({ data: m }) => {
         ctx.fillStyle = app.renderPending ? '#ffda86' : '#d8e3ef';
         ctx.fillText(app.renderPending ? 'Updating preview…' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
     }
+
+    // Sorted interval index: prefix maximum end times makes range-overlap searches
+    // O(log N + candidates), including long spans that begin outside the viewport.
+    // The index and filtered table rows are rebuilt only after underlying data changes.
+    function invalidateMarkers() {
+        app.markerVersion++;
+        app.markerIndex = null;
+        app.tableCache = null;
+        app.overlayLayers.wave = app.overlayLayers.spec = null;
+    }
+    function markerIndex() {
+        if (!app.markerIndex) {
+            const items = Array.from(app.markers.values()).sort((a, b) => a.start - b.start || a.end - b.end);
+            const maxEnd = new Float64Array(items.length);
+            let maximum = -Infinity;
+            for (let i = 0; i < items.length; i++) {
+                maximum = Math.max(maximum, items[i].end);
+                maxEnd[i] = maximum;
+            }
+            app.markerIndex = { items, maxEnd };
+        }
+        return app.markerIndex;
+    }
+    function forEachVisibleMarker(start, end, visit) {
+        const { items, maxEnd } = markerIndex();
+        let lo = 0, hi = maxEnd.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (maxEnd[mid] < start) lo = mid + 1;
+            else hi = mid;
+        }
+        for (let i = lo; i < items.length && items[i].start <= end; i++)
+            if (items[i].end >= start && visit(items[i]) === false)
+                break;
+    }
+    function scheduleMarkerTable() {
+        clearTimeout(app.tableTimer);
+        app.tableTimer = setTimeout(renderMarkerTable, 120);
+    }
     function styleFor(marker) { return app.tags.get(marker.tag) || { name: marker.tag || '', color: marker.color || '#69df98', alpha: marker.alpha ?? .75 }; }
     function drawMarker(ctx, g, m, isSpec, preview = false) {
         const style = styleFor(m);
@@ -1607,18 +1647,50 @@ self.onmessage = async ({ data: m }) => {
         ctx.clearRect(0, 0, g.width, g.height);
         if (!app.meta)
             return;
+        const key = isSpec ? 'spec' : 'wave';
+        const band = isSpec ? getDisplayFreqRange() : null;
+        const signature = [canvas.width, canvas.height, app.start, app.span,
+            app.markerVersion, app.selected, isSpec ? currentScale() : '',
+            band?.min, band?.max].join('|');
+        let layer = app.overlayLayers[key];
+        if (!layer || layer.signature !== signature) {
+            const offscreen = document.createElement('canvas');
+            offscreen.width = canvas.width;
+            offscreen.height = canvas.height;
+            const pen = offscreen.getContext('2d');
+            const dpr = Math.min(devicePixelRatio || 1, 2);
+            pen.setTransform(dpr, 0, 0, dpr, 0, 0);
+            pen.save();
+            pen.beginPath();
+            pen.rect(g.left, g.top, g.w, g.h);
+            pen.clip();
+            let drawn = 0, truncated = false;
+            forEachVisibleMarker(app.start, app.start + app.span, marker => {
+                if (drawn === 5000) {
+                    truncated = true;
+                    return false;
+                }
+                drawMarker(pen, g, marker, isSpec);
+                drawn++;
+            });
+            pen.restore();
+            if (truncated) {
+                pen.fillStyle = '#ffda86';
+                pen.font = '11px system-ui';
+                pen.fillText('Showing first 5,000 visible markers; zoom in for detail.', g.left, g.top + g.h - 8);
+            }
+            layer = { signature, canvas: offscreen };
+            app.overlayLayers[key] = layer;
+        }
+        // Marker raster is stable while only the playback cursor moves.
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(layer.canvas, 0, 0);
+        ctx.restore();
         ctx.save();
         ctx.beginPath();
         ctx.rect(g.left, g.top, g.w, g.h);
         ctx.clip();
-        let drawn = 0;
-        for (const marker of app.markers.values()) {
-            if (marker.end < app.start || marker.start > app.start + app.span)
-                continue;
-            if (++drawn > 5000)
-                break;
-            drawMarker(ctx, g, marker, isSpec);
-        }
         if (app.gesture?.kind === 'annotate' && app.gesture.current) {
             const marker = gestureMarker(app.gesture);
             if (marker)
@@ -1632,11 +1704,6 @@ self.onmessage = async ({ data: m }) => {
         ctx.lineTo(x, g.top + g.h);
         ctx.stroke();
         ctx.restore();
-        if (drawn > 5000) {
-            ctx.fillStyle = '#ffda86';
-            ctx.font = '11px system-ui';
-            ctx.fillText('Overlay limited to 5,000 visible markers; zoom/filter the table.', g.left, g.top + g.h - 8);
-        }
     }
     function paintOverlays() { paintOverlay($('waveOverlay'), false); paintOverlay($('specOverlay'), true); }
     function paintAll() { drawBase($('waveCanvas'), false); drawBase($('specCanvas'), true); paintOverlays(); }
@@ -1799,8 +1866,25 @@ self.onmessage = async ({ data: m }) => {
         return fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2);
     }
     function renderMarkerTable() {
-        const query = $('markerFilter').value.toLowerCase(), visible = $('visibleOnly').checked;
-        const rows = Array.from(app.markers.values()).filter(m => (!visible || (m.end >= app.start && m.start <= app.start + app.span)) && (!query || [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query)))).sort((a, b) => a.start - b.start || a.end - b.end);
+        const query = $('markerFilter').value.trim().toLowerCase(), visible = $('visibleOnly').checked;
+        const key = JSON.stringify([app.markerVersion, query, visible,
+            visible ? app.start : null, visible ? app.span : null]);
+        if (!app.tableCache || app.tableCache.key !== key) {
+            const rows = [];
+            const matches = m => !query ||
+                [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query));
+            if (!visible && !query)
+                app.tableCache = { key, rows: markerIndex().items };
+            else {
+                if (visible)
+                    forEachVisibleMarker(app.start, app.start + app.span, m => { if (matches(m)) rows.push(m); });
+                else
+                    for (const m of markerIndex().items)
+                        if (matches(m)) rows.push(m);
+                app.tableCache = { key, rows };
+            }
+        }
+        const rows = app.tableCache.rows;
         const pages = Math.max(1, Math.ceil(rows.length / 100));
         app.page = clamp(app.page, 0, pages - 1);
         $('markerCount').textContent = app.markers.size + ' markers' + (rows.length !== app.markers.size ? ' · ' + rows.length + ' shown' : '');
@@ -2200,9 +2284,8 @@ self.onmessage = async ({ data: m }) => {
     function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), frequency = fractionHz(1 - (y - g.top) / g.h); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
     function nearestMarker(p, isSpec) {
         let best = null, distance = 11;
-        for (const m of app.markers.values()) {
-            if (m.end < app.start || m.start > app.start + app.span)
-                continue;
+        const tolerance = 11 / p.g.w * app.span;
+        forEachVisibleMarker(Math.max(0, p.time - tolerance), p.time + tolerance, m => {
             const x1 = tX(m.start, p.g), x2 = tX(m.end, p.g);
             let d;
             if (m.type === 'point') {
@@ -2225,7 +2308,7 @@ self.onmessage = async ({ data: m }) => {
                 distance = d;
                 best = m;
             }
-        }
+        });
         return best;
     }
     function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8 }; }
@@ -2437,8 +2520,8 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Choose an annotation file first.');
         return importFile(file);
     });
-    for (const id of ['markerFilter', 'visibleOnly'])
-        handle(id, id === 'markerFilter' ? 'input' : 'change', () => { app.page = 0; renderMarkerTable(); });
+    handle('markerFilter', 'input', () => { app.page = 0; scheduleMarkerTable(); });
+    handle('visibleOnly', 'change', () => { app.page = 0; renderMarkerTable(); });
     handle('tagFilter', 'input', renderTags);
     handle('pagePrev', 'click', () => { app.page--; renderMarkerTable(); });
     handle('pageNext', 'click', () => { app.page++; renderMarkerTable(); });
