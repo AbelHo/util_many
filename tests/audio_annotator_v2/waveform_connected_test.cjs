@@ -41,8 +41,10 @@ function draw(result, amplitude) {
         lineTo: (x, y) => events.push(['lineTo', x, y]),
         stroke: () => events.push(['stroke'])
     };
-    traceScope.trace(canvas, g, { ...result, start: 0, span: result.span || 72 / 384000 },
-        64, 960, amplitude, 384000);
+    const traceResult = { ...result, start: 0, span: result.span || 72 / 384000 };
+    // envelope() returns wave data without the render() width wrapper.
+    traceResult.width ??= traceResult.wave?.length / 2;
+    traceScope.trace(canvas, g, traceResult, 64, 960, amplitude, 384000);
     return events;
 }
 (async () => {

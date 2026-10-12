@@ -19,7 +19,7 @@ Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel zooms frequency; Shift+wh
 scrubs. Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
-JSON/CSV import is validated atomically; merge/replace, tags, metadata and all marker
+JSON/CSV and Audacity TXT (standard/extended spectral) import is validated atomically; merge/replace, tags, metadata and all marker
 types round-trip. History uses bounded transactions rather than per-click snapshots.
 All user text enters the DOM through textContent/value, never interpolated HTML.
 Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransform supplies FFT image rows, axis ticks, mouse frequency and annotations.\nSee README.md/AGENTS.md for repository conventions; README is generated, not edited.
@@ -28,7 +28,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Standalone, client-side audio annotation with synchronized native-sample-rate waveform and spectrogram views, bounded-memory WAV and FLAC reading, ultrasonic playback slowdown, editable point/time/frequency markers, case-sensitive tags, undo/redo and JSON/CSV import and export.">
+<meta name="description" content="Standalone, client-side audio annotation with synchronized native-sample-rate waveform and spectrogram views, bounded-memory WAV and FLAC reading, ultrasonic playback slowdown, editable point/time/frequency markers, case-sensitive tags, undo/redo and JSON/CSV/Audacity TXT import and export.">
 <meta name="keywords" content="audio annotator, spectrogram, waveform, ultrasound, bioacoustics, WAV, RF64, FLAC, audio labeling, frequency annotation">
 <title>Audio Annotator v2</title>
 <style>
@@ -38,7 +38,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <body>
 <header><h1>Audio Annotator v2</h1><p class="hint">Local files only · Native-rate analysis · No upload or installation · WAV / RF64 / BW64 / FLAC</p></header>
 <section class="panel" aria-label="File and transport">
-<div class="row"><label>Audio <input id="fileInput" type="file" accept=".wav,.wave,.flac,audio/wav,audio/flac"></label><span class="hint">Or drop one audio file here; JSON/CSV files import annotations.</span></div>
+<div class="row"><label>Audio <input id="fileInput" type="file" accept=".wav,.wave,.flac,audio/wav,audio/flac"></label><span class="hint">Or drop audio and JSON/CSV/Audacity label TXT files here.</span></div>
 <div id="fileInfo">No audio loaded.</div><div id="status" role="status" aria-live="polite">Choose a recording to begin.</div>
 <div class="row"><button id="playPauseBtn" disabled>Play</button><button id="stopBtn" disabled>Stop</button><button id="prevBtn" disabled>◀ Step</button><button id="nextBtn" disabled>Step ▶</button><label>Step (s) <input id="stepInput" type="number" min="0.000001" value="1" step="any"></label><label>Speed <select id="speed"><option>0.01</option><option>0.025</option><option>0.05</option><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option><option>4</option></select>×</label><label>Volume <input id="volume" type="range" min="-60" max="48" value="-12" step="1"><output id="volumeValue">−12 dB</output></label><label><input id="followPlayback" type="checkbox" checked> Follow playback</label></div>
 <div class="row"><input id="scrubSlider" aria-label="Playback position" type="range" min="0" max="1" value="0" step="any" disabled><output id="clock">00:00.000 / 00:00.000</output><label>Go to (s) <input id="gotoInput" type="number" min="0" step="any" value="0"></label><button id="gotoBtn" disabled>Go</button></div>
@@ -60,7 +60,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="plot spectral" id="specPlot"><canvas id="specCanvas" aria-hidden="true"></canvas><canvas id="specOverlay" class="overlay" tabindex="0" aria-label="Spectrogram annotation surface"></canvas></div>
 <div class="row hint"><span id="renderInfo" class="grow">No analysis yet.</span><output id="hoverInfo"></output></div>
 <section class="panel" aria-label="Annotation import and export">
-<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><label>Import <input id="importInput" type="file" accept=".json,.csv,application/json,text/csv"></label><select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge</option><option value="replace">Replace</option></select><button id="importBtn" disabled>Import</button></div>
+<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge</option><option value="replace">Replace</option></select><button id="importBtn" disabled>Import</button></div>
 <div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button></div>
 <div class="tableWrap"><table><thead><tr><th>Type</th><th>Time (s)</th><th>Frequency (Hz)</th><th>Tag / label</th><th>Actions</th></tr></thead><tbody id="markerRows"></tbody></table></div>
 </section>
@@ -70,7 +70,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Import validates all records before any change, detects file mismatches and offers merge or replace. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -1048,7 +1048,7 @@ self.onmessage = async ({ data: m }) => {
         $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
         return f;
     }
-    const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'addPointBtn', 'exportJson', 'exportCsv', 'importBtn'];
+    const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
             $(id).disabled = !enabled;
@@ -1557,7 +1557,7 @@ self.onmessage = async ({ data: m }) => {
         ctx.fillStyle = style.color;
         ctx.lineWidth = m.id === app.selected ? 2.5 : 1.4;
         ctx.globalAlpha = preview ? .8 : style.alpha;
-        const x1 = tX(m.start, g), x2 = tX(m.end, g);
+        const x1 = tX(m.start, g), x2 = tX(m.end, g), spectralPoint = m.type === 'point' && (m.freqMin !== null || m.freqMax !== null);
         if (m.type === 'point') {
             if (isSpec && m.frequency !== null) {
                 const y = fY(m.frequency, g);
@@ -1572,18 +1572,29 @@ self.onmessage = async ({ data: m }) => {
                 ctx.stroke();
             }
             else {
+                const top = isSpec && spectralPoint ? fY(m.freqMax ?? app.meta.sampleRate / 2, g) : g.top;
+                const bottom = isSpec && spectralPoint ? fY(m.freqMin ?? 0, g) : g.top + g.h;
                 ctx.beginPath();
-                ctx.moveTo(x1, g.top);
-                ctx.lineTo(x1, g.top + g.h);
+                ctx.moveTo(x1, top);
+                ctx.lineTo(x1, bottom);
+                if (isSpec && spectralPoint) {
+                    ctx.moveTo(x1 - 5, top);
+                    ctx.lineTo(x1 + 5, top);
+                    ctx.moveTo(x1 - 5, bottom);
+                    ctx.lineTo(x1 + 5, bottom);
+                }
                 ctx.stroke();
             }
         }
         else {
-            const y = isSpec && m.type === 'frequency_range' ? fY(m.freqMax, g) : g.top, h = isSpec && m.type === 'frequency_range' ? fY(m.freqMin, g) - y : g.h;
+            const selectedFreq = isSpec && m.type === 'frequency_range';
+            const y = selectedFreq ? fY(m.freqMax ?? app.meta.sampleRate / 2, g) : g.top;
+            const h = selectedFreq ? Math.max(1, fY(m.freqMin ?? 0, g) - y) : g.h;
+            const width = Math.max(1, x2 - x1);
             ctx.globalAlpha = style.alpha * .16;
-            ctx.fillRect(x1, y, Math.max(1, x2 - x1), h);
+            ctx.fillRect(x1, y, width, h);
             ctx.globalAlpha = style.alpha;
-            ctx.strokeRect(x1, y, Math.max(1, x2 - x1), h);
+            ctx.strokeRect(x1, y, width, h);
         }
         if (m.tag || m.label) {
             ctx.font = '11px system-ui';
@@ -1661,17 +1672,17 @@ self.onmessage = async ({ data: m }) => {
         end = clamp(end, 0, duration);
         if (raw.type !== 'point' && start === end)
             throw Error('A range must have nonzero duration.');
-        let frequency = null, freqMin = null, freqMax = null;
-        if (raw.type === 'point' && raw.frequency !== null && raw.frequency !== undefined && raw.frequency !== '')
-            frequency = requiredNumber(raw.frequency, 'Point frequency');
-        if (raw.type === 'frequency_range') {
-            freqMin = requiredNumber(raw.freqMin, 'Minimum frequency');
-            freqMax = requiredNumber(raw.freqMax, 'Maximum frequency');
-            if (freqMin > freqMax)
-                [freqMin, freqMax] = [freqMax, freqMin];
-            if (freqMin === freqMax)
-                throw Error('A frequency range must have nonzero height.');
-        }
+        const optionalNumber = (value, name) => value === null || value === undefined || value === '' ? null : requiredNumber(value, name);
+        const frequency = raw.type === 'point' ? optionalNumber(raw.frequency, 'Point frequency') : null;
+        let freqMin = raw.type === 'point' || raw.type === 'frequency_range' ? optionalNumber(raw.freqMin, 'Minimum frequency') : null;
+        let freqMax = raw.type === 'point' || raw.type === 'frequency_range' ? optionalNumber(raw.freqMax, 'Maximum frequency') : null;
+        if (frequency !== null && (freqMin !== null || freqMax !== null))
+            throw Error('A point cannot mix one frequency with frequency boundaries.');
+        if (raw.type === 'frequency_range' && freqMin === null && freqMax === null)
+            throw Error('A frequency range needs at least one frequency boundary.');
+        if (freqMin !== null && freqMax !== null && freqMin > freqMax)
+            [freqMin, freqMax] = [freqMax, freqMin];
+        // Audacity extended labels permit equal frequencies and undefined boundaries.
         for (const f of [frequency, freqMin, freqMax])
             if (f !== null && (f < 0 || f > nyquist))
                 throw Error('Annotation frequency is outside [0, Nyquist].');
@@ -1776,6 +1787,17 @@ self.onmessage = async ({ data: m }) => {
         });
         return b;
     }
+    function markerFrequencyText(m) {
+        if (m.type === 'point' && m.frequency !== null)
+            return fmt(m.frequency, 2);
+        if (m.freqMin === null && m.freqMax === null)
+            return '—';
+        if (m.freqMin === null)
+            return '≤ ' + fmt(m.freqMax, 2);
+        if (m.freqMax === null)
+            return '≥ ' + fmt(m.freqMin, 2);
+        return fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2);
+    }
     function renderMarkerTable() {
         const query = $('markerFilter').value.toLowerCase(), visible = $('visibleOnly').checked;
         const rows = Array.from(app.markers.values()).filter(m => (!visible || (m.end >= app.start && m.start <= app.start + app.span)) && (!query || [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query)))).sort((a, b) => a.start - b.start || a.end - b.end);
@@ -1791,7 +1813,7 @@ self.onmessage = async ({ data: m }) => {
             tr.dataset.id = m.id;
             if (m.id === app.selected)
                 tr.className = 'selected';
-            for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), m.type === 'frequency_range' ? fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2) : m.frequency === null ? '—' : fmt(m.frequency, 2)]) {
+            for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), markerFrequencyText(m)]) {
                 const td = document.createElement('td');
                 td.textContent = text;
                 tr.append(td);
@@ -1871,10 +1893,10 @@ self.onmessage = async ({ data: m }) => {
         $('editStart').value = String(m.start);
         $('editEnd').value = String(m.end);
         $('editEnd').disabled = m.type === 'point';
-        $('editMin').value = m.type === 'point' ? (m.frequency === null ? '' : String(m.frequency)) : m.freqMin === null ? '' : String(m.freqMin);
+        $('editMin').value = m.type === 'point' && m.frequency !== null ? String(m.frequency) : m.freqMin === null ? '' : String(m.freqMin);
         $('editMax').value = m.freqMax === null ? '' : String(m.freqMax);
         $('editMin').disabled = m.type === 'time_range';
-        $('editMax').disabled = m.type !== 'frequency_range';
+        $('editMax').disabled = m.type === 'time_range';
         $('editTag').value = m.tag;
         $('editLabel').value = m.label;
     }
@@ -1884,6 +1906,87 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Load audio first.');
         return { schema: 'audio-annotator-v2', version: 1, meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta, nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() }, view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value), frequencyScale: currentScale(), frequency: getDisplayFreqRange() }, tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })), markers: Array.from(app.markers.values(), m => { const s = styleFor(m); return { ...m, tagName: s.name, color: s.color, alpha: s.alpha }; }) };
     }
+    // AUDACITY_LABEL_IO_START
+    // Source: https://manual.audacityteam.org/man/importing_and_exporting_labels.html
+    // Audacity's LabelStruct::Import/Export, au3/libraries/au3-label-track/LabelTrack.cpp
+    function audacityBounds(marker) {
+        if (marker.type === 'point' && marker.frequency !== null && marker.frequency !== undefined)
+            return [marker.frequency, marker.frequency];
+        return marker.type === 'point' || marker.type === 'frequency_range'
+            ? [marker.freqMin ?? null, marker.freqMax ?? null] : [null, null];
+    }
+    function parseAudacityLabels(text) {
+        if (text.length * 2 > MAX_IMPORT_BYTES)
+            throw Error('Annotation text exceeds the import memory limit.');
+        const numeric = token => /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
+        const number = (token, what, line) => {
+            if (token === undefined || !numeric(token))
+                throw Error('Audacity TXT line ' + line + ': invalid ' + what + '.');
+            return Number(token);
+        };
+        const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/), markers = [];
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line)
+                continue;
+            if (line.startsWith('\\'))
+                throw Error('Audacity TXT line ' + (i + 1) + ': orphan or unsupported frequency continuation.');
+            const fields = line.split('\t'), lineNumber = i + 1;
+            if (fields.length > 3)
+                throw Error('Audacity TXT line ' + lineNumber + ': labels cannot contain tabs.');
+            const start = number(fields[0], 'start time', lineNumber);
+            let end = start, label = '';
+            if (fields.length === 2) {
+                // Audacity accepts legacy start<TAB>label point records.
+                if (numeric(fields[1]))
+                    end = number(fields[1], 'end time', lineNumber);
+                else
+                    label = fields[1];
+            }
+            else if (fields.length === 3) {
+                end = number(fields[1], 'end time', lineNumber);
+                label = fields[2];
+            }
+            if (start < 0 || end < start)
+                throw Error('Audacity TXT line ' + lineNumber + ': expected 0 ≤ start ≤ end.');
+            let low = null, high = null;
+            if (i + 1 < lines.length && lines[i + 1].startsWith('\\')) {
+                const frequencyLine = ++i + 1, parts = lines[i].split('\t');
+                if (parts.length !== 3 || parts[0] !== '\\')
+                    throw Error('Audacity TXT line ' + frequencyLine + ': expected backslash, low Hz, high Hz.');
+                const f0 = number(parts[1], 'low frequency', frequencyLine);
+                const f1 = number(parts[2], 'high frequency', frequencyLine);
+                if (f0 !== -1 && f0 < 0 || f1 !== -1 && f1 < 0 || f0 !== -1 && f1 !== -1 && f0 > f1)
+                    throw Error('Audacity TXT line ' + frequencyLine + ': invalid frequency boundaries (use -1 for undefined).');
+                low = f0 === -1 ? null : f0;
+                high = f1 === -1 ? null : f1;
+            }
+            const point = start === end, spectral = low !== null || high !== null;
+            const oneFrequency = point && low !== null && high !== null && low === high;
+            markers.push({ type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
+                start, end, frequency: oneFrequency ? low : null,
+                freqMin: oneFrequency ? null : low, freqMax: oneFrequency ? null : high,
+                tag: '', label });
+            if (markers.length > MAX_MARKERS)
+                throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS + '.');
+        }
+        return markers;
+    }
+    function exportAudacityLabels(markers, extended = true, flattenText = false) {
+        const lines = [], sorted = Array.from(markers).sort((a, b) => a.start - b.start || a.end - b.end);
+        for (const marker of sorted) {
+            const label = marker.label ?? '';
+            if (/[\t\r\n]/.test(label) && !flattenText)
+                throw Error('Audacity TXT cannot represent tabs/newlines in a label. Confirm conversion or use JSON/CSV.');
+            const plainLabel = flattenText ? label.replace(/[\t\r\n]+/g, ' ') : label;
+            lines.push(String(marker.start) + '\t' + String(marker.end) + '\t' + plainLabel);
+            const [low, high] = audacityBounds(marker);
+            if (extended && (low !== null || high !== null))
+                lines.push('\\\t' + String(low ?? -1) + '\t' + String(high ?? -1));
+        }
+        return lines.length ? lines.join('\n') + '\n' : '';
+    }
+    // AUDACITY_LABEL_IO_END
     const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json'];
     const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
     function exportCSV() {
@@ -2012,7 +2115,8 @@ self.onmessage = async ({ data: m }) => {
     function importText(text, format, mode, ask = true) {
         if (!app.meta)
             throw Error('Load the matching audio before importing annotations.');
-        const data = parseImport(text, format), meta = data.meta, mismatch = meta.filename !== app.file.name || Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate || Number(meta.frames) !== app.meta.frames;
+        const data = format === 'txt' ? { markers: parseAudacityLabels(text).map(normalizeMarker), tags: new Map() } : parseImport(text, format);
+        const meta = data.meta, mismatch = format !== 'txt' && (meta.filename !== app.file.name || Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate || Number(meta.frames) !== app.meta.frames);
         if (mismatch && ask && !confirm('The annotation metadata does not match this audio file. Coordinates are valid here. Import anyway?'))
             return false;
         const replace = mode === 'replace';
@@ -2051,24 +2155,43 @@ self.onmessage = async ({ data: m }) => {
         if (file.size > MAX_IMPORT_BYTES)
             throw Error('Annotation file exceeds 32 MiB.');
         const ext = file.name.split('.').pop().toLowerCase();
-        if (!['json', 'csv'].includes(ext))
-            throw Error('Choose JSON or CSV annotations.');
-        const epoch = app.loadEpoch, text = await file.text();
+        if (!['json', 'csv', 'txt'].includes(ext))
+            throw Error('Choose JSON, CSV or Audacity TXT annotations.');
+        const epoch = app.loadEpoch;
+        // Reject broken UTF-8 rather than corrupting imported non-ASCII labels.
+        const text = ext === 'txt' ? new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()) : await file.text();
         if (epoch !== app.loadEpoch)
             throw Error('Import cancelled because the audio file changed.');
         return importText(text, ext, mode);
     }
     function downloadAnnotations(format) {
         try {
-            const text = format === 'json' ? JSON.stringify(exportObject(), null, 2) : exportCSV(), url = URL.createObjectURL(new Blob([text], { type: format === 'json' ? 'application/json' : 'text/csv;charset=utf-8' })), a = document.createElement('a');
+            let text;
+            if (format === 'txt') {
+                const markers = Array.from(app.markers.values());
+                const extended = $('audacityLabelStyle').value === 'extended';
+                if (!extended && markers.some(m => audacityBounds(m).some(f => f !== null)) &&
+                    !confirm('Standard Audacity TXT discards frequency information. Export without spectral data?'))
+                    return;
+                const flatten = markers.some(m => /[\t\r\n]/.test(m.label));
+                if (flatten && !confirm('Audacity TXT cannot represent tabs or line breaks inside labels. Replace them with spaces in the exported copy? JSON/CSV keep the original text.'))
+                    return;
+                text = exportAudacityLabels(markers, extended, flatten);
+            }
+            else
+                text = format === 'json' ? JSON.stringify(exportObject(), null, 2) : exportCSV();
+            const mime = format === 'json' ? 'application/json' : format === 'csv' ? 'text/csv;charset=utf-8' : 'text/plain;charset=utf-8';
+            const url = URL.createObjectURL(new Blob([text], { type: mime })), a = document.createElement('a');
             a.href = url;
-            a.download = app.file.name.replace(/\.[^.]+$/, '') + '.annotations.' + format;
+            a.download = app.file.name.replace(/\.[^.]+$/, '') + (format === 'txt' ? '.labels.txt' : '.annotations.' + format);
             document.body.append(a);
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-            app.dirty = false;
-            status('Exported ' + app.markers.size + ' annotations as ' + format.toUpperCase() + '.');
+            // Even extended Audacity TXT omits IDs, tags, styles and metadata.
+            if (format !== 'txt')
+                app.dirty = false;
+            status('Exported ' + app.markers.size + ' annotations as ' + (format === 'txt' ? 'Audacity TXT (not a full backup).' : format.toUpperCase() + '.'));
         }
         catch (e) {
             report(e);
@@ -2082,10 +2205,20 @@ self.onmessage = async ({ data: m }) => {
                 continue;
             const x1 = tX(m.start, p.g), x2 = tX(m.end, p.g);
             let d;
-            if (m.type === 'point')
-                d = isSpec && m.frequency !== null ? Math.hypot(p.x - x1, p.y - fY(m.frequency, p.g)) : Math.abs(p.x - x1);
+            if (m.type === 'point') {
+                if (isSpec && m.frequency !== null)
+                    d = Math.hypot(p.x - x1, p.y - fY(m.frequency, p.g));
+                else if (isSpec && (m.freqMin !== null || m.freqMax !== null)) {
+                    const y1 = fY(m.freqMax ?? app.meta.sampleRate / 2, p.g), y2 = fY(m.freqMin ?? 0, p.g);
+                    d = Math.hypot(Math.abs(p.x - x1), Math.max(y1 - p.y, 0, p.y - y2));
+                }
+                else
+                    d = Math.abs(p.x - x1);
+            }
             else {
-                const y1 = isSpec && m.type === 'frequency_range' ? fY(m.freqMax, p.g) : p.g.top, y2 = isSpec && m.type === 'frequency_range' ? fY(m.freqMin, p.g) : p.g.top + p.g.h;
+                const selectedFreq = isSpec && m.type === 'frequency_range';
+                const y1 = selectedFreq ? fY(m.freqMax ?? app.meta.sampleRate / 2, p.g) : p.g.top;
+                const y2 = selectedFreq ? fY(m.freqMin ?? 0, p.g) : p.g.top + p.g.h;
                 d = Math.hypot(Math.max(x1 - p.x, 0, p.x - x2), Math.max(y1 - p.y, 0, p.y - y2));
             }
             if (d <= distance) {
@@ -2296,6 +2429,7 @@ self.onmessage = async ({ data: m }) => {
     });
     handle('exportJson', 'click', () => downloadAnnotations('json'));
     handle('exportCsv', 'click', () => downloadAnnotations('csv'));
+    handle('exportTxt', 'click', () => downloadAnnotations('txt'));
     handle('importBtn', 'click', () => {
         const file = $('importInput').files[0];
         if (!file)
@@ -2315,7 +2449,12 @@ self.onmessage = async ({ data: m }) => {
         // Preserve unchanged imported CRLF labels; textarea.value normalizes them to LF.
         const label = $('editLabel').value === old.label.replace(/\r\n?/g, '\n') ? old.label : $('editLabel').value;
         const tag = $('editTag').value === old.tag.replace(/[\r\n]/g, '') ? old.tag : $('editTag').value;
-        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value, frequency: old.type === 'point' ? $('editMin').value : null, freqMin: old.type === 'frequency_range' ? $('editMin').value : null, freqMax: old.type === 'frequency_range' ? $('editMax').value : null, tag, label });
+        const min = $('editMin').value, max = $('editMax').value;
+        // Preserve imported point spectral ranges even when one end is undefined.
+        const pair = old.type === 'frequency_range' || old.type === 'point' && (old.freqMin !== null || old.freqMax !== null || max !== '');
+        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value,
+            frequency: old.type === 'point' && !pair ? min : null,
+            freqMin: pair ? min : null, freqMax: pair ? max : null, tag, label });
         transact({ markers: [{ id: m.id, before: old, after: m }], tags: m.tag && !app.tags.has(m.tag) ? [{ key: m.tag, before: null, after: tagDefinition(m.tag) }] : [] });
     });
     const editing = target => target instanceof HTMLElement && (target.matches('textarea,select,input:not([type=radio]):not([type=checkbox]):not([type=file])') || target.isContentEditable);
@@ -2402,7 +2541,7 @@ self.onmessage = async ({ data: m }) => {
         e.preventDefault();
         document.body.classList.remove('dragging');
         try {
-            const files = Array.from(e.dataTransfer?.files || []), annotations = files.filter(f => /\.(json|csv)$/i.test(f.name)), audio = files.filter(f => !annotations.includes(f));
+            const files = Array.from(e.dataTransfer?.files || []), annotations = files.filter(f => /\.(json|csv|txt)$/i.test(f.name)), audio = files.filter(f => !annotations.includes(f));
             if (audio.length > 1)
                 throw Error('Drop one audio recording at a time.');
             if (audio.length && !await loadAudio(audio[0]))
