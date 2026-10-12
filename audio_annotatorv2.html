@@ -45,7 +45,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div id="outputInfo" class="hint">Playback output is separate from the file’s native analysis rate. Slow ultrasonic recordings down to hear them.</div>
 </section>
 <section class="panel" aria-label="View settings">
-<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><button id="overviewBtn" disabled>Build exact overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build exact overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
 <div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Y-axis scale <select id="frequencyScale" title="Frequency-axis display mapping; annotations remain stored in Hz"><option value="linear" selected>Linear (Hz)</option><option value="log">Logarithmic (octaves)</option><option value="mel">Mel</option><option value="bark">Bark</option><option value="erb">ERB</option><option value="period">Period (1/f)</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
 <div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
 </section>
@@ -1454,7 +1454,7 @@ self.onmessage = async ({ data: m }) => {
     // Native samples preserve temporal order; wide views use peak-preserving bins.
     function drawWaveformTrace(ctx, g, r, x, w, amp, sampleRate) {
         const middle = g.top + g.h / 2, scale = amp * g.h / 2;
-        ctx.strokeStyle = '#66d3b7';
+        ctx.strokeStyle = $('waveformColor').value;
         ctx.lineWidth = 1;
         ctx.beginPath();
         let connected = false;
@@ -2406,6 +2406,7 @@ self.onmessage = async ({ data: m }) => {
         requestRender();
     });
     handle('amplitude', 'change', paintAll);
+    handle('waveformColor', 'input', paintAll);
     handle('channel', 'change', async () => {
         const was = app.playing;
         pause();
