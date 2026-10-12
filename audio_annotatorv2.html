@@ -1839,8 +1839,8 @@ self.onmessage = async ({ data: m }) => {
         rememberTransaction(tx);
         applyTransaction(tx, true);
     }
-    function transactSnapshot(markers, tags, afterSelection = null) {
-        if (app.importBusy)
+    function transactSnapshot(markers, tags, afterSelection = null, fromImport = false) {
+        if (app.importBusy && !fromImport)
             throw Error('An annotation import is in progress.');
         if (markers.size > MAX_MARKERS || tags.size > 2000)
             throw Error('Too many markers or tags.');
@@ -2038,60 +2038,82 @@ self.onmessage = async ({ data: m }) => {
         return marker.type === 'point' || marker.type === 'frequency_range'
             ? [marker.freqMin ?? null, marker.freqMax ?? null] : [null, null];
     }
-    function parseAudacityLabels(text) {
-        if (text.length * 2 > MAX_IMPORT_BYTES)
+    const yieldUI = () => new Promise(resolve => setTimeout(resolve, 0));
+    async function parseAudacityLabels(text, epoch = app.loadEpoch) {
+        if (text.length > MAX_IMPORT_BYTES)
             throw Error('Annotation text exceeds the import memory limit.');
-        const numeric = token => /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
+        const numeric = token => /^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
         const number = (token, what, line) => {
             if (token === undefined || !numeric(token))
                 throw Error('Audacity TXT line ' + line + ': invalid ' + what + '.');
             return Number(token);
         };
-        const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/), markers = [];
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (!line)
-                continue;
-            if (line.startsWith('\\'))
-                throw Error('Audacity TXT line ' + (i + 1) + ': orphan or unsupported frequency continuation.');
-            const fields = line.split('\t'), lineNumber = i + 1;
+        // Walk the original string without splitting it into a million short strings.
+        // Also preserve Audacity's optional following \\ frequency-bound line.
+        let offset = text.charCodeAt(0) === 0xFEFF ? 1 : 0, lineNumber = 0, pending = null;
+        const nextLine = () => {
+            if (offset >= text.length) return null;
+            let lf = text.indexOf('\\n', offset), cr = text.indexOf('\\r', offset);
+            if (lf < 0) lf = text.length;
+            if (cr < 0) cr = text.length;
+            const end = Math.min(lf, cr);
+            const line = text.slice(offset, end);
+            offset = end < text.length ? end + (text[end] === '\\r' && text[end + 1] === '\\n' ? 2 : 1) : end;
+            return { line, number: ++lineNumber };
+        };
+        const markers = [], createdAt = new Date().toISOString();
+        let entry;
+        while ((entry = pending || nextLine())) {
+            pending = null;
+            const { line, number: lineNo } = entry;
+            if (!line) continue;
+            if (line.startsWith('\\\\'))
+                throw Error('Audacity TXT line ' + lineNo + ': orphan or unsupported frequency continuation.');
+            const fields = line.split('\\t');
             if (fields.length > 3)
-                throw Error('Audacity TXT line ' + lineNumber + ': labels cannot contain tabs.');
-            const start = number(fields[0], 'start time', lineNumber);
+                throw Error('Audacity TXT line ' + lineNo + ': labels cannot contain tabs.');
+            const start = number(fields[0], 'start time', lineNo);
             let end = start, label = '';
             if (fields.length === 2) {
-                // Audacity accepts legacy start<TAB>label point records.
-                if (numeric(fields[1]))
-                    end = number(fields[1], 'end time', lineNumber);
-                else
-                    label = fields[1];
+                if (numeric(fields[1])) end = number(fields[1], 'end time', lineNo);
+                else label = fields[1];
             }
             else if (fields.length === 3) {
-                end = number(fields[1], 'end time', lineNumber);
+                end = number(fields[1], 'end time', lineNo);
                 label = fields[2];
             }
             if (start < 0 || end < start)
-                throw Error('Audacity TXT line ' + lineNumber + ': expected 0 ≤ start ≤ end.');
+                throw Error('Audacity TXT line ' + lineNo + ': expected 0 ≤ start ≤ end.');
             let low = null, high = null;
-            if (i + 1 < lines.length && lines[i + 1].startsWith('\\')) {
-                const frequencyLine = ++i + 1, parts = lines[i].split('\t');
-                if (parts.length !== 3 || parts[0] !== '\\')
-                    throw Error('Audacity TXT line ' + frequencyLine + ': expected backslash, low Hz, high Hz.');
-                const f0 = number(parts[1], 'low frequency', frequencyLine);
-                const f1 = number(parts[2], 'high frequency', frequencyLine);
+            const next = nextLine();
+            if (next?.line.startsWith('\\\\')) {
+                const parts = next.line.split('\\t');
+                if (parts.length !== 3 || parts[0] !== '\\\\')
+                    throw Error('Audacity TXT line ' + next.number + ': expected backslash, low Hz, high Hz.');
+                const f0 = number(parts[1], 'low frequency', next.number);
+                const f1 = number(parts[2], 'high frequency', next.number);
                 if (f0 !== -1 && f0 < 0 || f1 !== -1 && f1 < 0 || f0 !== -1 && f1 !== -1 && f0 > f1)
-                    throw Error('Audacity TXT line ' + frequencyLine + ': invalid frequency boundaries (use -1 for undefined).');
+                    throw Error('Audacity TXT line ' + next.number + ': invalid frequency boundaries (use -1 for undefined).');
                 low = f0 === -1 ? null : f0;
                 high = f1 === -1 ? null : f1;
             }
+            else pending = next;
             const point = start === end, spectral = low !== null || high !== null;
             const oneFrequency = point && low !== null && high !== null && low === high;
-            markers.push({ type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
+            markers.push(normalizeMarker({
+                type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
                 start, end, frequency: oneFrequency ? low : null,
                 freqMin: oneFrequency ? null : low, freqMax: oneFrequency ? null : high,
-                tag: '', label });
+                tag: '', label, createdAt
+            }));
             if (markers.length > MAX_MARKERS)
-                throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS + '.');
+                throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS.toLocaleString() + '.');
+            if (markers.length % 8192 === 0) {
+                status('Parsing Audacity labels… ' + markers.length.toLocaleString());
+                await yieldUI();
+                if (epoch !== app.loadEpoch)
+                    throw Error('Import cancelled because the audio file changed.');
+            }
         }
         return markers;
     }
@@ -2125,7 +2147,7 @@ self.onmessage = async ({ data: m }) => {
         }
         return lines.join('\r\n') + '\r\n';
     }
-    function parseCSV(text) {
+    async function parseCSV(text) {
         text = text.replace(/^\uFEFF/, '');
         const rows = [];
         let row = [], field = '', quoted = false, closed = false;
@@ -2172,6 +2194,10 @@ self.onmessage = async ({ data: m }) => {
             }
             if (rows.length > MAX_MARKERS + 2)
                 throw Error('Too many CSV rows.');
+            if (i && (i & 262143) === 0) {
+                status('Reading CSV… ' + rows.length.toLocaleString() + ' rows');
+                await yieldUI();
+            }
         }
         if (quoted)
             throw Error('Unterminated CSV quoted field.');
@@ -2181,14 +2207,14 @@ self.onmessage = async ({ data: m }) => {
         }
         return rows;
     }
-    function parseImport(text, format) {
-        if (text.length * 2 > MAX_IMPORT_BYTES)
+    async function parseImport(text, format) {
+        if (text.length > MAX_IMPORT_BYTES)
             throw Error('Annotation text exceeds the import memory limit.');
         let data;
         if (format === 'json')
             data = JSON.parse(text.replace(/^\uFEFF/, ''));
         else {
-            const rows = parseCSV(text);
+            const rows = await parseCSV(text);
             if (!rows.length)
                 throw Error('Empty CSV.');
             const header = rows.shift(), col = name => header.indexOf(name);
@@ -2223,7 +2249,14 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Not an Audio Annotator v2 annotation document.');
         if (data.markers.length > MAX_MARKERS || data.tags.length > 2000)
             throw Error('Too many markers or tags.');
-        const markers = data.markers.map(normalizeMarker), tags = new Map();
+        const markers = [], tags = new Map();
+        for (let i = 0; i < data.markers.length; i++) {
+            markers.push(normalizeMarker(data.markers[i]));
+            if (i && i % 8192 === 0) {
+                status('Validating annotations… ' + i.toLocaleString());
+                await yieldUI();
+            }
+        }
         for (const raw of data.tags) {
             const tag = normalizeTag(raw);
             if (tags.has(tag.key))
@@ -2235,10 +2268,14 @@ self.onmessage = async ({ data: m }) => {
                 tags.set(m.tag, { name: m.tag, color: m.color, alpha: m.alpha });
         return { meta: data.meta, markers, tags };
     }
-    function importText(text, format, mode, ask = true) {
+    async function importText(text, format, mode, ask = true, epoch = app.loadEpoch) {
         if (!app.meta)
             throw Error('Load the matching audio before importing annotations.');
-        const data = format === 'txt' ? { markers: parseAudacityLabels(text).map(normalizeMarker), tags: new Map() } : parseImport(text, format);
+        const data = format === 'txt'
+            ? { markers: await parseAudacityLabels(text, epoch), tags: new Map() }
+            : await parseImport(text, format);
+        if (epoch !== app.loadEpoch)
+            throw Error('Import cancelled because the audio file changed.');
         const meta = data.meta, mismatch = format !== 'txt' && (meta.filename !== app.file.name || Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate || Number(meta.frames) !== app.meta.frames);
         if (mismatch && ask && !confirm('The annotation metadata does not match this audio file. Coordinates are valid here. Import anyway?'))
             return false;
@@ -2248,44 +2285,55 @@ self.onmessage = async ({ data: m }) => {
         const conflicts = Array.from(data.tags).filter(([k, v]) => app.tags.has(k) && JSON.stringify(app.tags.get(k)) !== JSON.stringify(v)).length;
         if (!replace && conflicts && ask && !confirm('Update ' + conflicts + ' existing tag definitions? Their colors/names also change on existing markers.'))
             return false;
+        if (!replace && app.markers.size + data.markers.length > MAX_MARKERS && format === 'txt')
+            throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
         const markers = new Map(replace ? [] : app.markers), tags = new Map(replace ? [] : app.tags);
-        for (const m0 of data.markers) {
-            let m = m0;
-            if (markers.has(m.id))
-                m = { ...m, id: uid() };
+        for (let i = 0; i < data.markers.length; i++) {
+            const item = data.markers[i];
+            const m = markers.has(item.id) ? { ...item, id: uid() } : item;
             markers.set(m.id, m);
+            if (markers.size > MAX_MARKERS)
+                throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
+            if (i && i % 8192 === 0) {
+                status('Preparing annotations… ' + i.toLocaleString());
+                await yieldUI();
+                if (epoch !== app.loadEpoch)
+                    throw Error('Import cancelled because the audio file changed.');
+            }
         }
-        for (const [k, v] of data.tags)
-            tags.set(k, v);
+        for (const [k, v] of data.tags) tags.set(k, v);
         if (tags.size > 2000)
             throw Error('The tag limit is 2,000.');
-        const changes = { markers: [], tags: [], afterSelection: null };
-        for (const id of new Set([...app.markers.keys(), ...markers.keys()])) {
-            const before = app.markers.get(id) ?? null, after = markers.get(id) ?? null;
-            if (before !== after)
-                changes.markers.push({ id, before, after });
-        }
-        for (const key of new Set([...app.tags.keys(), ...tags.keys()])) {
-            const before = app.tags.get(key) ?? null, after = tags.get(key) ?? null;
-            if (before !== after)
-                changes.tags.push({ key, before, after });
-        }
-        transact(changes);
-        status((replace ? 'Replaced with ' : 'Merged ') + data.markers.length + ' annotations. Undo is available.');
+        if (epoch !== app.loadEpoch)
+            throw Error('Import cancelled because the audio file changed.');
+        // One atomic, reversible Map swap; no huge difference array or JSON.stringify.
+        transactSnapshot(markers, tags, null, true);
+        status((replace ? 'Replaced with ' : 'Merged ') + data.markers.length.toLocaleString() + ' annotations. Undo is available.');
         return true;
     }
     async function importFile(file, mode = $('importMode').value) {
+        if (app.importBusy)
+            throw Error('An annotation import is already in progress.');
         if (file.size > MAX_IMPORT_BYTES)
-            throw Error('Annotation file exceeds 32 MiB.');
+            throw Error('Annotation file exceeds ' + (MAX_IMPORT_BYTES / 1048576) + ' MiB.');
         const ext = file.name.split('.').pop().toLowerCase();
         if (!['json', 'csv', 'txt'].includes(ext))
             throw Error('Choose JSON, CSV or Audacity TXT annotations.');
         const epoch = app.loadEpoch;
-        // Reject broken UTF-8 rather than corrupting imported non-ASCII labels.
-        const text = ext === 'txt' ? new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()) : await file.text();
-        if (epoch !== app.loadEpoch)
-            throw Error('Import cancelled because the audio file changed.');
-        return importText(text, ext, mode);
+        app.importBusy = true;
+        status('Reading annotation file…');
+        try {
+            // Audacity TXT requires strict UTF-8 decoding, preserving line breaks.
+            const text = ext === 'txt'
+                ? new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+                : await file.text();
+            if (epoch !== app.loadEpoch)
+                throw Error('Import cancelled because the audio file changed.');
+            return await importText(text, ext, mode, true, epoch);
+        }
+        finally {
+            app.importBusy = false;
+        }
     }
     function downloadAnnotations(format) {
         try {
