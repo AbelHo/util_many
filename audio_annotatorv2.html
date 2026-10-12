@@ -1770,54 +1770,93 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Invalid tag color or alpha.');
         return { key, value: { name, color, alpha } };
     }
+    // Bulk operations keep immutable before/after Map snapshots instead of one
+    // enormous array of before/after changes (and JSON.stringify of that array).
+    // A subsequent single-marker edit forks a shared Map on first write so that
+    // redo/undo of a bulk import can never mutate its saved snapshot.
+    function writableAnnotationMaps() {
+        if ([...app.undo, ...app.redo].some(tx => tx.snapshot &&
+            (tx.beforeMarkers === app.markers || tx.afterMarkers === app.markers)))
+            app.markers = new Map(app.markers);
+        if ([...app.undo, ...app.redo].some(tx => tx.snapshot &&
+            (tx.beforeTags === app.tags || tx.afterTags === app.tags)))
+            app.tags = new Map(app.tags);
+    }
     function applyTransaction(tx, forward) {
-        for (const change of tx.markers || []) {
-            const value = forward ? change.after : change.before;
-            if (value === null)
-                app.markers.delete(change.id);
-            else
-                app.markers.set(change.id, { ...value });
+        if (tx.snapshot) {
+            app.markers = forward ? tx.afterMarkers : tx.beforeMarkers;
+            app.tags = forward ? tx.afterTags : tx.beforeTags;
         }
-        for (const change of tx.tags || []) {
-            const value = forward ? change.after : change.before;
-            if (value === null)
-                app.tags.delete(change.key);
-            else
-                app.tags.set(change.key, { ...value });
+        else {
+            writableAnnotationMaps();
+            for (const change of tx.markers || []) {
+                const value = forward ? change.after : change.before;
+                if (value === null)
+                    app.markers.delete(change.id);
+                else
+                    app.markers.set(change.id, { ...value });
+            }
+            for (const change of tx.tags || []) {
+                const value = forward ? change.after : change.before;
+                if (value === null)
+                    app.tags.delete(change.key);
+                else
+                    app.tags.set(change.key, { ...value });
+            }
         }
         app.selected = forward ? tx.afterSelection : tx.beforeSelection;
         if (!app.markers.has(app.selected))
             app.selected = null;
         app.dirty = true;
+        invalidateMarkers();
         refreshAnnotations();
     }
+    function rememberTransaction(tx) {
+        app.redo = [];
+        app.undo.push(tx);
+        app.historyBytes += tx.bytes;
+        while (app.undo.length > 200 || app.historyBytes > HISTORY_BYTES) {
+            if (app.undo.length === 1)
+                break;
+            app.historyBytes -= app.undo.shift().bytes;
+        }
+    }
     function transact(tx) {
+        if (app.importBusy)
+            throw Error('An annotation import is in progress.');
         tx.beforeSelection = app.selected;
         tx.afterSelection = tx.afterSelection ?? app.selected;
-        tx.bytes = JSON.stringify(tx).length * 2;
-        if (tx.bytes > HISTORY_BYTES)
-            throw Error('This change exceeds the undo memory budget; import a smaller batch.');
         let count = app.markers.size;
         for (const c of tx.markers || []) {
-            if (c.before === null && c.after !== null)
-                count++;
-            if (c.before !== null && c.after === null)
-                count--;
+            if (c.before === null && c.after !== null) count++;
+            if (c.before !== null && c.after === null) count--;
         }
         if (count > MAX_MARKERS)
             throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
-        app.redo = [];
-        app.undo.push(tx);
-        app.historyBytes = app.undo.reduce((n, x) => n + x.bytes, 0);
-        while (app.undo.length > 200 || app.historyBytes > HISTORY_BYTES) {
-            app.historyBytes -= app.undo.shift().bytes;
-        }
+        tx.bytes = JSON.stringify(tx).length * 2;
+        if (tx.bytes > HISTORY_BYTES)
+            throw Error('This edit exceeds the undo budget; use bulk import/clear for large changes.');
+        rememberTransaction(tx);
+        applyTransaction(tx, true);
+    }
+    function transactSnapshot(markers, tags, afterSelection = null) {
+        if (app.importBusy)
+            throw Error('An annotation import is in progress.');
+        if (markers.size > MAX_MARKERS || tags.size > 2000)
+            throw Error('Too many markers or tags.');
+        const tx = { snapshot: true, beforeMarkers: app.markers, afterMarkers: markers,
+            beforeTags: app.tags, afterTags: tags, beforeSelection: app.selected,
+            afterSelection, bytes: Math.min(HISTORY_BYTES,
+                96 * (app.markers.size + markers.size) + 256 * (app.tags.size + tags.size) + 1024) };
+        rememberTransaction(tx);
         applyTransaction(tx, true);
     }
     function history(forward) {
+        if (app.importBusy)
+            throw Error('An annotation import is in progress.');
         const from = forward ? app.redo : app.undo, to = forward ? app.undo : app.redo, tx = from.pop();
-        if (!tx)
-            return;
+        if (!tx) return;
+        app.historyBytes += forward ? tx.bytes : -tx.bytes;
         to.push(tx);
         applyTransaction(tx, forward);
     }
@@ -2509,7 +2548,7 @@ self.onmessage = async ({ data: m }) => {
     handle('redoBtn', 'click', () => history(true));
     handle('clearBtn', 'click', () => {
         if (confirm('Clear all markers? Tags are retained. This is undoable.'))
-            transact({ markers: Array.from(app.markers, ([id, m]) => ({ id, before: m, after: null })), afterSelection: null });
+            transactSnapshot(new Map(), new Map(app.tags));
     });
     handle('exportJson', 'click', () => downloadAnnotations('json'));
     handle('exportCsv', 'click', () => downloadAnnotations('csv'));
