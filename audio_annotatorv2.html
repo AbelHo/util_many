@@ -1363,7 +1363,7 @@ self.onmessage = async ({ data: m }) => {
         $('scrollSlider').value = app.start;
         $('viewLabel').textContent = fmt(app.start, 4) + ' – ' + fmt(app.start + app.span, 4) + ' s';
         if ($('visibleOnly').checked)
-            scheduleMarkerTable();
+            app.markers.size < 10000 ? renderMarkerTable() : scheduleMarkerTable();
         requestRender();
     }
     function zoom(factor, anchor = app.start + app.span / 2) {
@@ -2613,7 +2613,7 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Choose an annotation file first.');
         return importFile(file);
     });
-    handle('markerFilter', 'input', () => { app.page = 0; scheduleMarkerTable(); });
+    handle('markerFilter', 'input', () => { app.page = 0; app.markers.size < 10000 ? renderMarkerTable() : scheduleMarkerTable(); });
     handle('visibleOnly', 'change', () => { app.page = 0; renderMarkerTable(); });
     handle('tagFilter', 'input', renderTags);
     handle('pagePrev', 'click', () => { app.page--; renderMarkerTable(); });
