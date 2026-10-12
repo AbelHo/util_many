@@ -49,8 +49,9 @@ label tracks into the same file, losing the track boundaries.
 ## Implementation
 
 - **Import:** Use the annotation Import file picker or drop one or more `.txt`
-  files. Load the corresponding audio first. Merge and Replace use the same
-  undoable transactions as JSON/CSV. All rows, including time range, frequency
+  files. Load the corresponding audio first. Imports accept up to 1,000,000
+  annotations and 256 MiB per file. Merge and Replace use the same undoable
+  bulk transactions as JSON/CSV. All rows, including time range, frequency
   bounds, marker count and undo-size limits, are validated **before** changes.
   Out-of-audio times or frequencies outside the loaded audio's Nyquist range
   are rejected, not clipped without warning.
@@ -81,6 +82,13 @@ Or include it with existing suites:
 
 ~~~bash
 python tests/audio_annotator_v2/run.py
+~~~
+
+To exercise a full one-million-label import, mixed label types, mixed line
+endings, and bulk undo/redo in Chromium:
+
+~~~bash
+python tests/audio_annotator_v2/run.py --suite million_markers_browser
 ~~~
 
 The test covers a UTF-8 BOM, Unicode, legacy point records, spectral bounds,

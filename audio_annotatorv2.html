@@ -20,7 +20,12 @@ scrubs. Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
 JSON/CSV and Audacity TXT (standard/extended spectral) import is validated atomically; merge/replace, tags, metadata and all marker
-types round-trip. History uses bounded transactions rather than per-click snapshots.
+types round-trip. Supports up to 1,000,000 markers and 256 MiB annotation files.
+Bulk imports/clear use undoable Map snapshots; ordinary edits use bounded deltas.
+An interval index, cached canvas marker layer, paged table and debounced filters
+keep navigation responsive with dense labels. Imports yield periodically and remain
+atomic. The inspect() API caps returned marker objects at 50,000 by default; use
+inspect({ allMarkers: true }) for a deliberate full diagnostic copy.
 All user text enters the DOM through textContent/value, never interpolated HTML.
 Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransform supplies FFT image rows, axis ticks, mouse frequency and annotations.\nSee README.md/AGENTS.md for repository conventions; README is generated, not edited.
 -->
@@ -61,7 +66,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="row hint"><span id="renderInfo" class="grow">No analysis yet.</span><output id="hoverInfo"></output></div>
 <section class="panel" aria-label="Annotation import and export">
 <div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge</option><option value="replace">Replace</option></select><button id="importBtn" disabled>Import</button></div>
-<div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button></div>
+<div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button><label>Jump to page <input id="pageJump" type="number" min="1" value="1" step="1" style="width:75px" aria-label="Jump to annotation page"></label></div>
 <div class="tableWrap"><table><thead><tr><th>Type</th><th>Time (s)</th><th>Frequency (Hz)</th><th>Tag / label</th><th>Actions</th></tr></thead><tbody id="markerRows"></tbody></table></div>
 </section>
 </main>
@@ -70,7 +75,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Imports process in batches to keep the UI responsive; undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. The overlay draws up to 5,000 visible markers at a time: zoom in for dense regions. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -934,8 +939,8 @@ self.onmessage = async ({ data: m }) => {
 'use strict';
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
-    const MAX_MARKERS = 50000, HISTORY_BYTES = 16 * 1048576, MAX_IMPORT_BYTES = 32 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
+    const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, tableTimer: 0, importBusy: false, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1077,8 +1082,9 @@ self.onmessage = async ({ data: m }) => {
         ready(false);
         status('Reading audio metadata…');
         $('fileInfo').textContent = file.name;
-        app.markers.clear();
-        app.tags.clear();
+        app.markers = new Map();
+        app.tags = new Map();
+        invalidateMarkers();
         app.selected = null;
         app.undo = [];
         app.redo = [];
@@ -1357,7 +1363,7 @@ self.onmessage = async ({ data: m }) => {
         $('scrollSlider').value = app.start;
         $('viewLabel').textContent = fmt(app.start, 4) + ' – ' + fmt(app.start + app.span, 4) + ' s';
         if ($('visibleOnly').checked)
-            renderMarkerTable();
+            app.markers.size < 10000 ? renderMarkerTable() : scheduleMarkerTable();
         requestRender();
     }
     function zoom(factor, anchor = app.start + app.span / 2) {
@@ -1550,6 +1556,45 @@ self.onmessage = async ({ data: m }) => {
         ctx.fillStyle = app.renderPending ? '#ffda86' : '#d8e3ef';
         ctx.fillText(app.renderPending ? 'Updating preview…' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
     }
+
+    // Sorted interval index: prefix maximum end times makes range-overlap searches
+    // O(log N + candidates), including long spans that begin outside the viewport.
+    // The index and filtered table rows are rebuilt only after underlying data changes.
+    function invalidateMarkers() {
+        app.markerVersion++;
+        app.markerIndex = null;
+        app.tableCache = null;
+        app.overlayLayers.wave = app.overlayLayers.spec = null;
+    }
+    function markerIndex() {
+        if (!app.markerIndex) {
+            const items = Array.from(app.markers.values()).sort((a, b) => a.start - b.start || a.end - b.end);
+            const maxEnd = new Float64Array(items.length);
+            let maximum = -Infinity;
+            for (let i = 0; i < items.length; i++) {
+                maximum = Math.max(maximum, items[i].end);
+                maxEnd[i] = maximum;
+            }
+            app.markerIndex = { items, maxEnd };
+        }
+        return app.markerIndex;
+    }
+    function forEachVisibleMarker(start, end, visit) {
+        const { items, maxEnd } = markerIndex();
+        let lo = 0, hi = maxEnd.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (maxEnd[mid] < start) lo = mid + 1;
+            else hi = mid;
+        }
+        for (let i = lo; i < items.length && items[i].start <= end; i++)
+            if (items[i].end >= start && visit(items[i]) === false)
+                break;
+    }
+    function scheduleMarkerTable() {
+        clearTimeout(app.tableTimer);
+        app.tableTimer = setTimeout(renderMarkerTable, 120);
+    }
     function styleFor(marker) { return app.tags.get(marker.tag) || { name: marker.tag || '', color: marker.color || '#69df98', alpha: marker.alpha ?? .75 }; }
     function drawMarker(ctx, g, m, isSpec, preview = false) {
         const style = styleFor(m);
@@ -1607,18 +1652,50 @@ self.onmessage = async ({ data: m }) => {
         ctx.clearRect(0, 0, g.width, g.height);
         if (!app.meta)
             return;
+        const key = isSpec ? 'spec' : 'wave';
+        const band = isSpec ? getDisplayFreqRange() : null;
+        const signature = [canvas.width, canvas.height, app.start, app.span,
+            app.markerVersion, app.selected, isSpec ? currentScale() : '',
+            band?.min, band?.max].join('|');
+        let layer = app.overlayLayers[key];
+        if (!layer || layer.signature !== signature) {
+            const offscreen = document.createElement('canvas');
+            offscreen.width = canvas.width;
+            offscreen.height = canvas.height;
+            const pen = offscreen.getContext('2d');
+            const dpr = Math.min(devicePixelRatio || 1, 2);
+            pen.setTransform(dpr, 0, 0, dpr, 0, 0);
+            pen.save();
+            pen.beginPath();
+            pen.rect(g.left, g.top, g.w, g.h);
+            pen.clip();
+            let drawn = 0, truncated = false;
+            forEachVisibleMarker(app.start, app.start + app.span, marker => {
+                if (drawn === 5000) {
+                    truncated = true;
+                    return false;
+                }
+                drawMarker(pen, g, marker, isSpec);
+                drawn++;
+            });
+            pen.restore();
+            if (truncated) {
+                pen.fillStyle = '#ffda86';
+                pen.font = '11px system-ui';
+                pen.fillText('Showing first 5,000 visible markers; zoom in for detail.', g.left, g.top + g.h - 8);
+            }
+            layer = { signature, canvas: offscreen };
+            app.overlayLayers[key] = layer;
+        }
+        // Marker raster is stable while only the playback cursor moves.
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(layer.canvas, 0, 0);
+        ctx.restore();
         ctx.save();
         ctx.beginPath();
         ctx.rect(g.left, g.top, g.w, g.h);
         ctx.clip();
-        let drawn = 0;
-        for (const marker of app.markers.values()) {
-            if (marker.end < app.start || marker.start > app.start + app.span)
-                continue;
-            if (++drawn > 5000)
-                break;
-            drawMarker(ctx, g, marker, isSpec);
-        }
         if (app.gesture?.kind === 'annotate' && app.gesture.current) {
             const marker = gestureMarker(app.gesture);
             if (marker)
@@ -1632,11 +1709,6 @@ self.onmessage = async ({ data: m }) => {
         ctx.lineTo(x, g.top + g.h);
         ctx.stroke();
         ctx.restore();
-        if (drawn > 5000) {
-            ctx.fillStyle = '#ffda86';
-            ctx.font = '11px system-ui';
-            ctx.fillText('Overlay limited to 5,000 visible markers; zoom/filter the table.', g.left, g.top + g.h - 8);
-        }
     }
     function paintOverlays() { paintOverlay($('waveOverlay'), false); paintOverlay($('specOverlay'), true); }
     function paintAll() { drawBase($('waveCanvas'), false); drawBase($('specCanvas'), true); paintOverlays(); }
@@ -1703,54 +1775,93 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Invalid tag color or alpha.');
         return { key, value: { name, color, alpha } };
     }
+    // Bulk operations keep immutable before/after Map snapshots instead of one
+    // enormous array of before/after changes (and JSON.stringify of that array).
+    // A subsequent single-marker edit forks a shared Map on first write so that
+    // redo/undo of a bulk import can never mutate its saved snapshot.
+    function writableAnnotationMaps() {
+        if ([...app.undo, ...app.redo].some(tx => tx.snapshot &&
+            (tx.beforeMarkers === app.markers || tx.afterMarkers === app.markers)))
+            app.markers = new Map(app.markers);
+        if ([...app.undo, ...app.redo].some(tx => tx.snapshot &&
+            (tx.beforeTags === app.tags || tx.afterTags === app.tags)))
+            app.tags = new Map(app.tags);
+    }
     function applyTransaction(tx, forward) {
-        for (const change of tx.markers || []) {
-            const value = forward ? change.after : change.before;
-            if (value === null)
-                app.markers.delete(change.id);
-            else
-                app.markers.set(change.id, { ...value });
+        if (tx.snapshot) {
+            app.markers = forward ? tx.afterMarkers : tx.beforeMarkers;
+            app.tags = forward ? tx.afterTags : tx.beforeTags;
         }
-        for (const change of tx.tags || []) {
-            const value = forward ? change.after : change.before;
-            if (value === null)
-                app.tags.delete(change.key);
-            else
-                app.tags.set(change.key, { ...value });
+        else {
+            writableAnnotationMaps();
+            for (const change of tx.markers || []) {
+                const value = forward ? change.after : change.before;
+                if (value === null)
+                    app.markers.delete(change.id);
+                else
+                    app.markers.set(change.id, { ...value });
+            }
+            for (const change of tx.tags || []) {
+                const value = forward ? change.after : change.before;
+                if (value === null)
+                    app.tags.delete(change.key);
+                else
+                    app.tags.set(change.key, { ...value });
+            }
         }
         app.selected = forward ? tx.afterSelection : tx.beforeSelection;
         if (!app.markers.has(app.selected))
             app.selected = null;
         app.dirty = true;
+        invalidateMarkers();
         refreshAnnotations();
     }
+    function rememberTransaction(tx) {
+        app.redo = [];
+        app.undo.push(tx);
+        app.historyBytes += tx.bytes;
+        while (app.undo.length > 200 || app.historyBytes > HISTORY_BYTES) {
+            if (app.undo.length === 1)
+                break;
+            app.historyBytes -= app.undo.shift().bytes;
+        }
+    }
     function transact(tx) {
+        if (app.importBusy)
+            throw Error('An annotation import is in progress.');
         tx.beforeSelection = app.selected;
         tx.afterSelection = tx.afterSelection ?? app.selected;
-        tx.bytes = JSON.stringify(tx).length * 2;
-        if (tx.bytes > HISTORY_BYTES)
-            throw Error('This change exceeds the undo memory budget; import a smaller batch.');
         let count = app.markers.size;
         for (const c of tx.markers || []) {
-            if (c.before === null && c.after !== null)
-                count++;
-            if (c.before !== null && c.after === null)
-                count--;
+            if (c.before === null && c.after !== null) count++;
+            if (c.before !== null && c.after === null) count--;
         }
         if (count > MAX_MARKERS)
             throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
-        app.redo = [];
-        app.undo.push(tx);
-        app.historyBytes = app.undo.reduce((n, x) => n + x.bytes, 0);
-        while (app.undo.length > 200 || app.historyBytes > HISTORY_BYTES) {
-            app.historyBytes -= app.undo.shift().bytes;
-        }
+        tx.bytes = JSON.stringify(tx).length * 2;
+        if (tx.bytes > HISTORY_BYTES)
+            throw Error('This edit exceeds the undo budget; use bulk import/clear for large changes.');
+        rememberTransaction(tx);
+        applyTransaction(tx, true);
+    }
+    function transactSnapshot(markers, tags, afterSelection = null, fromImport = false) {
+        if (app.importBusy && !fromImport)
+            throw Error('An annotation import is in progress.');
+        if (markers.size > MAX_MARKERS || tags.size > 2000)
+            throw Error('Too many markers or tags.');
+        const tx = { snapshot: true, beforeMarkers: app.markers, afterMarkers: markers,
+            beforeTags: app.tags, afterTags: tags, beforeSelection: app.selected,
+            afterSelection, bytes: Math.min(HISTORY_BYTES,
+                96 * (app.markers.size + markers.size) + 256 * (app.tags.size + tags.size) + 1024) };
+        rememberTransaction(tx);
         applyTransaction(tx, true);
     }
     function history(forward) {
+        if (app.importBusy)
+            throw Error('An annotation import is in progress.');
         const from = forward ? app.redo : app.undo, to = forward ? app.undo : app.redo, tx = from.pop();
-        if (!tx)
-            return;
+        if (!tx) return;
+        app.historyBytes += forward ? tx.bytes : -tx.bytes;
         to.push(tx);
         applyTransaction(tx, forward);
     }
@@ -1799,12 +1910,32 @@ self.onmessage = async ({ data: m }) => {
         return fmt(m.freqMin, 2) + ' – ' + fmt(m.freqMax, 2);
     }
     function renderMarkerTable() {
-        const query = $('markerFilter').value.toLowerCase(), visible = $('visibleOnly').checked;
-        const rows = Array.from(app.markers.values()).filter(m => (!visible || (m.end >= app.start && m.start <= app.start + app.span)) && (!query || [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query)))).sort((a, b) => a.start - b.start || a.end - b.end);
+        const query = $('markerFilter').value.trim().toLowerCase(), visible = $('visibleOnly').checked;
+        const key = JSON.stringify([app.markerVersion, query, visible,
+            visible ? app.start : null, visible ? app.span : null]);
+        if (!app.tableCache || app.tableCache.key !== key) {
+            const rows = [];
+            const matches = m => !query ||
+                [m.type, m.tag, m.label, styleFor(m).name].some(s => s.toLowerCase().includes(query));
+            if (!visible && !query)
+                app.tableCache = { key, rows: markerIndex().items };
+            else {
+                if (visible)
+                    forEachVisibleMarker(app.start, app.start + app.span, m => { if (matches(m)) rows.push(m); });
+                else
+                    for (const m of markerIndex().items)
+                        if (matches(m)) rows.push(m);
+                app.tableCache = { key, rows };
+            }
+        }
+        const rows = app.tableCache.rows;
         const pages = Math.max(1, Math.ceil(rows.length / 100));
         app.page = clamp(app.page, 0, pages - 1);
-        $('markerCount').textContent = app.markers.size + ' markers' + (rows.length !== app.markers.size ? ' · ' + rows.length + ' shown' : '');
+        $('markerCount').textContent = app.markers.size.toLocaleString() + ' markers' + (rows.length !== app.markers.size ? ' · ' + rows.length.toLocaleString() + ' shown' : '');
         $('pageLabel').textContent = (app.page + 1) + ' / ' + pages;
+        $('pageJump').max = String(pages);
+        if (document.activeElement !== $('pageJump'))
+            $('pageJump').value = String(app.page + 1);
         $('pagePrev').disabled = app.page === 0;
         $('pageNext').disabled = app.page === pages - 1;
         const fragment = document.createDocumentFragment();
@@ -1915,8 +2046,9 @@ self.onmessage = async ({ data: m }) => {
         return marker.type === 'point' || marker.type === 'frequency_range'
             ? [marker.freqMin ?? null, marker.freqMax ?? null] : [null, null];
     }
-    function parseAudacityLabels(text) {
-        if (text.length * 2 > MAX_IMPORT_BYTES)
+    const yieldUI = () => new Promise(resolve => setTimeout(resolve, 0));
+    async function parseAudacityLabels(text, epoch = app.loadEpoch) {
+        if (text.length > MAX_IMPORT_BYTES)
             throw Error('Annotation text exceeds the import memory limit.');
         const numeric = token => /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(token.trim()) && Number.isFinite(Number(token));
         const number = (token, what, line) => {
@@ -1924,56 +2056,79 @@ self.onmessage = async ({ data: m }) => {
                 throw Error('Audacity TXT line ' + line + ': invalid ' + what + '.');
             return Number(token);
         };
-        const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/), markers = [];
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (!line)
-                continue;
+        // Walk the original string without splitting it into a million short strings.
+        // Also preserve Audacity's optional following \ frequency-bound line.
+        let offset = text.charCodeAt(0) === 0xFEFF ? 1 : 0, lineNumber = 0, pending = null;
+        const nextLine = () => {
+            if (offset >= text.length) return null;
+            // Scan each character at most once: looking for a missing CR via
+            // indexOf on every LF line turns a million-row TXT into O(N²).
+            let end = offset;
+            while (end < text.length && text[end] !== '\n' && text[end] !== '\r')
+                end++;
+            const line = text.slice(offset, end);
+            offset = end < text.length ? end + (text[end] === '\r' && text[end + 1] === '\n' ? 2 : 1) : end;
+            return { line, number: ++lineNumber };
+        };
+        // One random import namespace plus compact sequential IDs avoids a million UUID calls.
+        const markers = [], createdAt = new Date().toISOString(), idPrefix = uid() + '-';
+        let entry;
+        while ((entry = pending || nextLine())) {
+            pending = null;
+            const { line, number: lineNo } = entry;
+            if (!line) continue;
             if (line.startsWith('\\'))
-                throw Error('Audacity TXT line ' + (i + 1) + ': orphan or unsupported frequency continuation.');
-            const fields = line.split('\t'), lineNumber = i + 1;
+                throw Error('Audacity TXT line ' + lineNo + ': orphan or unsupported frequency continuation.');
+            const fields = line.split('\t');
             if (fields.length > 3)
-                throw Error('Audacity TXT line ' + lineNumber + ': labels cannot contain tabs.');
-            const start = number(fields[0], 'start time', lineNumber);
+                throw Error('Audacity TXT line ' + lineNo + ': labels cannot contain tabs.');
+            const start = number(fields[0], 'start time', lineNo);
             let end = start, label = '';
             if (fields.length === 2) {
-                // Audacity accepts legacy start<TAB>label point records.
-                if (numeric(fields[1]))
-                    end = number(fields[1], 'end time', lineNumber);
-                else
-                    label = fields[1];
+                if (numeric(fields[1])) end = number(fields[1], 'end time', lineNo);
+                else label = fields[1];
             }
             else if (fields.length === 3) {
-                end = number(fields[1], 'end time', lineNumber);
+                end = number(fields[1], 'end time', lineNo);
                 label = fields[2];
             }
             if (start < 0 || end < start)
-                throw Error('Audacity TXT line ' + lineNumber + ': expected 0 ≤ start ≤ end.');
+                throw Error('Audacity TXT line ' + lineNo + ': expected 0 ≤ start ≤ end.');
             let low = null, high = null;
-            if (i + 1 < lines.length && lines[i + 1].startsWith('\\')) {
-                const frequencyLine = ++i + 1, parts = lines[i].split('\t');
+            const next = nextLine();
+            if (next?.line.startsWith('\\')) {
+                const parts = next.line.split('\t');
                 if (parts.length !== 3 || parts[0] !== '\\')
-                    throw Error('Audacity TXT line ' + frequencyLine + ': expected backslash, low Hz, high Hz.');
-                const f0 = number(parts[1], 'low frequency', frequencyLine);
-                const f1 = number(parts[2], 'high frequency', frequencyLine);
+                    throw Error('Audacity TXT line ' + next.number + ': expected backslash, low Hz, high Hz.');
+                const f0 = number(parts[1], 'low frequency', next.number);
+                const f1 = number(parts[2], 'high frequency', next.number);
                 if (f0 !== -1 && f0 < 0 || f1 !== -1 && f1 < 0 || f0 !== -1 && f1 !== -1 && f0 > f1)
-                    throw Error('Audacity TXT line ' + frequencyLine + ': invalid frequency boundaries (use -1 for undefined).');
+                    throw Error('Audacity TXT line ' + next.number + ': invalid frequency boundaries (use -1 for undefined).');
                 low = f0 === -1 ? null : f0;
                 high = f1 === -1 ? null : f1;
             }
+            else pending = next;
             const point = start === end, spectral = low !== null || high !== null;
             const oneFrequency = point && low !== null && high !== null && low === high;
-            markers.push({ type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
+            markers.push(normalizeMarker({
+                type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
                 start, end, frequency: oneFrequency ? low : null,
                 freqMin: oneFrequency ? null : low, freqMax: oneFrequency ? null : high,
-                tag: '', label });
+                id: idPrefix + (markers.length + 1).toString(36), tag: '', label, createdAt
+            }));
             if (markers.length > MAX_MARKERS)
-                throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS + '.');
+                throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS.toLocaleString() + '.');
+            if (markers.length % 8192 === 0) {
+                status('Parsing Audacity labels… ' + markers.length.toLocaleString());
+                await yieldUI();
+                if (epoch !== app.loadEpoch)
+                    throw Error('Import cancelled because the audio file changed.');
+            }
         }
         return markers;
     }
-    function exportAudacityLabels(markers, extended = true, flattenText = false) {
-        const lines = [], sorted = Array.from(markers).sort((a, b) => a.start - b.start || a.end - b.end);
+    function exportAudacityLabels(markers, extended = true, flattenText = false, alreadySorted = false) {
+        const lines = [], sorted = alreadySorted ? markers : Array.from(markers).sort((a, b) => a.start - b.start || a.end - b.end);
         for (const marker of sorted) {
             const label = marker.label ?? '';
             if (/[\t\r\n]/.test(label) && !flattenText)
@@ -2002,7 +2157,7 @@ self.onmessage = async ({ data: m }) => {
         }
         return lines.join('\r\n') + '\r\n';
     }
-    function parseCSV(text) {
+    async function parseCSV(text) {
         text = text.replace(/^\uFEFF/, '');
         const rows = [];
         let row = [], field = '', quoted = false, closed = false;
@@ -2049,6 +2204,10 @@ self.onmessage = async ({ data: m }) => {
             }
             if (rows.length > MAX_MARKERS + 2)
                 throw Error('Too many CSV rows.');
+            if (i && (i & 262143) === 0) {
+                status('Reading CSV… ' + rows.length.toLocaleString() + ' rows');
+                await yieldUI();
+            }
         }
         if (quoted)
             throw Error('Unterminated CSV quoted field.');
@@ -2058,14 +2217,14 @@ self.onmessage = async ({ data: m }) => {
         }
         return rows;
     }
-    function parseImport(text, format) {
-        if (text.length * 2 > MAX_IMPORT_BYTES)
+    async function parseImport(text, format) {
+        if (text.length > MAX_IMPORT_BYTES)
             throw Error('Annotation text exceeds the import memory limit.');
         let data;
         if (format === 'json')
             data = JSON.parse(text.replace(/^\uFEFF/, ''));
         else {
-            const rows = parseCSV(text);
+            const rows = await parseCSV(text);
             if (!rows.length)
                 throw Error('Empty CSV.');
             const header = rows.shift(), col = name => header.indexOf(name);
@@ -2100,7 +2259,14 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Not an Audio Annotator v2 annotation document.');
         if (data.markers.length > MAX_MARKERS || data.tags.length > 2000)
             throw Error('Too many markers or tags.');
-        const markers = data.markers.map(normalizeMarker), tags = new Map();
+        const markers = [], tags = new Map();
+        for (let i = 0; i < data.markers.length; i++) {
+            markers.push(normalizeMarker(data.markers[i]));
+            if (i && i % 8192 === 0) {
+                status('Validating annotations… ' + i.toLocaleString());
+                await yieldUI();
+            }
+        }
         for (const raw of data.tags) {
             const tag = normalizeTag(raw);
             if (tags.has(tag.key))
@@ -2112,10 +2278,14 @@ self.onmessage = async ({ data: m }) => {
                 tags.set(m.tag, { name: m.tag, color: m.color, alpha: m.alpha });
         return { meta: data.meta, markers, tags };
     }
-    function importText(text, format, mode, ask = true) {
+    async function importText(text, format, mode, ask = true, epoch = app.loadEpoch) {
         if (!app.meta)
             throw Error('Load the matching audio before importing annotations.');
-        const data = format === 'txt' ? { markers: parseAudacityLabels(text).map(normalizeMarker), tags: new Map() } : parseImport(text, format);
+        const data = format === 'txt'
+            ? { markers: await parseAudacityLabels(text, epoch), tags: new Map() }
+            : await parseImport(text, format);
+        if (epoch !== app.loadEpoch)
+            throw Error('Import cancelled because the audio file changed.');
         const meta = data.meta, mismatch = format !== 'txt' && (meta.filename !== app.file.name || Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate || Number(meta.frames) !== app.meta.frames);
         if (mismatch && ask && !confirm('The annotation metadata does not match this audio file. Coordinates are valid here. Import anyway?'))
             return false;
@@ -2125,50 +2295,61 @@ self.onmessage = async ({ data: m }) => {
         const conflicts = Array.from(data.tags).filter(([k, v]) => app.tags.has(k) && JSON.stringify(app.tags.get(k)) !== JSON.stringify(v)).length;
         if (!replace && conflicts && ask && !confirm('Update ' + conflicts + ' existing tag definitions? Their colors/names also change on existing markers.'))
             return false;
+        if (!replace && app.markers.size + data.markers.length > MAX_MARKERS && format === 'txt')
+            throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
         const markers = new Map(replace ? [] : app.markers), tags = new Map(replace ? [] : app.tags);
-        for (const m0 of data.markers) {
-            let m = m0;
-            if (markers.has(m.id))
-                m = { ...m, id: uid() };
+        for (let i = 0; i < data.markers.length; i++) {
+            const item = data.markers[i];
+            const m = markers.has(item.id) ? { ...item, id: uid() } : item;
             markers.set(m.id, m);
+            if (markers.size > MAX_MARKERS)
+                throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
+            if (i && i % 8192 === 0) {
+                status('Preparing annotations… ' + i.toLocaleString());
+                await yieldUI();
+                if (epoch !== app.loadEpoch)
+                    throw Error('Import cancelled because the audio file changed.');
+            }
         }
-        for (const [k, v] of data.tags)
-            tags.set(k, v);
+        for (const [k, v] of data.tags) tags.set(k, v);
         if (tags.size > 2000)
             throw Error('The tag limit is 2,000.');
-        const changes = { markers: [], tags: [], afterSelection: null };
-        for (const id of new Set([...app.markers.keys(), ...markers.keys()])) {
-            const before = app.markers.get(id) ?? null, after = markers.get(id) ?? null;
-            if (before !== after)
-                changes.markers.push({ id, before, after });
-        }
-        for (const key of new Set([...app.tags.keys(), ...tags.keys()])) {
-            const before = app.tags.get(key) ?? null, after = tags.get(key) ?? null;
-            if (before !== after)
-                changes.tags.push({ key, before, after });
-        }
-        transact(changes);
-        status((replace ? 'Replaced with ' : 'Merged ') + data.markers.length + ' annotations. Undo is available.');
+        if (epoch !== app.loadEpoch)
+            throw Error('Import cancelled because the audio file changed.');
+        // One atomic, reversible Map swap; no huge difference array or JSON.stringify.
+        transactSnapshot(markers, tags, null, true);
+        status((replace ? 'Replaced with ' : 'Merged ') + data.markers.length.toLocaleString() + ' annotations. Undo is available.');
         return true;
     }
     async function importFile(file, mode = $('importMode').value) {
+        if (app.importBusy)
+            throw Error('An annotation import is already in progress.');
         if (file.size > MAX_IMPORT_BYTES)
-            throw Error('Annotation file exceeds 32 MiB.');
+            throw Error('Annotation file exceeds ' + (MAX_IMPORT_BYTES / 1048576) + ' MiB.');
         const ext = file.name.split('.').pop().toLowerCase();
         if (!['json', 'csv', 'txt'].includes(ext))
             throw Error('Choose JSON, CSV or Audacity TXT annotations.');
         const epoch = app.loadEpoch;
-        // Reject broken UTF-8 rather than corrupting imported non-ASCII labels.
-        const text = ext === 'txt' ? new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()) : await file.text();
-        if (epoch !== app.loadEpoch)
-            throw Error('Import cancelled because the audio file changed.');
-        return importText(text, ext, mode);
+        app.importBusy = true;
+        status('Reading annotation file…');
+        try {
+            // Audacity TXT requires strict UTF-8 decoding, preserving line breaks.
+            const text = ext === 'txt'
+                ? new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+                : await file.text();
+            if (epoch !== app.loadEpoch)
+                throw Error('Import cancelled because the audio file changed.');
+            return await importText(text, ext, mode, true, epoch);
+        }
+        finally {
+            app.importBusy = false;
+        }
     }
     function downloadAnnotations(format) {
         try {
             let text;
             if (format === 'txt') {
-                const markers = Array.from(app.markers.values());
+                const markers = markerIndex().items;
                 const extended = $('audacityLabelStyle').value === 'extended';
                 if (!extended && markers.some(m => audacityBounds(m).some(f => f !== null)) &&
                     !confirm('Standard Audacity TXT discards frequency information. Export without spectral data?'))
@@ -2176,7 +2357,7 @@ self.onmessage = async ({ data: m }) => {
                 const flatten = markers.some(m => /[\t\r\n]/.test(m.label));
                 if (flatten && !confirm('Audacity TXT cannot represent tabs or line breaks inside labels. Replace them with spaces in the exported copy? JSON/CSV keep the original text.'))
                     return;
-                text = exportAudacityLabels(markers, extended, flatten);
+                text = exportAudacityLabels(markers, extended, flatten, true);
             }
             else
                 text = format === 'json' ? JSON.stringify(exportObject(), null, 2) : exportCSV();
@@ -2200,9 +2381,8 @@ self.onmessage = async ({ data: m }) => {
     function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), frequency = fractionHz(1 - (y - g.top) / g.h); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
     function nearestMarker(p, isSpec) {
         let best = null, distance = 11;
-        for (const m of app.markers.values()) {
-            if (m.end < app.start || m.start > app.start + app.span)
-                continue;
+        const tolerance = 11 / p.g.w * app.span;
+        forEachVisibleMarker(Math.max(0, p.time - tolerance), p.time + tolerance, m => {
             const x1 = tX(m.start, p.g), x2 = tX(m.end, p.g);
             let d;
             if (m.type === 'point') {
@@ -2225,7 +2405,7 @@ self.onmessage = async ({ data: m }) => {
                 distance = d;
                 best = m;
             }
-        }
+        });
         return best;
     }
     function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8 }; }
@@ -2426,7 +2606,7 @@ self.onmessage = async ({ data: m }) => {
     handle('redoBtn', 'click', () => history(true));
     handle('clearBtn', 'click', () => {
         if (confirm('Clear all markers? Tags are retained. This is undoable.'))
-            transact({ markers: Array.from(app.markers, ([id, m]) => ({ id, before: m, after: null })), afterSelection: null });
+            transactSnapshot(new Map(), new Map(app.tags));
     });
     handle('exportJson', 'click', () => downloadAnnotations('json'));
     handle('exportCsv', 'click', () => downloadAnnotations('csv'));
@@ -2437,11 +2617,12 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Choose an annotation file first.');
         return importFile(file);
     });
-    for (const id of ['markerFilter', 'visibleOnly'])
-        handle(id, id === 'markerFilter' ? 'input' : 'change', () => { app.page = 0; renderMarkerTable(); });
+    handle('markerFilter', 'input', () => { app.page = 0; app.markers.size < 10000 ? renderMarkerTable() : scheduleMarkerTable(); });
+    handle('visibleOnly', 'change', () => { app.page = 0; renderMarkerTable(); });
     handle('tagFilter', 'input', renderTags);
     handle('pagePrev', 'click', () => { app.page--; renderMarkerTable(); });
     handle('pageNext', 'click', () => { app.page++; renderMarkerTable(); });
+    handle('pageJump', 'change', () => { app.page = Math.max(0, Math.floor(finite($('pageJump').value, 1)) - 1); renderMarkerTable(); $('pageJump').value = String(app.page + 1); });
     handle('deleteMarker', 'click', () => removeMarker(app.selected));
     handle('saveMarker', 'click', () => {
         const old = app.markers.get(app.selected);
@@ -2567,7 +2748,17 @@ self.onmessage = async ({ data: m }) => {
         if (app.meta)
             requestRender();
     }).observe($('wavePlot'));
-    window.AudioAnnotatorV2 = Object.freeze({ inspect: () => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markers: Array.from(app.markers.values(), m => ({ ...m })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+    function inspectMarkers(limit) {
+        const markers = [];
+        for (const marker of app.markers.values()) {
+            if (markers.length >= limit) break;
+            markers.push({ ...marker });
+        }
+        return markers;
+    }
+    // Inspecting a million labels on each browser-test poll should not allocate a
+    // second million-object array. Request inspect({ allMarkers: true }) explicitly.
+    window.AudioAnnotatorV2 = Object.freeze({ inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
                 return 0;
             const a = new Float32Array(app.analyser.fftSize);
