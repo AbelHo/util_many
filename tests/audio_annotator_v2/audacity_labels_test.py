@@ -69,39 +69,43 @@ with sync_playwright() as p:
         f'{t[6]}\t{t[7]}\tEqual frequency boundaries\r\n'
         f'\\\t{h(.25)}\t{h(.25)}\r\n'
         f'{t[8]}\tLegacy point\r\n'
+        f'{duration * .85:.9f}\t{duration * .9:.9f}\r\n'
+        f'{duration * .95:.9f}\r\n'
     )
     upload('\ufeff' + sample)
-    count(6)
+    count(8)
     markers = canonical()
     assert markers[0]['type'] == 'point' and markers[0]['frequency'] == h(.6)
     assert markers[1]['freqMin'] is None and markers[1]['freqMax'] == h(.4)
     assert markers[2]['freqMin'] == h(.15) and markers[2]['freqMax'] is None
     assert markers[3]['type'] == 'point' and markers[3]['freqMin'] == h(.1)
     assert markers[4]['freqMin'] == markers[4]['freqMax'] == h(.25)
-    assert markers[5]['type'] == 'point'
-    results.append('file picker: BOM/CRLF, Unicode, legacy points, full/partial/equal-frequency labels')
+    assert markers[5]['type'] == 'point' and markers[5]['label'] == 'Legacy point'
+    assert markers[6]['type'] == 'time_range' and markers[6]['label'] == ''
+    assert markers[7]['type'] == 'point' and markers[7]['label'] == ''
+    results.append('file picker: BOM/CRLF, Unicode, legacy point/range/empty-label rows, full/partial/equal-frequency labels')
 
     extended = export()
     assert extended.count('\\\t') == 5 and 'Click 🐬' in extended
     upload(extended)
-    count(6)
+    count(8)
     assert canonical() == markers
     results.append('extended export, download and exact spectral TXT re-import')
 
     standard = export('standard')
     assert '\\\t' not in standard
     upload(standard)
-    count(6)
+    count(8)
     assert all(m['freqMin'] is None and m['freqMax'] is None and m['frequency'] is None for m in canonical())
     results.append('standard export omits frequencies with confirmation')
 
     upload(extended)
-    count(6)
+    count(8)
     page.locator('#undoBtn').click()
-    count(6)
+    count(8)
     assert all(m['frequency'] is None for m in canonical())
     page.locator('#redoBtn').click()
-    count(6)
+    count(8)
     assert canonical() == markers
     results.append('replace is one undoable transaction')
 
@@ -113,9 +117,30 @@ with sync_playwright() as p:
     upload(b'1\t1\tUTF8\xffbroken\n', expect_failure=True)
     page.wait_for_function("document.getElementById('status').textContent.includes('UTF') || document.getElementById('status').textContent.includes('encoded')")
     assert canonical() == snapshot
-    results.append('invalid TXT, out-of-bounds times and invalid UTF-8 leave state untouched')
+    invalid_cases = [
+        ('NaN\t0\tNon-finite time\n', 'invalid start time'),
+        ('0\t0\tMalformed continuation\n\\\t1\n', 'expected backslash'),
+        (f'0\t0\tInverted band\n\\\t{h(.7)}\t{h(.3)}\n', 'invalid frequency boundaries'),
+        (f'0\t0\tAbove Nyquist\n\\\t{h(.8)}\t{nyquist + 1}\n', 'outside [0, Nyquist]'),
+        ('0\t0\tUnrepresentable\tExtra field\n', 'labels cannot contain tabs'),
+    ]
+    for text, message in invalid_cases:
+        upload(text, expect_failure=True)
+        page.wait_for_function('(message) => document.getElementById("status").textContent.includes(message)', arg=message)
+        assert canonical() == snapshot
+    results.append('malformed numeric, continuation, tabbed-label, inverted-band and above-Nyquist inputs fail atomically')
+
+    # CR-only line endings are another valid Audacity TXT variant.
+    upload(f'{duration * .98:.9f}\t{duration * .98:.9f}\tCR-only row\r', mode='merge')
+    count(9)
+    assert any(m['label'] == 'CR-only row' for m in canonical())
+    page.locator('#undoBtn').click()
+    count(8)
+    results.append('CR-only line endings import and undo cleanly')
 
     # Drop a TXT annotation alongside previously loaded audio.
+    # The drop handler intentionally follows the selected import mode.
+    page.locator('#importMode').select_option('merge')
     page.evaluate("""(txt) => {
         const transfer = new DataTransfer();
         transfer.items.add(new File([txt], 'dropped.TXT', {type: 'text/plain'}));
@@ -123,9 +148,9 @@ with sync_playwright() as p:
             bubbles: true, cancelable: true, dataTransfer: transfer
         }));
     }""", extended)
-    count(12)
+    count(16)
     page.locator('#undoBtn').click()
-    count(6)
+    count(8)
     results.append('drag-and-drop merges TXT, undo rolls back only the dropped batch')
 
     # The exported TXT copy, unlike JSON, cannot represent multiline labels.
