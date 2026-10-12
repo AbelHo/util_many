@@ -2061,7 +2061,8 @@ self.onmessage = async ({ data: m }) => {
             offset = end < text.length ? end + (text[end] === '\r' && text[end + 1] === '\n' ? 2 : 1) : end;
             return { line, number: ++lineNumber };
         };
-        const markers = [], createdAt = new Date().toISOString();
+        // One random import namespace plus compact sequential IDs avoids a million UUID calls.
+        const markers = [], createdAt = new Date().toISOString(), idPrefix = uid() + '-';
         let entry;
         while ((entry = pending || nextLine())) {
             pending = null;
@@ -2104,7 +2105,7 @@ self.onmessage = async ({ data: m }) => {
                 type: point ? 'point' : spectral ? 'frequency_range' : 'time_range',
                 start, end, frequency: oneFrequency ? low : null,
                 freqMin: oneFrequency ? null : low, freqMax: oneFrequency ? null : high,
-                tag: '', label, createdAt
+                id: idPrefix + (markers.length + 1).toString(36), tag: '', label, createdAt
             }));
             if (markers.length > MAX_MARKERS)
                 throw Error('Audacity TXT exceeds the annotation limit of ' + MAX_MARKERS.toLocaleString() + '.');
