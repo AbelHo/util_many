@@ -284,6 +284,20 @@
           if (cb.checked) hiddenCols.delete(col); else hiddenCols.add(col);
           scheduleChart();
         });
+        // Double-click alternates between this column alone and all OTHER columns.
+        // Derive the mode from the current selection, so manual edits don't leave
+        // behind stale toggle state. The two preceding clicks cancel each other.
+        lbl.addEventListener('dblclick', () => {
+          const onlyThisVisible = hiddenCols.size === parsedHeaders.length - 2
+            && !hiddenCols.has(col);
+          div.querySelectorAll('input[type="checkbox"]').forEach((checkbox, index) => {
+            const column = index + 1;
+            const visible = onlyThisVisible ? column !== col : column === col;
+            checkbox.checked = visible;
+            if (visible) hiddenCols.delete(column); else hiddenCols.add(column);
+          });
+          scheduleChart();
+        });
         lbl.appendChild(cb); lbl.append(' ' + h);
         div.appendChild(lbl);
       });
