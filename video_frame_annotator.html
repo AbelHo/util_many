@@ -1,7 +1,7 @@
 <!--
 Programmer Reference Summary
 ---------------------------
-Video Frame Annotator: A browser-based tool for annotating video frames with points, bounding boxes, circles, and squares.
+Video Frame Annotator: A browser-based tool for annotating video frames with points, bounding boxes, circles, squares, and triangles.
 
 Key Features:
 - Upload video via file input or drag & drop (no server, all client-side)
@@ -38,7 +38,7 @@ Maintenance Notes:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="description" content="Video Frame Annotator - A browser-based tool for annotating video frames with points, bounding boxes, circles, and squares. Navigate frame-by-frame, draw annotations with drag-and-drop, and export to JSON or CSV. Perfect for video analysis, object tracking, and dataset creation. No installation required." />
+  <meta name="description" content="Video Frame Annotator - A browser-based tool for annotating video frames with points, bounding boxes, circles, squares, and triangles. Navigate frame-by-frame, draw annotations with drag-and-drop, and export to JSON or CSV. Perfect for video analysis, object tracking, and dataset creation. No installation required." />
   <meta name="keywords" content="video annotation, frame annotator, bounding box, video labeling, object detection, computer vision, video analysis, dataset creation, frame-by-frame annotation, point annotation, circle annotation" />
   <title>Video Frame Annotator</title>
   <style>
@@ -55,7 +55,7 @@ Maintenance Notes:
 </head>
 <body>
   <h2>Video Frame Annotator</h2>
-  <p class="hint">Upload a video, navigate frames, and annotate with points, bounding boxes, circles, or squares. Click/drag to add markers (shift+click to remove nearest). Export as JSON or CSV.</p>
+  <p class="hint">Upload a video, navigate frames, and annotate with points, bounding boxes, circles, squares, or triangles. Click/drag to add markers (shift+click to remove nearest). Export as JSON or CSV.</p>
 
   <div class="row">
     <input id="fileInput" type="file" accept="video/*,.mkv,.avi,.mov,.mxf,.wmv,.flv,.mts,.m2ts,.ts,.vob" />
@@ -68,6 +68,7 @@ Maintenance Notes:
     <label><input id="modeBox" type="radio" name="annotationMode" value="box"> Bounding Box</label>
   <label><input id="modeCircle" type="radio" name="annotationMode" value="circle"> Circle</label>
   <label><input id="modeSquare" type="radio" name="annotationMode" value="square"> Square</label>
+  <label><input id="modeTriangle" type="radio" name="annotationMode" value="triangle"> Triangle</label>
   </div>
   <div class="row">
     <strong>Export Format:</strong>
@@ -154,7 +155,7 @@ Maintenance Notes:
   const totalTimeLabel = document.getElementById('totalTime');
 
   // Data structure: map frameNumber -> array of markers
-  // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius} OR {type:'square', cx, cy, radius}
+  // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius} OR {type:'square', cx, cy, radius} OR {type:'triangle', cx, cy, radius}
   const markers = {};
   let detectedFPS = null; // will hold detected fps when available
   let uploadedFilename = null;
@@ -295,6 +296,17 @@ Maintenance Notes:
     renderPointsList(frame, arr);
   }
 
+  // Equilateral triangle centered at (cx, cy), with upward vertex and circumradius.
+  function traceTriangle(cx, cy, radius) {
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const angle = -Math.PI / 2 + i * 2 * Math.PI / 3;
+      const x = cx + radius * Math.cos(angle), y = cy + radius * Math.sin(angle);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
   function drawMarker(marker, index) {
     ctx.save();
     ctx.lineWidth = 2;
@@ -338,6 +350,14 @@ Maintenance Notes:
       ctx.fillStyle = strokeCss;
       ctx.font = '12px sans-serif';
       ctx.fillText(String(index), marker.cx+marker.radius+4, marker.cy);
+    } else if (marker.type === 'triangle') {
+      const cx = marker.cx !== undefined ? marker.cx : marker.x;
+      const cy = marker.cy !== undefined ? marker.cy : marker.y;
+      traceTriangle(cx, cy, Number(marker.radius) || 0);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = strokeCss;
+      ctx.font = '12px sans-serif';
+      ctx.fillText(String(index), cx + Number(marker.radius) + 4, cy);
     } else if (marker.type === 'square') {
       // Draw centered square: radius is half-side
       const r = Number(marker.radius) || 0;
@@ -375,6 +395,10 @@ Maintenance Notes:
       ctx.arc(dragStartX, dragStartY, radius, 0, Math.PI*2);
       ctx.fill();
       ctx.stroke();
+    } else if (mode === 'triangle') {
+      const radius = Math.hypot(dragCurrentX - dragStartX, dragCurrentY - dragStartY);
+      traceTriangle(dragStartX, dragStartY, radius);
+      ctx.fill(); ctx.stroke();
     } else if (mode === 'square') {
       const radius = Math.hypot(dragCurrentX - dragStartX, dragCurrentY - dragStartY);
       const side = radius * 2;
@@ -420,6 +444,8 @@ Maintenance Notes:
         d.appendChild(document.createTextNode(`${i+1}: Box (${Math.round(m.x1)}, ${Math.round(m.y1)}) to (${Math.round(m.x2)}, ${Math.round(m.y2)})`));
       } else if (m.type === 'circle') {
         d.appendChild(document.createTextNode(`${i+1}: Circle center (${Math.round(m.cx)}, ${Math.round(m.cy)}) radius ${Math.round(m.radius)}`));
+      } else if (m.type === 'triangle') {
+        d.appendChild(document.createTextNode(`${i+1}: Triangle center (${Math.round(m.cx ?? m.x)}, ${Math.round(m.cy ?? m.y)}) radius ${Math.round(m.radius)}`));
       } else if (m.type === 'square') {
         d.appendChild(document.createTextNode(`${i+1}: Square center (${Math.round(m.cx||m.x)}, ${Math.round(m.cy||m.y)}) half-side ${Math.round(m.radius)}`));
       }
@@ -1106,11 +1132,11 @@ async function inspectVideoFPS(file) {
           if (tagIdx !== -1 && cols[tagIdx]) m.tag = cols[tagIdx];
           if (tagNameIdx !== -1 && cols[tagNameIdx]) m.tag_name = cols[tagNameIdx];
           incoming[frame].push(m);
-        } else if (type === 'square') {
-          // Square: center in x,y (or cx,cy) and radius is half-side
+        } else if (type === 'square' || type === 'triangle') {
+          // Square or triangle: center in x,y (or cx,cy) and radius is half-side
           const centerXIndexS = (x !== -1) ? x : ((cx !== -1) ? cx : xIndexFallback);
           const centerYIndexS = (y !== -1) ? y : ((cy !== -1) ? cy : yIndexFallback);
-          const ms = { type: 'square', cx: num(cols[centerXIndexS]), cy: num(cols[centerYIndexS]), radius: num(cols[rad]) };
+          const ms = { type, cx: num(cols[centerXIndexS]), cy: num(cols[centerYIndexS]), radius: num(cols[rad]) };
           if (rIdx !== -1) ms.r = num(cols[rIdx]);
           if (gIdx !== -1) ms.g = num(cols[gIdx]);
           if (bIdx !== -1) ms.b = num(cols[bIdx]);
@@ -1196,11 +1222,11 @@ async function inspectVideoFPS(file) {
       if (m.tag_name) c.tag_name = String(m.tag_name);
       return c;
     }
-    if (m.type === 'square') {
+    if (m.type === 'square' || m.type === 'triangle') {
       // accept either cx/cy or x/y (or px/py) in imported data
       const cxv = (isFinite(m.cx) ? m.cx : (isFinite(m.x) ? m.x : (isFinite(m.px) ? m.px : undefined)));
       const cyv = (isFinite(m.cy) ? m.cy : (isFinite(m.y) ? m.y : (isFinite(m.py) ? m.py : undefined)));
-      const s = { type: 'square', cx: num(cxv), cy: num(cyv), radius: num(m.radius) };
+      const s = { type: m.type, cx: num(cxv), cy: num(cyv), radius: num(m.radius) };
       if (isFinite(m.r)) s.r = num(m.r);
       if (isFinite(m.g)) s.g = num(m.g);
       if (isFinite(m.b)) s.b = num(m.b);
@@ -1279,7 +1305,7 @@ async function inspectVideoFPS(file) {
           const cx = (m.x1 + m.x2) / 2;
           const cy = (m.y1 + m.y2) / 2;
           d = Math.hypot(cx - coords.x, cy - coords.y);
-        } else if (m.type === 'circle' || m.type === 'square') {
+        } else if (m.type === 'circle' || m.type === 'square' || m.type === 'triangle') {
           // For both circle and square use center distance for proximity tests
           const cx = (m.cx !== undefined) ? m.cx : m.x;
           const cy = (m.cy !== undefined) ? m.cy : m.y;
@@ -1386,11 +1412,11 @@ async function inspectVideoFPS(file) {
         undoStack.push({ type: 'add', frame, point: pt });
         redoStack.length = 0;
       }
-    } else if (mode === 'square') {
-      // Only create square if dragged significantly
+    } else if (mode === 'square' || mode === 'triangle') {
+      // Only create square or triangle if dragged significantly
       if (dragDist > 5) {
         const square = {
-          type: 'square',
+          type: mode,
           cx: Math.round(dragStartX),
           cy: Math.round(dragStartY),
           radius: Math.round(dragDist)
@@ -1487,7 +1513,7 @@ async function inspectVideoFPS(file) {
             // x1,y1,x2,y2 empty
             cols.push(''); cols.push(''); cols.push(''); cols.push('');
             cols.push(m.radius || '');
-          } else if (type === 'square') {
+          } else if (type === 'square' || type === 'triangle') {
             // square: center in x,y, radius is half-side
             cols.push(cxVal); cols.push(cyVal);
             // x1,y1,x2,y2 empty
@@ -1540,10 +1566,10 @@ async function inspectVideoFPS(file) {
             const obj = { type: 'circle', x: cx, y: cy, radius: m.radius, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
             if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
             return obj;
-          } else if (type === 'square') {
+          } else if (type === 'square' || type === 'triangle') {
             const cx = (m.cx !== undefined) ? m.cx : m.x;
             const cy = (m.cy !== undefined) ? m.cy : m.y;
-            const obj = { type: 'square', x: cx, y: cy, radius: m.radius, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
+            const obj = { type, x: cx, y: cy, radius: m.radius, r: m.r, g: m.g, b: m.b, a: m.a, tag: m.tag };
             if (m.tag && tagMap[m.tag] && tagMap[m.tag].tag_name && tagMap[m.tag].tag_name !== String(m.tag)) obj.tag_name = tagMap[m.tag].tag_name;
             return obj;
           }
@@ -1576,7 +1602,7 @@ async function inspectVideoFPS(file) {
   if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
   if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
   if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
-  if (t === 'square') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
+  if (t === 'square' || t === 'triangle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
       return false;
     };
 
@@ -1615,7 +1641,7 @@ async function inspectVideoFPS(file) {
   if (t === 'point') return Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y) && tagEq && colorEq;
   if (t === 'box') return Number(a.x1) === Number(b.x1) && Number(a.y1) === Number(b.y1) && Number(a.x2) === Number(b.x2) && Number(a.y2) === Number(b.y2) && tagEq && colorEq;
   if (t === 'circle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
-  if (t === 'square') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
+  if (t === 'square' || t === 'triangle') return Number(a.cx) === Number(b.cx) && Number(a.cy) === Number(b.cy) && Number(a.radius) === Number(b.radius) && tagEq && colorEq;
       return false;
     };
 
@@ -1678,7 +1704,7 @@ async function inspectVideoFPS(file) {
           const cx = (m.x1 + m.x2) / 2;
           const cy = (m.y1 + m.y2) / 2;
           d = Math.hypot(cx - x, cy - y);
-        } else if (m.type === 'circle' || m.type === 'square') {
+        } else if (m.type === 'circle' || m.type === 'square' || m.type === 'triangle') {
           const cx = (m.cx !== undefined) ? m.cx : m.x;
           const cy = (m.cy !== undefined) ? m.cy : m.y;
           d = Math.hypot(cx - x, cy - y);
@@ -1839,7 +1865,7 @@ async function inspectVideoFPS(file) {
         <li>Optionally import existing annotations (JSON/CSV) using the Import control or by dropping the file anywhere. You'll be asked to Replace or Merge.</li>
         <li><span style="color:red">FPS is auto-detected from container frame timings where supported, or sampled from decoded frames. Check the warning for variable-frame-rate, estimated or unsupported videos, and override FPS manually if necessary.</span></li>
         <li>Scrub the video with the timeline slider (pauses while dragging, resumes on release) or use the mouse wheel over the canvas to step frames by the configured step size.</li>
-        <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, <strong>Circle</strong>, or <strong>Square</strong>.</li>
+        <li>Choose your annotation mode: <strong>Point</strong>, <strong>Bounding Box</strong>, <strong>Circle</strong>, or <strong>Square</strong>, or <strong>Triangle</strong>.</li>
         <li>Use Prev / Next or Arrow keys to step frames (adjust "frames per step" if you need larger jumps).</li>
         <li>Click or click-and-drag on the canvas to add markers. Shift+Click removes the nearest marker on that frame.</li>
         <li><strong>Tagging:</strong> Hold any alphanumeric key (case-sensitive) while clicking to assign a tag to a marker. Tags are case-sensitive.</li>
@@ -1850,7 +1876,7 @@ async function inspectVideoFPS(file) {
       <h3>Detailed instructions</h3>
   <p><strong>Uploading:</strong> Use the file picker or drag & drop your video file. The tool reads FPS from video frame timing metadata when available and falls back to decoded-frame timestamp sampling. A ⚠ indicates variable-rate, estimated, or unavailable FPS. The FPS field can always be edited; for variable-frame-rate files a single FPS cannot exactly identify all frames.</p>
     <p><strong>Importing annotations:</strong> You can import annotations from JSON or CSV either via the Import control (next to Export) or by dropping the file anywhere on the page. You'll be prompted to <em>Replace</em> existing annotations or <em>Merge</em> into them. Supported formats:
-  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle'|'square', ...coords, r,g,b,a,tag,tag_name?} ] } ] }
+  <br>• JSON (this tool's export): { meta, markers: [ { frame, time, markers: [ {type:'point'|'box'|'circle'|'square'|'triangle', ...coords, r,g,b,a,tag,tag_name?} ] } ] }
   <br>• Legacy JSON: [ { frame, time, points: [ {x,y} ] } ] or { [frame]: [ {x,y} ] }
   <br>• CSV (this tool's export): frame,time_seconds,marker_index,type,x,y,x1,y1,x2,y2,radius,r,g,b,a,tag,tag_name
   <br>• Legacy CSV: frame,time_seconds,point_index,x,y (points only)</p>
@@ -1861,6 +1887,7 @@ async function inspectVideoFPS(file) {
         <li><strong>Bounding Box:</strong> Click and drag to draw a rectangular box. If you only click (drag less than 5 pixels), a point will be added instead.</li>
         <li><strong>Circle:</strong> Click and drag to draw a circle. The click location becomes the center, and the drag distance becomes the radius. Small drags (less than 5 pixels) create a point instead.</li>
         <li><strong>Square:</strong> Click and drag to draw a square centered at the click location. The drag distance defines the half-side (stored as <code>radius</code>), so the full side length is 2×radius. Small drags (less than 5 pixels) create a point instead.</li>
+        <li><strong>Triangle:</strong> Click and drag to draw an upward-pointing equilateral triangle. The click is its center and the drag distance is the circumradius (distance to each vertex). Small drags create a point. JSON/CSV store type <code>triangle</code>, center x/y and radius.</li>
       </ul>
       <p><strong>Tagging and Tag Mapping:</strong></p>
       <ul>
@@ -1878,9 +1905,9 @@ async function inspectVideoFPS(file) {
         <li>Video upload via file picker or drag & drop</li>
         <li>Import annotations from JSON/CSV (replace or merge)</li>
         <li>Elegant scrubbing with a timeline slider and mouse wheel stepping</li>
-        <li>Annotation modes: Point, Bounding Box, Circle, and Square</li>
+        <li>Annotation modes: Point, Bounding Box, Circle, Square, and Triangle</li>
         <li>Per-frame marking with pixel coordinates</li>
-        <li>Visual preview while dragging boxes, circles, and squares</li>
+        <li>Visual preview while dragging boxes, circles, squares, and triangles</li>
         <li>Automatic container FPS detection with timestamp fallback, explicit VFR warning, editable FPS override</li>
         <li>Frame navigation (Prev/Next, keyboard arrows, jump to frame, first frame)</li>
         <li>Undo / Redo for all marker operations</li>
