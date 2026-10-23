@@ -15,13 +15,13 @@ const $ = id => {
     return elements.get(id);
 };
 let next = 1, selectedChannel = 0, selectedScale = 'linear', paints = 0, cancellations = 0;
-const timers = new Map(), frames = new Map(), calls = [];
+const timerDelays = new Map(), timers = new Map(), frames = new Map(), calls = [];
 const app = { meta: { sampleRate: 192000, duration: 2048.046 }, loadEpoch: 1, start: 100, span: 10,
     renderSerial: 0, renderTimer: 0, renderFrame: 0, refineTimer: 0, renderTarget: null,
-    renderCache: [], renderCacheBytes: 0, overview: { complete: false },
+    prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, overview: { complete: false },
     analysis: { call(type, p) {
         if (type === 'cancelRender') { cancellations++; return Promise.resolve(); }
-        return new Promise(resolve => calls.push({ p, resolve }));
+        return new Promise((resolve, reject) => calls.push({ p, resolve, reject }));
     } } };
 const range = { min: 0, max: 96000 };
 const ctx = vm.createContext({ app, $, console, clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
@@ -29,7 +29,7 @@ const ctx = vm.createContext({ app, $, console, clamp: (v, a, b) => Math.max(a, 
     fmt: v => String(v), channel: () => selectedChannel, currentScale: () => selectedScale,
     getDisplayFreqRange: () => range, updateFreqControls: () => range,
     geom: () => ({ w: 1000, h: 200 }), fractionHz: (v, f) => f.min + v * (f.max - f.min),
-    setTimeout: fn => { const id = next++; timers.set(id, fn); return id; },
+    setTimeout: (fn, delay) => { const id = next++; timers.set(id, fn); timerDelays.set(id, delay); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: fn => { const id = next++; frames.set(id, fn); return id; },
     paintAll: () => paints++, report: error => { throw error; },
@@ -105,5 +105,5 @@ async function main() {
     assert.equal(app.renderCacheBytes, app.renderCache.reduce((sum, r) => sum + r.cacheBytes, 0));
     console.log('PASS stale results rejected; cache stays within six entries and 16 MiB');
 }
-module.exports = { app, ctx, $, elements, range, timers, frames, calls, cached, fireTimer, flushFrames, finish };
+module.exports = { app, ctx, $, elements, range, timers, timerDelays, frames, calls, cached, fireTimer, flushFrames, finish, cancellations: () => cancellations };
 if (require.main === module) main().catch(e => { console.error(e); process.exitCode = 1; });
