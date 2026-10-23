@@ -63,10 +63,38 @@ async function main() {
     assert.equal(reads,beforeReads,'Indexed wide rendering must not reread audio');
     assert(indexed.wave[1] > .89 && old.wave[1] === 0, 'Overview must expose the impulse skipped by the old waveform preview');
     assert(indexed.pixels[0] > old.pixels[0], 'Overview must expose FFT energy skipped by the old spectrogram columns');
+    const middleParams = params(0, 2), middle = await api.render(middleParams, 1);
+    assert.equal(middle.spectrumMode, 'local-peaks', 'Intermediate zoom must refine all hops instead of losing overview events');
+    const referenceFrames = new Map();
+    for (let frame = 0; frame < Math.ceil(2 * rate / 512); frame++)
+        referenceFrames.set(frame, api.spectrum(Float32Array.from({length:fft}, (_,i)=>sampleAt(frame*512-fft/2+i)), fft));
+    for (let x = 0; x < middle.columns; x++) {
+        const aFrame = Math.floor(x / middle.columns * 2 * rate / 512);
+        const bFrame = Math.ceil((x + 1) / middle.columns * 2 * rate / 512) - 1;
+        for (let y = 0; y < middle.height; y++) {
+            const low = Math.floor(middleParams.frequencyEdges[y + 1] * fft / rate);
+            const high = Math.ceil(middleParams.frequencyEdges[y] * fft / rate);
+            let peak = -180;
+            for (let frame = aFrame; frame <= bFrame; frame++)
+                for (let bin = low; bin <= high; bin++) peak = Math.max(peak, referenceFrames.get(frame)[bin]);
+            const expectedColor = Math.max(0, Math.min(255, Math.round((peak + 110) / 110 * 255)));
+            assert.equal(middle.pixels[(y * middle.columns + x) * 4], expectedColor);
+        }
+    }
+    console.log('PASS intermediate zoom preserves every visible FFT hop and every pixel matches the independent temporal-peak reference');
     const narrow=await api.render(params(1,.002),1); assert.equal(narrow.spectrumMode,'sampled');
     const wrong=await api.render({...params(),fft:4096},1); assert.equal(wrong.spectrumMode,'sampled');
     const other=await api.render(params(0,frames/rate,1),1); assert.equal(other.mode,'sampled'); assert.equal(other.spectrumMode,'sampled');
     console.log('PASS every Hann FFT hop matches independent pooling; wide render performs zero reads; narrow/other FFT/channel use fresh detail');
+
+    blockRead = true;
+    const localJob = api.render(params(10, 2), 1);
+    while (typeof blockRead !== 'function') await new Promise(r => setTimeout(r, 1));
+    vm.runInContext('renderToken = 2;', ctx);
+    const releaseLocal = blockRead; blockRead = null; releaseLocal();
+    await assert.rejects(localJob, /CANCELLED/);
+    vm.runInContext('renderToken = 1;', ctx);
+    console.log('PASS complete local FFT refinement remains cancellable during audio reads');
 
     const reused=api.createOverview(0,4096,o); assert.equal(reused.waveLevels,o.waveLevels); assert.equal(reused.waveReady,true);
     const different=api.createOverview(1,4096,o); assert.notEqual(different.waveLevels,o.waveLevels);
