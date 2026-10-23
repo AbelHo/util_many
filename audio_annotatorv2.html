@@ -25,6 +25,10 @@ bounded multiresolution waveform and spectral summaries in one sequential pass.
 Every sample contributes to waveform extrema; every n/4-hop Hann FFT contributes
 to quarter-dB spectral maxima. Overview bins can broaden events in time/frequency;
 zoom for native detail. Until built, wide views remain explicitly time-sampled.
+Completed summaries can be restored from optional IndexedDB storage (8 entries /
+128 MiB LRU). Keys include file metadata plus a SHA-256 sampled-content fingerprint,
+channel, FFT and format version. This is not a whole-file hash; Rebuild refreshes it.
+Storage errors fall back to memory with visible status; raw audio/labels are not saved.
 Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel zooms frequency; Shift+wheel
 scrubs. Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
@@ -65,6 +69,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 </section>
 <section class="panel" aria-label="View settings">
 <div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row hint"><label><input id="rememberOverview" type="checkbox" checked> Remember overviews on this device</label><button id="clearSavedOverviews" disabled>Clear saved overviews</button></div>
 <div id="overviewInfo" class="hint" role="status">Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.</div>
 <div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Y-axis scale <select id="frequencyScale" title="Frequency-axis display mapping; annotations remain stored in Hz"><option value="linear" selected>Linear (Hz)</option><option value="log">Logarithmic (octaves)</option><option value="mel">Mel</option><option value="bark">Bark</option><option value="erb">ERB</option><option value="period">Period (1/f)</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
 <div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
@@ -92,7 +97,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Narrow time views use detailed FFTs. Before the overview is built, spectrogram previews sample time columns and can miss brief events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Narrow time views use detailed FFTs. Before the overview is built, spectrogram previews sample time columns and can miss brief events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -761,11 +766,12 @@ async function render(p, token) {
         throw Error('Invalid display window.');
     const { wave, samples, firstSample, mode } = await envelope(start, end, width, p.channel, token, preview, overscan);
     const spanSamples = (end - start) * source.sampleRate, hop = n / 4;
-    const columns = Math.min(width, preview ? 64 : Math.ceil((spanSamples / overscan > 50000000 ? 192 : 640) * overscan));
+    const sampledColumns = Math.min(width, preview ? 64 : Math.ceil((spanSamples / overscan > 50000000 ? 192 : 640) * overscan));
     const spectralOverview = overview;
-    const spectralLevel = spectralOverview?.complete && spectralOverview.channel === p.channel && spectralOverview.fft === n &&
-        spanSamples / columns >= spectralOverview.specLevels[0].block
-        ? overviewLevel(spectralOverview.specLevels, spanSamples / columns) : null;
+    const canPool = spectralOverview?.complete && spectralOverview.channel === p.channel && spectralOverview.fft === n &&
+        spanSamples / sampledColumns >= spectralOverview.specLevels[0].block;
+    const columns = canPool && !preview ? Math.min(width, Math.floor(spanSamples / spectralOverview.specLevels[0].block)) : sampledColumns;
+    const spectralLevel = canPool ? overviewLevel(spectralOverview.specLevels, spanSamples / columns) : null;
     const pixels = new Uint8ClampedArray(columns * height * 4), colors = palette(p.color);
     // Frequency edges originate from the same axis transform used by the UI,
     // rulers, hit-testing and annotation overlays. They are in native Hz.
@@ -964,12 +970,157 @@ async function overviewLoop(token) {
         o.active = false;
         o.revision = ++overviewRevision;
         notifyOverview(o);
+        if (o.remember) saveOverview(o);
     }
     catch (e) {
         if (e.message === 'OVERVIEW_CANCELLED' || o !== overview || token !== overviewToken) return;
         o.active = false;
         postMessage({ event: 'overviewError', channel: o.channel, fft: o.fft, error: e.message });
     }
+}
+// IndexedDB is optional and holds derived summaries only, never raw audio or labels.
+// Transactions queue dependent requests in success callbacks and resolve on commit.
+const OVERVIEW_DISK_BYTES = 128 * MiB, OVERVIEW_DISK_ENTRIES = 8;
+let overviewIdentity = null, overviewStorageGeneration = 0;
+function openOverviewDB() {
+    return new Promise((resolve, reject) => {
+        if (typeof indexedDB === 'undefined') { reject(Error('Local storage unavailable')); return; }
+        const request = indexedDB.open('audio-annotator-v2-overviews', 1);
+        let settled = false;
+        const timer = setTimeout(() => { settled = true; reject(Error('Local storage is busy')); }, 3000);
+        request.onupgradeneeded = () => {
+            request.result.createObjectStore('summaries', { keyPath: 'key' });
+            request.result.createObjectStore('usage', { keyPath: 'key' });
+        };
+        request.onerror = () => { clearTimeout(timer); settled = true; reject(request.error || Error('Cannot open local storage')); };
+        request.onsuccess = () => {
+            clearTimeout(timer);
+            const db = request.result;
+            if (settled) { db.close(); return; }
+            settled = true;
+            db.onversionchange = () => db.close();
+            resolve(db);
+        };
+    });
+}
+function overviewVictims(rows, key, bytes) {
+    const retained = rows.filter(r => r.key !== key).sort((a, b) => a.updated - b.updated);
+    let total = retained.reduce((n, r) => n + r.bytes, 0) + bytes;
+    const removed = [];
+    while (retained.length + 1 > OVERVIEW_DISK_ENTRIES || total > OVERVIEW_DISK_BYTES) {
+        const row = retained.shift();
+        if (!row) throw Error('Overview exceeds local cache budget');
+        total -= row.bytes; removed.push(row.key);
+    }
+    return removed;
+}
+async function overviewStorage(operation, key, record, generation = overviewStorageGeneration) {
+    const db = await openOverviewDB();
+    return new Promise((resolve, reject) => {
+        let value = null, tx;
+        try {
+            tx = db.transaction(['summaries', 'usage'], 'readwrite');
+            const summaries = tx.objectStore('summaries'), usage = tx.objectStore('usage');
+            tx.oncomplete = () => { db.close(); resolve(value); };
+            tx.onabort = tx.onerror = () => { db.close(); reject(tx.error || Error('Local cache transaction failed')); };
+            if (generation !== overviewStorageGeneration && operation !== 'clear') { tx.abort(); return; }
+            if (operation === 'clear') { summaries.clear(); usage.clear(); }
+            else if (operation === 'get') {
+                const request = summaries.get(key);
+                request.onsuccess = () => {
+                    value = request.result;
+                    if (value) usage.put({ key, bytes: value.bytes, updated: Date.now() });
+                };
+            }
+            else {
+                const request = usage.getAll();
+                request.onsuccess = () => {
+                    if (generation !== overviewStorageGeneration) { tx.abort(); return; }
+                    try {
+                        for (const victim of overviewVictims(request.result, key, record.bytes)) { summaries.delete(victim); usage.delete(victim); }
+                        summaries.put(record);
+                        usage.put({ key, bytes: record.bytes, updated: Date.now() });
+                    } catch { tx.abort(); }
+                };
+            }
+        } catch (e) { db.close(); reject(e); }
+    });
+}
+async function recordingOverviewKey() {
+    if (!overviewIdentity) overviewIdentity = (async () => {
+        if (!globalThis.crypto?.subtle) throw Error('File fingerprinting unavailable');
+        const file = source.file, size = file.size;
+        const metadata = new TextEncoder().encode(JSON.stringify([OVERVIEW_VERSION, file.name, size, file.lastModified,
+            source.frames, source.sampleRate, source.channels, source.format]));
+        // Metadata plus SHA-256 of bounded samples at four positions. This avoids
+        // rescanning multi-GB audio on reopen; it is not a whole-file content hash.
+        const offsets = [...new Set([0, Math.floor(size / 3), Math.floor(size * 2 / 3), Math.max(0, size - PAGE)])];
+        const parts = [metadata];
+        for (const offset of offsets) parts.push(new Uint8Array(await file.slice(offset, Math.min(size, offset + PAGE)).arrayBuffer()));
+        const bytes = new Uint8Array(parts.reduce((n, a) => n + a.length, 0));
+        let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+        return Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
+    })();
+    return overviewIdentity;
+}
+function validOverviewRecord(r, channel, fft) {
+    if (!r || r.version !== OVERVIEW_VERSION || r.frames !== source.frames || r.sampleRate !== source.sampleRate ||
+        r.channel !== channel || r.fft !== fft || !Array.isArray(r.waveLevels) || !Array.isArray(r.specLevels)) return false;
+    const hop = fft / 4, frameCount = Math.ceil(source.frames / hop), group = overviewBlock(frameCount, 8192);
+    const freqGroup = Math.ceil((fft / 2 + 1) / 512), bands = Math.ceil((fft / 2 + 1) / freqGroup);
+    if (r.hop !== hop || r.frameCount !== frameCount || r.group !== group || r.freqGroup !== freqGroup || r.bands !== bands) return false;
+    let block = overviewBlock(source.frames, 262144, 256), count = Math.ceil(source.frames / block), index = 0;
+    while (true) {
+        const l = r.waveLevels[index++];
+        if (!l || l.block !== block || !(l.min instanceof Float32Array) || !(l.max instanceof Float32Array) || l.min.length !== count || l.max.length !== count) return false;
+        for (let i = 0; i < count; i++) if (!Number.isFinite(l.min[i]) || !Number.isFinite(l.max[i]) || l.min[i] > l.max[i]) return false;
+        if (count === 1) break;
+        block *= 2; count = Math.ceil(count / 2);
+    }
+    if (index !== r.waveLevels.length) return false;
+    block = group * hop; count = Math.ceil(frameCount / group); index = 0;
+    while (true) {
+        const l = r.specLevels[index++];
+        if (!l || l.block !== block || l.count !== count || !(l.peaks instanceof Int16Array) || l.peaks.length !== count * bands || l.peaks.includes(-32768)) return false;
+        if (count === 1) break;
+        block *= 2; count = Math.ceil(count / 2);
+    }
+    return index === r.specLevels.length && overviewBytes(r) === r.bytes && r.bytes < 20 * MiB;
+}
+async function saveOverview(o) {
+    const generation = overviewStorageGeneration;
+    try {
+        const key = (await recordingOverviewKey()) + ':' + o.channel + ':' + o.fft;
+        if (o !== overview || !o.remember || generation !== overviewStorageGeneration) return;
+        const { channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels } = o;
+        await overviewStorage('put', key, { key, version: OVERVIEW_VERSION, frames: source.frames, sampleRate: source.sampleRate,
+            channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
+        if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
+    } catch (e) {
+        if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
+    }
+}
+async function selectOverview(channel, fft, remember) {
+    const token = ++overviewToken, previous = overview;
+    if (previous) previous.active = false;
+    const o = createOverview(channel, fft, previous);
+    o.remember = remember;
+    overview = o;
+    if (remember) {
+        try {
+            const key = (await recordingOverviewKey()) + ':' + channel + ':' + fft;
+            const record = await overviewStorage('get', key);
+            if (token !== overviewToken || overview !== o) return { stale: true };
+            if (validOverviewRecord(record, channel, fft)) {
+                Object.assign(o, record, { active: false, complete: true, waveReady: true, nextFrame: record.frameCount,
+                    wavePosition: source.frames, storage: 'Restored from local cache', revision: ++overviewRevision });
+            } else o.storage = record ? 'Saved overview incompatible; rebuild required' : 'Not cached yet';
+        } catch (e) {
+            if (token === overviewToken && overview === o) o.storage = 'Memory only: ' + e.message;
+        }
+    }
+    return token === overviewToken && overview === o ? overviewState(o) : { stale: true };
 }
 function resamplePlan(ratio) {
     const key = ratio.toPrecision(12), old = resamplers.get(key);
@@ -1071,8 +1222,30 @@ self.onmessage = async ({ data: m }) => {
                 overview = createOverview(channel, fft, overview);
                 overview.active = true;
             }
+            overview.remember = m.params.remember === true;
             result = overviewState();
             if (overview.active) overviewLoop(overviewToken);
+        }
+        else if (m.type === 'selectOverview') {
+            const { channel, fft, remember } = m.params;
+            if (!Number.isInteger(channel) || channel < -1 || channel >= source.channels ||
+                ![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(fft)) throw Error('Invalid overview settings.');
+            result = await selectOverview(channel, fft, remember === true);
+        }
+        else if (m.type === 'rememberOverview') {
+            overviewStorageGeneration++;
+            if (overview) {
+                overview.remember = m.params.remember === true;
+                overview.storage = overview.remember ? 'Saving locally…' : 'Memory only';
+                if (overview.remember && overview.complete) saveOverview(overview);
+            }
+            result = overviewState();
+        }
+        else if (m.type === 'clearSavedOverviews') {
+            overviewStorageGeneration++;
+            if (overview) { overview.remember = false; overview.storage = 'Saved overviews cleared; current view stays in memory'; }
+            await overviewStorage('clear');
+            result = overviewState();
         }
         else if (m.type === 'clearOverview') {
             overviewToken++;
@@ -1094,7 +1267,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, annotationView: null, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, annotationView: null, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1207,7 +1380,7 @@ self.onmessage = async ({ data: m }) => {
         $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
         return f;
     }
-    const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
+    const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
             $(id).disabled = !enabled;
@@ -1221,6 +1394,7 @@ self.onmessage = async ({ data: m }) => {
         cancelZoomPrefetch();
         app.zoomHint = null;
         const epoch = ++app.loadEpoch;
+        app.overviewRequest++;
         app.importSerial++;
         pause();
         app.analysis?.close();
@@ -1292,6 +1466,7 @@ self.onmessage = async ({ data: m }) => {
             setView(0, app.span);
             updateTransport();
             status('Ready. Audio stays on this device; export annotations to save them.');
+            restoreOverview().catch(report);
             return true;
         }
         catch (e) {
@@ -1791,7 +1966,24 @@ self.onmessage = async ({ data: m }) => {
         $('overviewBtn').textContent = m.complete ? 'Rebuild overview' : m.active ? 'Pause overview' : m.progress ? 'Resume overview' : 'Build waveform + spectral overview';
         $('overviewInfo').textContent = m.complete ? 'Overview ready · all samples and FFT hops covered · ' + fmt(m.bytes / 1048576, 1) + ' MiB · ' + m.storage
             : m.active || m.progress ? (m.active ? 'Building' : 'Paused') + ' waveform + spectral overview · ' + fmt((m.progress || 0) * 100, 1) + '% · navigation takes priority'
-            : 'Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.';
+            : (m.waveReady ? 'Waveform overview ready. Build spectral overview for the current FFT.' : 'Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.') + (m.storage?.startsWith('Memory only:') ? ' · ' + m.storage : '');
+    }
+    async function restoreOverview() {
+        if (!app.analysis || !app.meta) return;
+        cancelZoomPrefetch();
+        const epoch = app.loadEpoch, request = ++app.overviewRequest, worker = app.analysis;
+        const ch = channel(), fft = Number($('fftSize').value);
+        $('overviewBtn').disabled = true;
+        $('overviewInfo').textContent = $('rememberOverview').checked ? 'Checking saved overview…' : 'Preparing overview…';
+        try {
+            const result = await worker.call('selectOverview', { channel: ch, fft, remember: $('rememberOverview').checked });
+            if (epoch !== app.loadEpoch || request !== app.overviewRequest || result.stale) return;
+            updateOverviewControls(result);
+            if (result.complete || result.waveReady) requestRender();
+        }
+        finally {
+            if (epoch === app.loadEpoch && request === app.overviewRequest) $('overviewBtn').disabled = !app.meta;
+        }
     }
     function onWorkerEvent(m) {
         if (m.event === 'overview') {
@@ -3108,11 +3300,9 @@ self.onmessage = async ({ data: m }) => {
     handle('fullBandBtn', 'click', () => { $('displayFreqMin').value = 0; $('displayFreqMax').value = app.meta.sampleRate / 2; requestRender(); });
     for (const id of ['displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
         handle(id, 'change', requestRender);
-    handle('fftSize', 'change', async () => {
-        cancelZoomPrefetch();
-        await app.analysis?.call('clearOverview');
-        updateOverviewControls({ active: false, progress: 0 });
+    handle('fftSize', 'change', () => {
         requestRender();
+        return restoreOverview();
     });
     handle('frequencyScale', 'change', () => {
         // Never warp a previously rendered image using a different scale.
@@ -3126,18 +3316,32 @@ self.onmessage = async ({ data: m }) => {
         pause();
         app.viewChannel = channel();
         app.lastRender = null;
-        await app.analysis.call('clearOverview');
-        app.overview = { active: false, progress: 0 };
-        $('overviewProgress').value = 0;
         updateOverviewControls({ active: false, progress: 0 });
         requestRender();
-        if (was)
-            await play();
+        const epoch = app.loadEpoch, ch = channel();
+        await restoreOverview();
+        if (was && epoch === app.loadEpoch && ch === channel()) await play();
     });
     handle('overviewBtn', 'click', async () => {
         cancelZoomPrefetch();
-        const result = await app.analysis.call('overview', { channel: channel(), fft: Number($('fftSize').value) });
+        const result = await app.analysis.call('overview', { channel: channel(), fft: Number($('fftSize').value), remember: $('rememberOverview').checked });
         if (result.channel === channel() && result.fft === Number($('fftSize').value)) updateOverviewControls(result);
+    });
+    handle('rememberOverview', 'change', async () => {
+        if (!app.analysis) return;
+        // Invalidate pending restores before changing the persistence preference.
+        if ($('overviewBtn').disabled) return restoreOverview();
+        const epoch = app.loadEpoch;
+        const result = await app.analysis.call('rememberOverview', { remember: $('rememberOverview').checked });
+        if (epoch === app.loadEpoch && result.channel === channel() && result.fft === Number($('fftSize').value)) updateOverviewControls(result);
+    });
+    handle('clearSavedOverviews', 'click', async () => {
+        const epoch = app.loadEpoch;
+        const result = await app.analysis.call('clearSavedOverviews');
+        if (epoch === app.loadEpoch && result.channel === channel() && result.fft === Number($('fftSize').value)) {
+            updateOverviewControls(result);
+            $('overviewInfo').textContent = 'Saved overviews cleared. Current analysis stays in memory; building again can save a new overview.';
+        }
     });
     handle('addPointBtn', 'click', () => addMarker({ type: 'point', start: app.cursor, end: app.cursor, frequency: null }));
     handle('undoBtn', 'click', () => history(false));

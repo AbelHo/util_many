@@ -17,6 +17,7 @@ function extract(s, begin, end) {
 }
 const workerScope = {
     Float32Array, Number, Math,
+    performance: { now: () => 0 },
     source: {
         sampleRate: 384000,
         frames: 1000000,
@@ -30,10 +31,10 @@ const workerScope = {
 };
 vm.createContext(workerScope);
 vm.runInContext(extract(worker, 'async function envelope(', '\nfunction statistics(') + '\nthis.runEnvelope = envelope;', workerScope);
-const traceScope = { Float32Array, Number, Math };
+const traceScope = { Float32Array, Number, Math, $: () => ({ value: '#3b82f6' }) };
 vm.createContext(traceScope);
 vm.runInContext(extract(main, '    function drawWaveformTrace(', '    function drawBase(') + '\nthis.trace = drawWaveformTrace;', traceScope);
-const g = { top: 23, h: 190 };
+const g = { left: 64, top: 23, w: 960, h: 190 };
 function draw(result, amplitude) {
     const events = [], canvas = {
         beginPath: () => events.push(['beginPath']),
