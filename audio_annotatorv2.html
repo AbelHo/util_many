@@ -11,7 +11,9 @@ rate; unsupported output rates fall back explicitly, without changing analysis.
 Playback has its own worker, bounded lookahead, and a windowed-sinc rate converter.
 View work is cancellable/coalesced once per animation frame. Zoom draws a bounded
 quick preview before refining after input settles; worker yields use a time budget,
-not a timer per handful of columns. LRU byte, decoded-frame and FFT caches are bounded.
+not a timer per handful of columns. Refined views include a 25% pan margin per side;
+up to six rendered views share a 16 MiB cache. Covered pans draw immediately and
+refresh the margin in the background. LRU byte, decoded-frame and FFT caches are bounded.
 Narrow waveform views draw each native sample as a connected polyline, even at large
 amplitude multipliers. Wide views connect min/max envelope columns for continuity;
 these remain previews, not lossless sample-by-sample traces. Build overview computes
@@ -83,7 +85,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build exact overview scans the file cooperatively into a bounded min/max index; it does not retain the recording. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Wide spectrogram views sample time columns; zoom in to inspect short events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB; changing the channel, analysis settings or zoom requires matching new data. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -662,10 +664,10 @@ function guard(token) {
     if (token !== renderToken)
         throw Error('CANCELLED');
 }
-async function envelope(start, end, width, channel, token, preview = false) {
+async function envelope(start, end, width, channel, token, preview = false, overscan = 1) {
     const first = Math.floor(start * source.sampleRate), last = Math.min(source.frames, Math.ceil(end * source.sampleRate)), span = Math.max(1, last - first);
     // At four or fewer samples per pixel, preserve every native sample and its order.
-    // Width is capped at 1600, so this stays below 6400 samples (25 KiB) per view.
+    // Including pan margins, width is capped at 2400: at most 9600 samples (38 KiB).
     if (span <= width * 4) {
         const samples = await source.read(first, span, channel);
         guard(token);
@@ -675,7 +677,7 @@ async function envelope(start, end, width, channel, token, preview = false) {
     wave.fill(NaN);
     let mode = 'exact';
     let deadline = performance.now() + 8;
-    if (span <= (preview ? 65536 : 2097152)) {
+    if (span <= (preview ? 65536 : 2097152 * overscan)) {
         const lo = new Float32Array(width).fill(Infinity), hi = new Float32Array(width).fill(-Infinity);
         for (let p = first; p < last; p += 65536) {
             guard(token);
@@ -717,7 +719,7 @@ async function envelope(start, end, width, channel, token, preview = false) {
     }
     else {
         mode = 'sampled';
-        const n = Math.max(1, Math.min(2048, Math.floor((preview ? 65536 : 1048576) / width)));
+        const n = Math.max(1, Math.min(2048, Math.floor((preview ? 65536 : 1048576 * overscan) / width)));
         for (let x = 0; x < width; x++) {
             guard(token);
             const center = Math.floor(first + (x + .5) / width * span), a = await source.read(Math.max(first, center - Math.floor(n / 2)), Math.min(n, span), channel);
@@ -741,15 +743,16 @@ async function envelope(start, end, width, channel, token, preview = false) {
 function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overview ? overview.min.byteLength + overview.max.byteLength : 0, renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), preview = p.preview === true;
-    const width = clamp(Math.round(p.width), 32, preview ? 256 : 1600), height = clamp(Math.round(p.height), 64, 512), n = p.fft;
+    const overscan = preview ? 1 : clamp(Number(p.overscan) || 1, 1, 1.5);
+    const width = clamp(Math.round(p.width), 32, preview ? 256 : Math.ceil(1600 * overscan)), height = clamp(Math.round(p.height), 64, 512), n = p.fft;
     if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(n))
         throw Error('Unsupported FFT size.');
     const end = Math.min(source.frames / source.sampleRate, p.start + p.span), start = clamp(p.start, 0, end);
     if (!(end > start))
         throw Error('Invalid display window.');
-    const { wave, samples, firstSample, mode } = await envelope(start, end, width, p.channel, token, preview);
+    const { wave, samples, firstSample, mode } = await envelope(start, end, width, p.channel, token, preview, overscan);
     const spanSamples = (end - start) * source.sampleRate, hop = n / 4;
-    const columns = Math.min(width, preview ? 64 : spanSamples > 50000000 ? 192 : 640);
+    const columns = Math.min(width, preview ? 64 : Math.ceil((spanSamples / overscan > 50000000 ? 192 : 640) * overscan));
     const pixels = new Uint8ClampedArray(columns * height * 4), colors = palette(p.color);
     // Frequency edges originate from the same axis transform used by the UI,
     // rulers, hit-testing and annotation overlays. They are in native Hz.
@@ -975,7 +978,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, annotationView: null, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, annotationView: null, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1111,6 +1114,9 @@ self.onmessage = async ({ data: m }) => {
         app.start = 0;
         updateTransport();
         app.lastRender = null;
+        app.renderTarget = null;
+        app.renderCache = [];
+        app.renderCacheBytes = 0;
         app.renderPending = false;
         app.renderSerial++;
         clearTimeout(app.renderTimer);
@@ -1413,28 +1419,79 @@ self.onmessage = async ({ data: m }) => {
         const fraction = (anchor - app.start) / app.span, span = clamp(app.span * factor, Math.max(.000001, 4 / app.meta.sampleRate), app.meta.duration);
         setView(anchor - fraction * span, span);
     }
+    function renderViewKey() {
+        const f = getDisplayFreqRange(), g = geom($('specCanvas'));
+        const min = clamp(finite($('dbMin').value, -100), -180, 0);
+        let max = clamp(finite($('dbMax').value, 0), -179, 20);
+        if (max <= min) max = Math.min(20, min + 1);
+        return JSON.stringify([app.loadEpoch, channel(), Number($('fftSize').value),
+            f.min, f.max, currentScale(), min, max, $('colorMap').value,
+            Math.ceil(g.w), Math.ceil(g.h), !!app.overview.complete]);
+    }
+    function renderCovers(r, key, margin = 0) {
+        if (!r || r.viewKey !== key || r.viewSpan !== app.span) return false;
+        const start = Math.max(0, app.start - margin * app.span);
+        const end = Math.min(app.meta.duration, app.start + (1 + margin) * app.span);
+        return r.start <= start + 1e-9 && r.start + r.span >= end - 1e-9;
+    }
+    function cachedView(key = renderViewKey()) {
+        for (let i = app.renderCache.length - 1; i >= 0; i--)
+            if (renderCovers(app.renderCache[i], key)) return app.renderCache[i];
+        return null;
+    }
+    function cacheRenderedView(r) {
+        const bytes = r.image.width * r.image.height * 4 + r.wave.byteLength + (r.samples?.byteLength || 0);
+        if (bytes > 16 * 1048576) return;
+        r.cacheBytes = bytes;
+        app.renderCache.push(r);
+        app.renderCacheBytes += bytes;
+        while (app.renderCacheBytes > 16 * 1048576 || app.renderCache.length > 6)
+            app.renderCacheBytes -= app.renderCache.shift().cacheBytes;
+    }
+    function renderDescription(r, prefix = 'Waveform: ') {
+        const s = r.stats;
+        return prefix + (r.mode === 'samples' ? 'connected native samples' : r.mode + ' connected envelope') +
+            (r.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' +
+            fmt(app.meta.sampleRate / r.fft, 2) + ' Hz · FFT hop ' + fmt(r.fft / 4 / app.meta.sampleRate, 5) +
+            ' s · ' + r.columns + ' sampled time columns · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
+            fmt((s.byteCache + s.frameCache + s.fftCache + s.overviewBytes + app.renderCacheBytes) / 1048576, 1) + ' MiB';
+    }
     function requestRender() {
         const gradients = { ember: '#080923,#322275,#96377a,#e7834a,#fcf3b0', gray: '#000,#fff', ocean: '#040c1f,#0e3b62,#12858e,#78cfa4,#f2f8cc' };
         $('frequencyLegend').style.background = 'linear-gradient(90deg,' + gradients[$('colorMap').value] + ')';
         if (!app.meta)
             return;
-        app.renderSerial++;
-        app.renderPending = true;
-        clearTimeout(app.refineTimer);
-        $('renderInfo').setAttribute('aria-busy', 'true');
+        const key = renderViewKey(), cached = cachedView(key);
+        if (cached) app.lastRender = cached;
+        app.renderPending = !cached;
+        $('renderInfo').setAttribute('aria-busy', String(!cached));
+        const message = cached ? renderDescription(cached, 'Cached view · ') : 'Updating preview…';
+        if ($('renderInfo').textContent !== message) $('renderInfo').textContent = message;
         if (!app.renderFrame) {
-            $('renderInfo').textContent = 'Updating preview…';
-            app.analysis.call('cancelRender').catch(() => { });
             app.renderFrame = requestAnimationFrame(() => {
                 app.renderFrame = 0;
                 paintAll();
             });
         }
+        // Keep a useful margin render alive while the user pans within it.
+        // Cancelling it on every wheel event would defeat prefetching.
+        if (renderCovers(app.renderTarget, key)) return;
+        app.renderSerial++;
+        if (app.renderTarget) {
+            app.analysis.call('cancelRender').catch(() => { });
+            app.renderTarget = null;
+        }
+        clearTimeout(app.refineTimer);
+        if (cached && renderCovers(cached, key, .2)) {
+            clearTimeout(app.renderTimer);
+            app.renderTimer = 0;
+            return;
+        }
         // A trailing debounce can starve the preview throughout a wheel/key burst.
         // Keep this deadline and use the latest view when it fires instead.
         if (!app.renderTimer) app.renderTimer = setTimeout(() => {
             app.renderTimer = 0;
-            doRender(app.renderSerial, true);
+            doRender(app.renderSerial, !cachedView());
         }, 40);
     }
     async function doRender(serial, preview = false) {
@@ -1449,7 +1506,15 @@ self.onmessage = async ({ data: m }) => {
         try {
             const h = clamp(Math.ceil(geometry.h), 64, preview ? 128 : 512), scale = currentScale();
             const frequencyEdges = Array.from({ length: h + 1 }, (_, y) => fractionHz(1 - y / h, f, scale));
-            const result = await app.analysis.call('render', { start: app.start, span: app.span, preview, width: Math.ceil(geometry.w), height: h, channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max, scale, frequencyEdges, dbMin, dbMax, color: $('colorMap').value });
+            const viewSpan = app.span, viewKey = renderViewKey();
+            const start = Math.max(0, app.start - (preview ? 0 : .25 * viewSpan));
+            const end = Math.min(app.meta.duration, app.start + (preview ? 1 : 1.25) * viewSpan);
+            const overscan = (end - start) / viewSpan;
+            const target = { serial, viewKey, viewSpan, start, span: end - start };
+            app.renderTarget = target;
+            const result = await app.analysis.call('render', { start, span: end - start, preview, overscan,
+                width: Math.ceil(clamp(Math.ceil(geometry.w), 32, 1600) * overscan), height: h,
+                channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max, scale, frequencyEdges, dbMin, dbMax, color: $('colorMap').value });
             if (result.cancelled || serial !== app.renderSerial || loadEpoch !== app.loadEpoch)
                 return;
             result.image = document.createElement('canvas');
@@ -1457,11 +1522,13 @@ self.onmessage = async ({ data: m }) => {
             result.image.height = result.height;
             result.image.getContext('2d').putImageData(new ImageData(result.pixels, result.columns, result.height), 0, 0);
             result.pixels = null;
+            result.viewKey = viewKey;
+            result.viewSpan = viewSpan;
+            if (!preview) cacheRenderedView(result);
             app.lastRender = result;
             app.renderPending = preview;
             $('renderInfo').setAttribute('aria-busy', String(preview));
-            const s = result.stats;
-            $('renderInfo').textContent = (preview ? 'Quick preview · refining… ' : 'Waveform: ') + (result.mode === 'samples' ? 'connected native samples' : result.mode + ' connected envelope') + (result.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' + fmt(app.meta.sampleRate / result.fft, 2) + ' Hz · FFT hop ' + fmt(result.fft / 4 / app.meta.sampleRate, 5) + ' s · ' + result.columns + ' sampled time columns · ' + Math.round(result.elapsedMs) + ' ms · caches ' + fmt((s.byteCache + s.frameCache + s.fftCache + s.overviewBytes) / 1048576, 1) + ' MiB';
+            $('renderInfo').textContent = renderDescription(result, preview ? 'Quick preview · refining… ' : 'Waveform: ');
             paintAll();
             if (preview) app.refineTimer = setTimeout(() => doRender(serial, false), 120);
         }
@@ -1472,6 +1539,9 @@ self.onmessage = async ({ data: m }) => {
                 report(e);
                 paintAll();
             }
+        }
+        finally {
+            if (app.renderTarget?.serial === serial) app.renderTarget = null;
         }
     }
     function onWorkerEvent(m) {

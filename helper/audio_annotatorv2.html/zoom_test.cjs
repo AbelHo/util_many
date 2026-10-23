@@ -74,6 +74,11 @@ async function main() {
     }
     assert.deepEqual(Array.from(exact.wave), reference.flat());
     console.log('PASS native samples, exact envelope and all spectrogram pixels match their reference');
+    const padded = await api.render({ ...params(2, 15), width: 2400, overscan: 1.5 }, 1);
+    assert.equal(padded.mode, 'exact', 'Adding margins must not downgrade a 10-second exact waveform to sampled');
+    assert.equal(padded.width, 2400);
+    assert.equal(padded.columns, 960, 'Margin pixels must retain the visible spectrogram sampling density');
+    console.log('PASS prefetched margins retain waveform accuracy and visible pixel density');
 
     // Hold the first I/O operation, then supersede both the active and queued jobs.
     releaseRead = true;
@@ -97,14 +102,15 @@ async function main() {
     const ui = vm.createContext({ app, $: id => {
         if (!elements.has(id)) elements.set(id, { value: 'ember', style: {}, setAttribute() {} });
         return elements.get(id);
-    }, setTimeout: fn => { const id = next++; timers.set(id, fn); return id; },
+    }, renderViewKey: () => 'test', cachedView: () => null, renderCovers: () => false,
+    setTimeout: fn => { const id = next++; timers.set(id, fn); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: fn => { const id = next++; animationFrames.set(id, fn); return id; },
     paintAll: () => paints++, doRender: (...args) => renders.push(args) });
     vm.runInContext(section('    function requestRender()', '    async function doRender(') +
         section('    function clippedImageRect(', '    function drawBase('), ui);
     for (let i = 0; i < 100; i++) ui.requestRender();
-    assert.equal(timers.size, 1); assert.equal(animationFrames.size, 1); assert.equal(cancels, 1);
+    assert.equal(timers.size, 1); assert.equal(animationFrames.size, 1); assert.equal(cancels, 0);
     const [frameId, frame] = [...animationFrames][0]; animationFrames.delete(frameId); frame();
     assert.equal(paints, 1);
     // More input must not push back the original render deadline.
