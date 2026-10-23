@@ -111,5 +111,12 @@ async function main() {
     assert.deepEqual(Array.from(current().specLevels[0].peaks),Array.from(expected));
     assert.equal(events.filter(e=>e.event==='overviewError').length,0);
     console.log('PASS pause/resume, stale-job rejection, channel isolation and waveform reuse for new FFT settings');
+    const priorWave = current().waveLevels;
+    await ctx.self.onmessage({data:{id:90,type:'overview',params:{channel:0,fft:2048}}});
+    assert.notEqual(current().waveLevels, priorWave, 'Explicit rebuild must discard restored waveform extrema too');
+    assert.equal(current().waveReady, false);
+    await ctx.self.onmessage({data:{id:91,type:'overview',params:{channel:0,fft:2048}}});
+    assert.equal(current().active, false);
+    console.log('PASS explicit rebuild refreshes both waveform and spectral summaries');
 }
 main().catch(e=>{ console.error(e); process.exitCode=1; });

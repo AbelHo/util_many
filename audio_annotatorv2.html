@@ -1243,7 +1243,10 @@ self.onmessage = async ({ data: m }) => {
             if (overview?.channel === channel && overview.fft === fft && !overview.complete)
                 overview.active = !overview.active;
             else {
-                overview = createOverview(channel, fft, overview);
+                // An explicit rebuild must refresh both summaries, including
+                // waveform extrema restored from disk. FFT-only reuse happens
+                // when selectOverview prepares an incomplete overview instead.
+                overview = createOverview(channel, fft);
                 overview.active = true;
             }
             overview.remember = m.params.remember === true;
