@@ -105,4 +105,5 @@ async function main() {
     assert.equal(app.renderCacheBytes, app.renderCache.reduce((sum, r) => sum + r.cacheBytes, 0));
     console.log('PASS stale results rejected; cache stays within six entries and 16 MiB');
 }
-main().catch(e => { console.error(e); process.exitCode = 1; });
+module.exports = { app, ctx, $, elements, range, timers, frames, calls, cached, fireTimer, flushFrames, finish };
+if (require.main === module) main().catch(e => { console.error(e); process.exitCode = 1; });

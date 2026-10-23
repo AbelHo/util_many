@@ -102,7 +102,8 @@ async function main() {
     const ui = vm.createContext({ app, $: id => {
         if (!elements.has(id)) elements.set(id, { value: 'ember', style: {}, setAttribute() {} });
         return elements.get(id);
-    }, renderViewKey: () => 'test', cachedView: () => null, renderCovers: () => false,
+    }, renderViewKey: () => 'test', cachedView: () => null, cachedZoomPreview: () => null,
+    renderCovers: () => false, touchRenderedView() {},
     setTimeout: fn => { const id = next++; timers.set(id, fn); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: fn => { const id = next++; animationFrames.set(id, fn); return id; },
