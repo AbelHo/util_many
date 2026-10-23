@@ -1697,17 +1697,23 @@ self.onmessage = async ({ data: m }) => {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
         if (!app.meta) {
-            $('annotationRenderInfo').textContent = 'No annotations in view.';
+            if (!isSpec && $('annotationRenderInfo').textContent !== 'No annotations in view.')
+                $('annotationRenderInfo').textContent = 'No annotations in view.';
             return;
         }
         const key = isSpec ? 'spec' : 'wave';
         const band = isSpec ? getDisplayFreqRange() : null;
         const show = $('showAnnotations').checked, text = $('showLabelText').checked;
         const view = show ? annotationView(g) : null;
-        if (!isSpec) $('annotationRenderInfo').textContent = !show ? 'Annotations hidden (all retained).' :
-            view.count.toLocaleString() + ' annotations in view · ' + (view.dense
-                ? 'all represented in the bottom time-density strip; double-click the strip to zoom.'
-                : 'individual markers; text shown where it fits.');
+        if (!isSpec) {
+            const info = $('annotationRenderInfo');
+            const message = !show ? 'Annotations hidden (all retained).' :
+                view.count.toLocaleString() + ' annotations in view · ' + (view.dense
+                    ? 'all represented in the bottom time-density strip; double-click the strip to zoom.'
+                    : 'individual markers; text shown where it fits.');
+            // Playback moves the cursor each frame; avoid relaying out unchanged text.
+            if (info.textContent !== message) info.textContent = message;
+        }
         const signature = [canvas.width, canvas.height, app.start, app.span,
             app.markerVersion, show, text, isSpec ? currentScale() : '',
             band?.min, band?.max].join('|');
