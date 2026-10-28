@@ -70,7 +70,7 @@ with sync_playwright() as p:
    results.append({'file':file.name,'status':'PASS','checks':checks,'duration_s':round(time.monotonic()-start,3),'outputRate':state()['outputRate'],'stats':stats})
    print('UI PASS',file.name,len(checks),flush=True)
   except Exception as e:
-   results.append({'file':file.name,'status':'FAIL','checks':checks,'error':str(e),'traceback':traceback.format_exc(),'ui_status':page.locator('#status').inner_text(),'state':state()});print('UI FAIL',file.name,str(e),flush=True);page.screenshot(path=str(OUT/f'failed-{index}.png'),full_page=True)
+   results.append({'file':file.name,'status':'FAIL','checks':checks,'error':str(e),'traceback':traceback.format_exc(),'ui_status':page.locator('#status').inner_text(),'state':state()});print('UI FAIL',file.name,str(e),traceback.format_exc(),flush=True);page.screenshot(path=str(OUT/f'failed-{index}.png'),full_page=True)
   REPORT.write_text(json.dumps({'browser':browser.version,'results':results,'page_errors':errors,'requests':network},indent=2))
  browser.close()
 assert all(r['status']=='PASS' for r in results)
