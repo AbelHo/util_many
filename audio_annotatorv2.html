@@ -62,11 +62,11 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 
 /* A shared-width vertical plot stack keeps time coordinates pixel-aligned. */
 .plot-stack{display:flex;flex-direction:column;min-width:0}
-.plot-stack>.plot{flex:none;min-height:88px}
+.plot-stack>.plot{flex:none;min-height:48px}
 .plot-stack>.plot.spectral{margin-top:0}
-.plot-stack>.plot.label-track{height:124px;background:#142233}
-.plot-resizer{height:11px;flex:none;cursor:row-resize;touch-action:none;background:#e1e8ef;border-block:1px solid #c8d3df;display:flex;align-items:center;justify-content:center;user-select:none}
-.plot-resizer::after{content:'';width:44px;height:3px;border-radius:2px;background:#8397ac}
+.plot-stack>.plot.label-track{height:82px;background:#142233}
+.plot-resizer{height:5px;flex:none;cursor:row-resize;touch-action:none;background:#dce5ed;display:flex;align-items:center;justify-content:center;user-select:none}
+.plot-resizer::after{content:'';width:34px;height:2px;border-radius:2px;background:#8496a7}
 .plot-resizer:hover,.plot-resizer:focus-visible,.plot-resizer.is-dragging{background:#c0d9ed;outline:2px solid #377ab1;outline-offset:-2px}
 #importSourceControls{gap:10px;max-height:145px;overflow:auto}
 #importSourceControls[hidden]{display:none}
@@ -1358,7 +1358,7 @@ self.onmessage = async ({ data: m }) => {
             this.pending.clear();
         }
     }
-    const MIN_TRACK_HEIGHT = 88;
+    const MIN_TRACK_HEIGHT = 48;
     function sourceKey(marker) {
         return marker?.sourceId && app.importSources.has(marker.sourceId) ? marker.sourceId : null;
     }
@@ -1478,7 +1478,7 @@ self.onmessage = async ({ data: m }) => {
                 overlay.tabIndex = 0;
                 overlay.setAttribute('aria-label', 'Label track ' + source.filename);
                 plot.append(base, overlay);
-                setTrackHeight(plot, app.trackHeights.get(source.id) ?? 124);
+                setTrackHeight(plot, app.trackHeights.get(source.id) ?? 82);
                 bindAnnotationCanvas(overlay, false, source.id);
                 app.resizeObserver?.observe(plot);
             }
@@ -2181,7 +2181,12 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     const canvases = ['waveCanvas', 'waveOverlay', 'specCanvas', 'specOverlay'];
-    function geom(canvas) { const box = canvas.getBoundingClientRect(); return { left: 64, top: 23, w: Math.max(20, box.width - 80), h: Math.max(20, box.height - 51), width: box.width, height: box.height }; }
+    function geom(canvas) {
+        const box = canvas.getBoundingClientRect(), compact = box.height < 90;
+        const top = compact ? 17 : 23, bottom = compact ? 15 : 28;
+        return { left: 64, top, w: Math.max(20, box.width - 80),
+            h: Math.max(8, box.height - top - bottom), width: box.width, height: box.height };
+    }
     function sizedContext(canvas) {
         const g = geom(canvas), dpr = Math.min(devicePixelRatio || 1, 2), w = Math.max(1, Math.round(g.width * dpr)), h = Math.max(1, Math.round(g.height * dpr));
         if (canvas.width !== w || canvas.height !== h) {
@@ -2299,9 +2304,11 @@ self.onmessage = async ({ data: m }) => {
         }
         ctx.textAlign = 'right';
         const f = getDisplayFreqRange();
-        for (let i = 0; i <= 4; i++) {
-            const y = g.top + i * g.h / 4;
-            ctx.fillText(isSpec ? frequencyTick(fractionHz(1 - i / 4, f)) : fmt((1 - i / 2) / Number($('amplitude').value), 2), g.left - 7, y + 4);
+        const yTicks = g.h >= 72 ? 4 : g.h >= 32 ? 2 : 0;
+        for (let i = 0; i <= yTicks; i++) {
+            const y = g.top + (yTicks ? i / yTicks : .5) * g.h;
+            if (g.h >= 32) ctx.fillText(isSpec ? frequencyTick(fractionHz(1 - i / yTicks, f)) :
+                fmt((1 - i * 2 / yTicks) / Number($('amplitude').value), 2), g.left - 7, y + 4);
             ctx.beginPath();
             ctx.moveTo(g.left, y);
             ctx.lineTo(g.left + g.w, y);
