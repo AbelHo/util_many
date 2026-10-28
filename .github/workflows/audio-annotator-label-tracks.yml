@@ -21,10 +21,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - run: node --max-old-space-size=4096 tests/audio_annotator_v2/million_markers_test.cjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install playwright numpy soundfile
       - run: python -m playwright install --with-deps chromium
-      - run: node --max-old-space-size=4096 tests/audio_annotator_v2/million_markers_test.cjs
       - run: python tests/audio_annotator_v2/run.py --suite all
