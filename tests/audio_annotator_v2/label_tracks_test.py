@@ -148,7 +148,7 @@ with sync_playwright() as p:
     assert page.locator('#plotStack > .label-track').count() == 0
 
     # Per-file choice is required for each dropped file, not just the first.
-    page.evaluate("""() => {
+    page.evaluate(r"""() => {
         const dt = new DataTransfer();
         dt.items.add(new File(['1.1\t1.1\tStack from drop\n'], 'dropped-stack.txt', {type: 'text/plain'}));
         dt.items.add(new File(['1.2\t1.2\tMerge from drop\n'], 'dropped-merge.txt', {type: 'text/plain'}));
