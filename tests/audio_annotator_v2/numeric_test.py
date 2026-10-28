@@ -1,6 +1,6 @@
 """Numeric checks. Use run.py for configuration and fixture generation."""
 from pathlib import Path
-import json, time, numpy as np, soundfile as sf
+import json, time, traceback, numpy as np, soundfile as sf
 from playwright.sync_api import sync_playwright
 from common import ROOT,F,OUT,EXTRA_AUDIO,SAMPLE,MEDIUM,launch,mount,existing
 files=existing([SAMPLE,*EXTRA_AUDIO]+sorted(F.glob('ultrasonic_*.wav'))+sorted(F.glob('*.flac'))+[F/'native_768k.wav',F/'native_1536k.wav',F/'sparse_2145MB.wav',F/'sparse_4_8GB_rf64.wav'])
@@ -50,7 +50,7 @@ with sync_playwright() as p:
    assert stats['playback']['byteCache']<=8*1048576
    result={'file':file.name,'size':file.stat().st_size,'rate':info.samplerate,'channels':info.channels,'frames':info.frames,'max_sample_error':maxerr,'outputRate':played['outputRate'],'rms':rms,'elapsed_s':round(time.monotonic()-begun,3),'stats':stats,'status':'PASS'}
   except Exception as e:
-   result={'file':file.name,'status':'FAIL','error':str(e),'ui_status':page.locator('#status').inner_text(),'browser_errors':list(errors)}
+   result={'file':file.name,'status':'FAIL','error':str(e),'traceback':traceback.format_exc(),'state':page.evaluate('AudioAnnotatorV2.inspect()'),'ui_status':page.locator('#status').inner_text(),'browser_errors':list(errors)}
   results.append(result);print(json.dumps(result),flush=True)
   (OUT/'numeric-results.json').write_text(json.dumps(results,indent=2))
  browser.close()
