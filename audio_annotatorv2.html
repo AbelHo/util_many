@@ -70,7 +70,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 .plot-resizer:hover,.plot-resizer:focus-visible,.plot-resizer.is-dragging{background:#c0d9ed;outline:2px solid #377ab1;outline-offset:-2px}
 #markerRows td.marker-description{cursor:text}
 #markerRows td.marker-description:focus-visible{outline:2px solid #377ab1;outline-offset:-2px}
-.annotation-inline-editor{position:fixed;z-index:1000;box-sizing:border-box;width:min(330px,calc(100vw - 16px));padding:10px;background:#fff;border:1px solid #7c9dbb;border-radius:6px;box-shadow:0 6px 25px #0005;display:flex;flex-direction:column;gap:6px;color:#20252b}
+.annotation-inline-editor{position:fixed;z-index:1000;box-sizing:border-box;width:min(330px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;padding:10px;background:#fff;border:1px solid #7c9dbb;border-radius:6px;box-shadow:0 6px 25px #0005;display:flex;flex-direction:column;gap:6px;color:#20252b}
 .annotation-inline-editor label{display:flex;flex-direction:column;align-items:stretch;font-size:12px}
 .annotation-inline-editor input,.annotation-inline-editor textarea{width:100%;min-width:0;background:white;color:#20252b}
 .annotation-inline-editor textarea{min-height:53px;max-height:22vh;resize:vertical}
@@ -1578,6 +1578,7 @@ self.onmessage = async ({ data: m }) => {
             throw Error('Choose an audio file.');
         if (app.dirty && !confirm('Discard unexported annotation changes and load a different recording?'))
             return false;
+        closeInlineMarkerEditor();
         cancelZoomPrefetch();
         app.zoomHint = null;
         const epoch = ++app.loadEpoch;
@@ -2812,6 +2813,91 @@ self.onmessage = async ({ data: m }) => {
         renderEditor();
         paintOverlays();
     }
+    let inlineMarkerEditor = null;
+    function closeInlineMarkerEditor() {
+        if (!inlineMarkerEditor) return;
+        const { root, outside } = inlineMarkerEditor;
+        document.removeEventListener('pointerdown', outside, true);
+        root.remove();
+        inlineMarkerEditor = null;
+    }
+    function openInlineMarkerEditor(id, x, y) {
+        if (app.importBusy) return;
+        const marker = app.markers.get(id);
+        if (!marker) return;
+        closeInlineMarkerEditor();
+        selectMarker(id);
+        const root = document.createElement('div');
+        root.className = 'annotation-inline-editor';
+        root.setAttribute('role', 'group');
+        root.setAttribute('aria-label', 'Edit annotation tag and label');
+        const tagLabel = document.createElement('label'), tag = document.createElement('input');
+        tagLabel.textContent = 'Tag';
+        tag.type = 'text';
+        tag.maxLength = 64;
+        tag.value = marker.tag;
+        tag.setAttribute('aria-label', 'Inline tag');
+        tagLabel.append(tag);
+        const labelLabel = document.createElement('label'), label = document.createElement('textarea');
+        labelLabel.textContent = 'Label';
+        label.rows = 2;
+        label.maxLength = 2000;
+        label.value = marker.label;
+        label.setAttribute('aria-label', 'Inline label');
+        labelLabel.append(label);
+        const hint = document.createElement('div');
+        hint.className = 'hint';
+        hint.textContent = 'Ctrl/Cmd+Enter: save · Esc: cancel · Click outside: save';
+        const actions = document.createElement('div');
+        actions.className = 'row';
+        const saveButton = document.createElement('button'), cancelButton = document.createElement('button');
+        saveButton.type = cancelButton.type = 'button';
+        saveButton.textContent = 'Save';
+        cancelButton.textContent = 'Cancel';
+        actions.append(saveButton, cancelButton);
+        root.append(tagLabel, labelLabel, hint, actions);
+        document.body.append(root);
+        root.style.left = clamp(x - 16, 8, Math.max(8, innerWidth - root.offsetWidth - 8)) + 'px';
+        root.style.top = clamp(y + 8, 8, Math.max(8, innerHeight - root.offsetHeight - 8)) + 'px';
+
+        const commit = () => {
+            try {
+                const old = app.markers.get(id);
+                if (!old) { closeInlineMarkerEditor(); return; }
+                // Preserve unedited imported CRLF, which textarea.value normalizes.
+                const newLabel = label.value === old.label.replace(/\r\n?/g, '\n') ? old.label : label.value;
+                const newTag = tag.value;
+                if (newLabel !== old.label || newTag !== old.tag) {
+                    const next = normalizeMarker({ ...old, label: newLabel, tag: newTag });
+                    const tags = next.tag && !app.tags.has(next.tag)
+                        ? [{ key: next.tag, before: null, after: tagDefinition(next.tag) }] : [];
+                    transact({ markers: [{ id, before: old, after: next }], tags, afterSelection: id });
+                    status('Edited annotation label and tag. Undo is available.');
+                }
+                closeInlineMarkerEditor();
+            }
+            catch (error) { report(error); label.focus(); }
+        };
+        const outside = event => { if (!root.contains(event.target)) commit(); };
+        inlineMarkerEditor = { root, outside };
+        document.addEventListener('pointerdown', outside, true);
+        saveButton.addEventListener('click', commit);
+        cancelButton.addEventListener('click', closeInlineMarkerEditor);
+        root.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                closeInlineMarkerEditor();
+            }
+            else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey || event.target === tag)) {
+                event.preventDefault();
+                event.stopPropagation();
+                commit();
+            }
+        });
+        label.focus({ preventScroll: true });
+        label.select();
+    }
     function button(text, action, title) {
         const b = document.createElement('button');
         b.textContent = text;
@@ -2900,6 +2986,21 @@ self.onmessage = async ({ data: m }) => {
                 tr.append(td);
             }
             const desc = document.createElement('td'), swatch = document.createElement('span');
+            desc.className = 'marker-description';
+            desc.tabIndex = 0;
+            desc.title = 'Double-click to edit tag and label';
+            desc.setAttribute('aria-label', 'Edit tag and label for marker ' + m.id);
+            desc.addEventListener('dblclick', event => {
+                event.preventDefault();
+                openInlineMarkerEditor(m.id, event.clientX, event.clientY);
+            });
+            desc.addEventListener('keydown', event => {
+                if (event.key === 'F2' || event.key === 'Enter') {
+                    event.preventDefault();
+                    const rect = desc.getBoundingClientRect();
+                    openInlineMarkerEditor(m.id, rect.left + 22, rect.top + rect.height / 2);
+                }
+            });
             swatch.className = 'swatch';
             swatch.style.background = styleFor(m).color;
             desc.append(swatch, document.createTextNode((m.tag ? '[' + m.tag + '] ' + styleFor(m).name + ' ' : '') + m.label));
