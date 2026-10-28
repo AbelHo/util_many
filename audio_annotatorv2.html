@@ -1599,7 +1599,10 @@ self.onmessage = async ({ data: m }) => {
         $('fileInfo').textContent = file.name;
         app.markers = new Map();
         app.tags = new Map();
+        app.importSources = new Map();
         invalidateMarkers();
+        rebuildLabelTracks();
+        renderImportSourceControls();
         app.selected = null;
         app.undo = [];
         app.redo = [];
@@ -2584,7 +2587,8 @@ self.onmessage = async ({ data: m }) => {
         const alpha = raw.alpha === undefined ? .75 : requiredNumber(raw.alpha, 'Alpha');
         if (alpha < 0 || alpha > 1)
             throw Error('Alpha must be between zero and one.');
-        return { id: raw.id ? cleanText(raw.id, 128, 'Marker id') : uid(), type: raw.type, start, end, frequency, freqMin, freqMax, tag: cleanText(raw.tag ?? '', 64, 'Tag'), label: cleanText(raw.label ?? '', 2000, 'Label'), color, alpha, createdAt: cleanText(raw.createdAt ?? new Date().toISOString(), 100, 'Creation timestamp') };
+        return { id: raw.id ? cleanText(raw.id, 128, 'Marker id') : uid(), type: raw.type, start, end, frequency, freqMin, freqMax, tag: cleanText(raw.tag ?? '', 64, 'Tag'), label: cleanText(raw.label ?? '', 2000, 'Label'), color, alpha, createdAt: cleanText(raw.createdAt ?? new Date().toISOString(), 100, 'Creation timestamp'),
+            sourceId: raw.sourceId ? cleanText(raw.sourceId, 128, 'Label file id') : null };
     }
     function normalizeTag(raw) {
         const key = cleanText(raw.key, 64, 'Tag key');
@@ -2613,6 +2617,7 @@ self.onmessage = async ({ data: m }) => {
         if (tx.snapshot) {
             app.markers = forward ? tx.afterMarkers : tx.beforeMarkers;
             app.tags = forward ? tx.afterTags : tx.beforeTags;
+            app.importSources = forward ? tx.afterSources : tx.beforeSources;
         }
         else {
             writableAnnotationMaps();
@@ -2645,6 +2650,10 @@ self.onmessage = async ({ data: m }) => {
             }
         }
         invalidateMarkers(!keepIndex);
+        if (tx.snapshot) {
+            rebuildLabelTracks();
+            renderImportSourceControls();
+        }
         refreshAnnotations();
     }
     function rememberTransaction(tx) {
@@ -2675,15 +2684,16 @@ self.onmessage = async ({ data: m }) => {
         rememberTransaction(tx);
         applyTransaction(tx, true);
     }
-    function transactSnapshot(markers, tags, afterSelection = null, fromImport = false) {
+    function transactSnapshot(markers, tags, afterSelection = null, fromImport = false, sources = new Map(app.importSources)) {
         if (app.importBusy && !fromImport)
             throw Error('An annotation import is in progress.');
         if (markers.size > MAX_MARKERS || tags.size > 2000)
             throw Error('Too many markers or tags.');
         const tx = { snapshot: true, beforeMarkers: app.markers, afterMarkers: markers,
-            beforeTags: app.tags, afterTags: tags, beforeSelection: app.selected,
-            afterSelection, bytes: Math.min(HISTORY_BYTES,
-                96 * (app.markers.size + markers.size) + 256 * (app.tags.size + tags.size) + 1024) };
+            beforeTags: app.tags, afterTags: tags, beforeSources: app.importSources, afterSources: sources,
+            beforeSelection: app.selected, afterSelection,
+            bytes: Math.min(HISTORY_BYTES, 96 * (app.markers.size + markers.size) +
+                256 * (app.tags.size + tags.size) + 256 * (app.importSources.size + sources.size) + 1024) };
         rememberTransaction(tx);
         applyTransaction(tx, true);
     }
@@ -2887,7 +2897,15 @@ self.onmessage = async ({ data: m }) => {
     function exportObject() {
         if (!app.meta)
             throw Error('Load audio first.');
-        return { schema: 'audio-annotator-v2', version: 1, meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta, nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() }, view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value), frequencyScale: currentScale(), frequency: getDisplayFreqRange() }, tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })), markers: Array.from(app.markers.values(), m => { const s = styleFor(m); return { ...m, tagName: s.name, color: s.color, alpha: s.alpha }; }) };
+        return { schema: 'audio-annotator-v2', version: 1,
+            meta: { filename: app.file.name, fileSize: app.file.size, lastModified: app.file.lastModified, ...app.meta,
+                nyquist: app.meta.sampleRate / 2, exportedAt: new Date().toISOString() },
+            view: { start: app.start, span: app.span, channel: channel(), fftSize: Number($('fftSize').value),
+                frequencyScale: currentScale(), frequency: getDisplayFreqRange() },
+            sources: Array.from(app.importSources.values(), source => ({ ...source })),
+            tags: Array.from(app.tags, ([key, value]) => ({ key, ...value })),
+            markers: Array.from(app.markers.values(), m => { const style = styleFor(m);
+                return { ...m, tagName: style.name, color: style.color, alpha: style.alpha }; }) };
     }
     // AUDACITY_LABEL_IO_START
     // Source: https://manual.audacityteam.org/man/importing_and_exporting_labels.html
@@ -3018,7 +3036,7 @@ self.onmessage = async ({ data: m }) => {
         return lines.length ? lines.join('\n') + '\n' : '';
     }
     // AUDACITY_LABEL_IO_END
-    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json'];
+    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json', 'source_id'];
     const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
     function exportCSV() {
         const data = exportObject(), metadata = { ...data, csvTextEncoding: 'apostrophe-prefix' };
@@ -3029,7 +3047,7 @@ self.onmessage = async ({ data: m }) => {
         const lines = [csvHeader.map(csvCell).join(','), row.map(csvCell).join(',')];
         for (const m of data.markers) {
             const text = v => "'" + v;
-            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), ''].map(csvCell).join(','));
+            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), '', text(m.sourceId || '')].map(csvCell).join(','));
         }
         return lines.join('\r\n') + '\r\n';
     }
@@ -3104,7 +3122,7 @@ self.onmessage = async ({ data: m }) => {
             if (!rows.length)
                 throw Error('Empty CSV.');
             const header = rows.shift(), col = name => header.indexOf(name);
-            if (new Set(header).size !== header.length || csvHeader.some(h => col(h) < 0))
+            if (new Set(header).size !== header.length || csvHeader.slice(0, -1).some(h => col(h) < 0))
                 throw Error('CSV needs the Audio Annotator v2 column headers.');
             const metadataRows = rows.filter(r => r[col('record_type')] === 'metadata');
             if (metadataRows.length !== 1)
@@ -3128,7 +3146,8 @@ self.onmessage = async ({ data: m }) => {
                     }
                     return value;
                 };
-                data.markers.push({ id: textField('id'), type: get('type'), start: get('start_seconds'), end: get('end_seconds'), frequency: get('frequency_hz') === '' ? null : get('frequency_hz'), freqMin: get('freq_min_hz') === '' ? null : get('freq_min_hz'), freqMax: get('freq_max_hz') === '' ? null : get('freq_max_hz'), tag: textField('tag'), label: textField('label'), color: get('color'), alpha: get('alpha'), createdAt: textField('created_at') });
+                data.markers.push({ id: textField('id'), type: get('type'), start: get('start_seconds'), end: get('end_seconds'), frequency: get('frequency_hz') === '' ? null : get('frequency_hz'), freqMin: get('freq_min_hz') === '' ? null : get('freq_min_hz'), freqMax: get('freq_max_hz') === '' ? null : get('freq_max_hz'), tag: textField('tag'), label: textField('label'), color: get('color'), alpha: get('alpha'), createdAt: textField('created_at'),
+                    sourceId: col('source_id') >= 0 ? textField('source_id') : null });
             }
         }
         if (!data || data.schema !== 'audio-annotator-v2' || data.version !== 1 || !Array.isArray(data.markers) || !Array.isArray(data.tags) || !data.meta)
@@ -3154,7 +3173,9 @@ self.onmessage = async ({ data: m }) => {
                 tags.set(m.tag, { name: m.tag, color: m.color, alpha: m.alpha });
         return { meta: data.meta, markers, tags };
     }
-    async function importText(text, format, mode, ask = true, epoch = app.loadEpoch, serial = app.importSerial) {
+    async function importText(text, format, mode, ask = true, epoch = app.loadEpoch, serial = app.importSerial, filename = 'Imported annotations') {
+        if (!['merge', 'replace', 'stack'].includes(mode))
+            throw Error('Choose Merge, Replace or Stack for this file.');
         if (!app.meta)
             throw Error('Load the matching audio before importing annotations.');
         const data = format === 'txt'
@@ -3165,7 +3186,8 @@ self.onmessage = async ({ data: m }) => {
         if (mismatch && ask && !confirm('The annotation metadata does not match this audio file. Coordinates are valid here. Import anyway?'))
             return false;
         const replace = mode === 'replace';
-        if (replace && app.markers.size && ask && !confirm('Replace all current annotations and tags? This is undoable.'))
+        if (replace && (app.markers.size || app.importSources.size) && ask &&
+            !confirm('Replace all current annotations, tags and stacked label rows? This is undoable.'))
             return false;
         const conflicts = Array.from(data.tags).filter(([k, v]) => app.tags.has(k) && JSON.stringify(app.tags.get(k)) !== JSON.stringify(v)).length;
         if (!replace && conflicts && ask && !confirm('Update ' + conflicts + ' existing tag definitions? Their colors/names also change on existing markers.'))
@@ -3173,9 +3195,15 @@ self.onmessage = async ({ data: m }) => {
         if (!replace && app.markers.size + data.markers.length > MAX_MARKERS && format === 'txt')
             throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
         const markers = new Map(replace ? [] : app.markers), tags = new Map(replace ? [] : app.tags);
+        const sources = new Map(replace ? [] : app.importSources);
+        const sourceId = uid();
+        sources.set(sourceId, { id: sourceId, filename: cleanText(filename, 512, 'Import filename'),
+            mode: mode === 'stack' ? 'stack' : 'merge', visible: true });
         for (let i = 0; i < data.markers.length; i++) {
             const item = data.markers[i];
-            const m = markers.has(item.id) ? { ...item, id: uid() } : item;
+            // Treat each import as one independently controllable set; remap IDs
+            // even if imported JSON/CSV originated from a different set.
+            const m = { ...item, id: markers.has(item.id) ? uid() : item.id, sourceId };
             markers.set(m.id, m);
             if (markers.size > MAX_MARKERS)
                 throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
@@ -3190,8 +3218,9 @@ self.onmessage = async ({ data: m }) => {
             throw Error('The tag limit is 2,000.');
         checkImport(epoch, serial);
         // One atomic, reversible Map swap; no huge difference array or JSON.stringify.
-        transactSnapshot(markers, tags, null, true);
-        status((replace ? 'Replaced with ' : 'Merged ') + data.markers.length.toLocaleString() + ' annotations. Undo is available.');
+        transactSnapshot(markers, tags, null, true, sources);
+        status((replace ? 'Replaced with ' : mode === 'stack' ? 'Stacked ' : 'Merged ') +
+            data.markers.length.toLocaleString() + ' annotations from ' + filename + '. Undo is available.');
         return true;
     }
     async function importFile(file, mode = $('importMode').value) {
@@ -3215,7 +3244,7 @@ self.onmessage = async ({ data: m }) => {
             // TXT is streamed; JSON/CSV retain their existing compatible parsers.
             const text = ext === 'txt' ? file : await file.text();
             checkImport(epoch, serial);
-            return await importText(text, ext, mode, true, epoch, serial);
+            return await importText(text, ext, mode, true, epoch, serial, file.name);
         }
         finally {
             app.importBusy = false;
@@ -3525,17 +3554,47 @@ self.onmessage = async ({ data: m }) => {
     handle('undoBtn', 'click', () => history(false));
     handle('redoBtn', 'click', () => history(true));
     handle('clearBtn', 'click', () => {
-        if (confirm('Clear all markers? Tags are retained. This is undoable.'))
-            transactSnapshot(new Map(), new Map(app.tags));
+        if (confirm('Clear all markers and imported label tracks? Tags are retained. This is undoable.'))
+            transactSnapshot(new Map(), new Map(app.tags), null, false, new Map());
     });
     handle('exportJson', 'click', () => downloadAnnotations('json'));
     handle('exportCsv', 'click', () => downloadAnnotations('csv'));
     handle('exportTxt', 'click', () => downloadAnnotations('txt'));
+    function chooseImportMode(file) {
+        const dialog = $('importChoiceDialog');
+        $('importChoiceTitle').textContent = 'Import ' + file.name;
+        return new Promise(resolve => {
+            const complete = choice => {
+                dialog.removeEventListener('click', click);
+                dialog.removeEventListener('cancel', cancel);
+                if (dialog.open) dialog.close();
+                resolve(choice);
+            };
+            const click = event => {
+                const button = event.target.closest('[data-import-choice]');
+                if (button && dialog.contains(button))
+                    complete(button.dataset.importChoice === 'cancel' ? null : button.dataset.importChoice);
+            };
+            const cancel = event => { event.preventDefault(); complete(null); };
+            dialog.addEventListener('click', click);
+            dialog.addEventListener('cancel', cancel);
+            dialog.showModal();
+        });
+    }
+    async function importFiles(files, promptEach = false) {
+        for (const file of files) {
+            const mode = promptEach ? await chooseImportMode(file) : $('importMode').value;
+            if (!mode) break;
+            await importFile(file, mode);
+        }
+    }
     handle('importBtn', 'click', () => {
-        const file = $('importInput').files[0];
-        if (!file)
-            throw Error('Choose an annotation file first.');
-        return importFile(file);
+        const files = Array.from($('importInput').files);
+        if (!files.length) throw Error('Choose annotation files first.');
+        $('importInput').value = '';
+        // Multiple selections and dropped files get an independent mode chooser
+        // for every file; a single picker selection uses the visible mode select.
+        return importFiles(files, files.length > 1);
     });
     handle('cancelImport', 'click', () => {
         app.importSerial++;
@@ -3655,8 +3714,8 @@ self.onmessage = async ({ data: m }) => {
                 throw Error('Drop one audio recording at a time.');
             if (audio.length && !await loadAudio(audio[0]))
                 return;
-            for (let i = 0; i < annotations.length; i++)
-                await importFile(annotations[i], i ? 'merge' : $('importMode').value);
+            if (annotations.length)
+                await importFiles(annotations, true);
         }
         catch (error) {
             report(error);
