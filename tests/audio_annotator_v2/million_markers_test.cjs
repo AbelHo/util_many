@@ -29,7 +29,7 @@ const app = { meta: { duration: 2000000, sampleRate: 48000 }, loadEpoch: 0,
 let counter = 0;
 const env = {
     app, MAX_MARKERS: 1000000, MAX_IMPORT_BYTES: 256 * 1048576,
-    HISTORY_BYTES: 256 * 1048576, Float64Array, Map, Set, Promise,
+    HISTORY_BYTES: 256 * 1048576, Float64Array, Map, Set, Promise, TextDecoder,
     setTimeout, clearTimeout, Math, Number, Date, String, Error,
     uid: () => 'import-' + (++counter),
     clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
