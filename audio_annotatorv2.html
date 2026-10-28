@@ -68,6 +68,14 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 .plot-resizer{height:5px;flex:none;cursor:row-resize;touch-action:none;background:#dce5ed;display:flex;align-items:center;justify-content:center;user-select:none}
 .plot-resizer::after{content:'';width:34px;height:2px;border-radius:2px;background:#8496a7}
 .plot-resizer:hover,.plot-resizer:focus-visible,.plot-resizer.is-dragging{background:#c0d9ed;outline:2px solid #377ab1;outline-offset:-2px}
+#markerRows td.marker-description{cursor:text}
+#markerRows td.marker-description:focus-visible{outline:2px solid #377ab1;outline-offset:-2px}
+.annotation-inline-editor{position:fixed;z-index:1000;box-sizing:border-box;width:min(330px,calc(100vw - 16px));padding:10px;background:#fff;border:1px solid #7c9dbb;border-radius:6px;box-shadow:0 6px 25px #0005;display:flex;flex-direction:column;gap:6px;color:#20252b}
+.annotation-inline-editor label{display:flex;flex-direction:column;align-items:stretch;font-size:12px}
+.annotation-inline-editor input,.annotation-inline-editor textarea{width:100%;min-width:0;background:white;color:#20252b}
+.annotation-inline-editor textarea{min-height:53px;max-height:22vh;resize:vertical}
+.annotation-inline-editor .row{margin:2px 0;justify-content:flex-end}
+.annotation-inline-editor .hint{font-size:11px}
 #importSourceControls{gap:10px;max-height:145px;overflow:auto}
 #importSourceControls[hidden]{display:none}
 #importSourceControls label{padding:3px 7px;background:#eef4fa;border:1px solid #d5e0ea;border-radius:4px;overflow-wrap:anywhere}
@@ -2421,6 +2429,9 @@ self.onmessage = async ({ data: m }) => {
         app.tableTimer = setTimeout(renderMarkerTable, 120);
     }
     function styleFor(marker) { return app.tags.get(marker.tag) || { name: marker.tag || '', color: marker.color || '#69df98', alpha: marker.alpha ?? .75 }; }
+    // Prefer the marker's own label: editing its text must change the wording
+    // on both waveform/label tracks and spectrogram, even for tagged markers.
+    function markerText(marker) { return (marker.label || styleFor(marker).name || marker.tag).slice(0, 50); }
     function drawMarker(ctx, g, m, isSpec, preview = false, showText = true, selected = m.id === app.selected) {
         const style = styleFor(m);
         ctx.strokeStyle = style.color;
@@ -2468,7 +2479,7 @@ self.onmessage = async ({ data: m }) => {
         }
         if (showText && (m.tag || m.label)) {
             ctx.font = '11px system-ui';
-            const label = (style.name || m.tag || m.label).slice(0, 50);
+            const label = markerText(m);
             const x = selected ? Math.max(g.left + 2, Math.min(x1 + 4, g.left + g.w - ctx.measureText(label).width - 2)) : Math.max(g.left + 2, x1 + 4);
             ctx.fillText(label, x, g.top + 12);
         }
@@ -2510,6 +2521,7 @@ self.onmessage = async ({ data: m }) => {
             pen.beginPath();
             pen.rect(g.left, g.top, g.w, g.h);
             pen.clip();
+            const textHits = [];
             if (show && view.dense) {
                 let peak = 0;
                 for (const n of view.bins) peak = Math.max(peak, n);
@@ -2528,15 +2540,18 @@ self.onmessage = async ({ data: m }) => {
                 pen.font = '11px system-ui';
                 forEachVisibleMarker(app.start, app.start + app.span, marker => {
                     const x = Math.max(g.left + 2, tX(marker.start, g) + 4);
-                    const label = (styleFor(marker).name || marker.tag || marker.label).slice(0, 50);
+                    const label = markerText(marker);
                     const labelWidth = pen.measureText(label).width;
                     const fits = text && label && x >= textRight && x + labelWidth < g.left + g.w;
                     drawMarker(pen, g, marker, isSpec, false, !!fits, false);
-                    if (fits) textRight = x + labelWidth + 10;
+                    if (fits) {
+                        textRight = x + labelWidth + 10;
+                        textHits.push({ id: marker.id, x, y: g.top - 2, w: labelWidth, h: 17 });
+                    }
                 }, filteredMarkerIndex(key));
             }
             pen.restore();
-            layer = { signature, canvas: offscreen };
+            layer = { signature, canvas: offscreen, textHits };
             app.overlayLayers[key] = layer;
         }
         // Marker raster is stable while only the playback cursor moves.
@@ -3360,6 +3375,31 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), frequency = fractionHz(1 - (y - g.top) / g.h); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
+    function markerAtText(p, layer, canvas) {
+        if (!$('showAnnotations').checked || !$('showLabelText').checked ||
+            annotationView(p.g, layer).dense) return null;
+        const selected = app.markers.get(app.selected);
+        if (selected && markerVisibleOn(selected, layer) &&
+            selected.end >= app.start && selected.start <= app.start + app.span) {
+            const ctx = canvas.getContext('2d');
+            ctx.save();
+            ctx.font = '11px system-ui';
+            const text = markerText(selected), width = ctx.measureText(text).width;
+            ctx.restore();
+            const x = Math.max(p.g.left + 2, Math.min(tX(selected.start, p.g) + 4,
+                p.g.left + p.g.w - width - 2));
+            if (text && p.x >= x - 3 && p.x <= x + width + 3 &&
+                p.y >= p.g.top - 3 && p.y <= p.g.top + 17) return selected;
+        }
+        const hits = app.overlayLayers[layer]?.textHits || [];
+        for (let i = hits.length - 1; i >= 0; i--) {
+            const h = hits[i];
+            if (p.x >= h.x - 3 && p.x <= h.x + h.w + 3 &&
+                p.y >= h.y - 3 && p.y <= h.y + h.h + 3)
+                return app.markers.get(h.id) || null;
+        }
+        return null;
+    }
     function nearestMarker(p, isSpec, trackId = null) {
         // Aggregated geometry is not an individual marker: don't select/delete an
         // arbitrary hidden event. Use the table or zoom into the density strip.
@@ -3416,7 +3456,7 @@ self.onmessage = async ({ data: m }) => {
                 return;
             e.preventDefault();
             canvas.focus({ preventScroll: true });
-            const nearby = nearestMarker(point, isSpec, trackId);
+            const nearby = markerAtText(point, layer, canvas) || nearestMarker(point, isSpec, trackId);
             if (e.shiftKey && !app.held) {
                 if (nearby)
                     removeMarker(nearby.id);
@@ -3427,7 +3467,9 @@ self.onmessage = async ({ data: m }) => {
                 status('Draw frequency ranges in the spectrogram.', true);
                 return;
             }
-            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
+            // A marker already under the pointer is selected rather than creating
+            // an accidental extra point on the first click of a double-click.
+            app.gesture = { kind: pan ? 'pan' : nearby ? 'pick' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
             canvas.setPointerCapture(e.pointerId);
             paintOverlays();
         });
@@ -3472,6 +3514,9 @@ self.onmessage = async ({ data: m }) => {
                             seek(g.point.time);
                     }
                 }
+                else if (g.kind === 'pick') {
+                    if (!g.moved && g.nearby) selectMarker(g.nearby);
+                }
                 else if (g.mode === 'point') {
                     if (!g.moved)
                         addMarker(gestureMarker(g));
@@ -3489,9 +3534,18 @@ self.onmessage = async ({ data: m }) => {
         });
         canvas.addEventListener('pointercancel', cancelGesture);
         canvas.addEventListener('dblclick', e => {
-            if (!app.meta || !$('showAnnotations').checked || document.querySelector('input[name=mode]:checked').value !== 'navigate') return;
+            if (!app.meta || !$('showAnnotations').checked) return;
             const p = canvasPoint(e, canvas);
-            if (p.inside && p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer).dense) {
+            if (!p.inside) return;
+            const marker = markerAtText(p, layer, canvas) || nearestMarker(p, isSpec, trackId);
+            if (marker) {
+                e.preventDefault();
+                e.stopPropagation();
+                cancelGesture();
+                openInlineMarkerEditor(marker.id, e.clientX, e.clientY);
+            }
+            else if (p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer).dense &&
+                document.querySelector('input[name=mode]:checked').value === 'navigate') {
                 e.preventDefault();
                 zoom(.125, p.time);
             }
