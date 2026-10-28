@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - feature/audio-label-stacks-resizable-20261028
+    paths:
+      - audio_annotatorv2.html
+      - tests/audio_annotator_v2/*.py
+      - .github/workflows/audio-annotator-label-tracks.yml
   workflow_dispatch:
 
 concurrency:
