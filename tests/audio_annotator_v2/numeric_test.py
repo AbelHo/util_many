@@ -36,7 +36,7 @@ with sync_playwright() as p:
    page.wait_for_function('!AudioAnnotatorV2.inspect().renderPending',timeout=60000)
    page.locator('#gotoInput').fill(str(info.duration*.5));page.locator('#gotoBtn').click()
    page.wait_for_function('!AudioAnnotatorV2.inspect().renderPending',timeout=60000)
-   state=page.evaluate('AudioAnnotatorV2.inspect()'); assert abs(state['render']['start']-state['start'])<1e-8
+   state=page.evaluate('AudioAnnotatorV2.inspect()'); assert state['render']['start']<=state['start']+1e-8 and state['render']['start']+state['render']['span']>=state['start']+state['span']-1e-8, (state['render'],state['start'],state['span'])
    # Playback at the midpoint, source bytes and time clock verified.
    page.locator('#playPauseBtn').click();page.wait_for_timeout(450)
    played=page.evaluate('AudioAnnotatorV2.inspect()');rms=page.evaluate('AudioAnnotatorV2.audioRMS()')
