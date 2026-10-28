@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/audio-label-stacks-resizable-20261028
+      - feature/audio-label-inline-edit-compact-20261028
     paths:
       - audio_annotatorv2.html
       - tests/audio_annotator_v2/*.py
