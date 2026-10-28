@@ -143,7 +143,7 @@ with sync_playwright() as p:
     # Even at min height, the plot has a positive drawing area and cursor remains synchronized.
     assert page.locator('#waveOverlay').evaluate("""canvas => {
         const height = canvas.getBoundingClientRect().height;
-        return height >= 48 && height - 17 - 15 > 0;
+        return height >= 46 && height - 17 - 15 > 0; // 48px plot includes two 1px borders
     }""")
     assert not errors, errors
     (OUT/'inline-edit-results.json').write_text(json.dumps({
