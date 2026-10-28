@@ -1579,6 +1579,7 @@ self.onmessage = async ({ data: m }) => {
         if (app.dirty && !confirm('Discard unexported annotation changes and load a different recording?'))
             return false;
         closeInlineMarkerEditor();
+        cancelPendingPoint();
         cancelZoomPrefetch();
         app.zoomHint = null;
         const epoch = ++app.loadEpoch;
@@ -3546,6 +3547,11 @@ self.onmessage = async ({ data: m }) => {
         }
         paintOverlays();
     }
+    let pendingPointTimer = 0;
+    function cancelPendingPoint() {
+        clearTimeout(pendingPointTimer);
+        pendingPointTimer = 0;
+    }
     function bindAnnotationCanvas(canvas, isSpec, trackId = null) {
         const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
         canvas.addEventListener('pointerdown', e => {
@@ -3568,9 +3574,10 @@ self.onmessage = async ({ data: m }) => {
                 status('Draw frequency ranges in the spectrogram.', true);
                 return;
             }
-            // A marker already under the pointer is selected rather than creating
-            // an accidental extra point on the first click of a double-click.
-            app.gesture = { kind: pan ? 'pan' : nearby ? 'pick' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
+            // Keep range drags functional even when they start inside an existing
+            // annotation. A nearby Point click is briefly deferred on pointerup
+            // so its matching double-click can open the editor without adding one.
+            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
             canvas.setPointerCapture(e.pointerId);
             paintOverlays();
         });
@@ -3615,12 +3622,21 @@ self.onmessage = async ({ data: m }) => {
                             seek(g.point.time);
                     }
                 }
-                else if (g.kind === 'pick') {
-                    if (!g.moved && g.nearby) selectMarker(g.nearby);
-                }
                 else if (g.mode === 'point') {
-                    if (!g.moved)
-                        addMarker(gestureMarker(g));
+                    if (!g.moved) {
+                        if (g.nearby) {
+                            cancelPendingPoint();
+                            const candidate = gestureMarker(g), epoch = app.loadEpoch;
+                            pendingPointTimer = setTimeout(() => {
+                                pendingPointTimer = 0;
+                                if (app.meta && epoch === app.loadEpoch) {
+                                    try { addMarker(candidate); }
+                                    catch (error) { report(error); }
+                                }
+                            }, 260);
+                        }
+                        else addMarker(gestureMarker(g));
+                    }
                 }
                 else {
                     const marker = gestureMarker(g);
@@ -3635,6 +3651,7 @@ self.onmessage = async ({ data: m }) => {
         });
         canvas.addEventListener('pointercancel', cancelGesture);
         canvas.addEventListener('dblclick', e => {
+            cancelPendingPoint();
             if (!app.meta || !$('showAnnotations').checked) return;
             const p = canvasPoint(e, canvas);
             if (!p.inside) return;
