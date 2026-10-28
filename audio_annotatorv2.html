@@ -59,6 +59,20 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <title>Audio Annotator v2</title>
 <style>
 :root{font:14px system-ui,sans-serif;color:#20252b;background:#f7f8fa;color-scheme:light}*{box-sizing:border-box}body{margin:18px auto;padding:0 16px;max-width:1800px}h1{font-size:23px;margin:0 0 6px}h2{font-size:16px;margin:8px 0}p{margin:6px 0}.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}.grow{flex:1;min-width:120px}.panel{background:white;border:1px solid #d5dbe1;border-radius:5px;padding:10px;margin:10px 0}.hint{font-size:12px;color:#596570}.badge{font-size:12px;padding:3px 7px;background:#e8eef5;border-radius:4px}button,select,input,textarea{font:inherit}textarea{padding:5px 7px;resize:vertical}button,select,input:not([type=range]):not([type=radio]):not([type=checkbox]):not([type=color]){padding:5px 7px}button{cursor:pointer;border:1px solid #b8c2cc;background:#fff;border-radius:4px}button:hover:not(:disabled){background:#edf3f8}button:disabled{opacity:.45;cursor:default}input[type=number]{width:95px}input[type=range]{vertical-align:middle}input[type=color]{width:38px;height:28px;padding:0}label{display:inline-flex;gap:5px;align-items:center}label.stack{display:flex;flex-direction:column;align-items:flex-start}#fileInput{max-width:360px}#status{min-height:22px;white-space:pre-wrap}#status.error{color:#a32222}#status.ok{color:#275b32}#fileInfo{overflow-wrap:anywhere}.plots{min-width:0}.plot{position:relative;width:100%;height:190px;overflow:hidden;border:1px solid #bfc9d1;background:#111b27}.plot.spectral{height:320px;margin-top:8px}.plot canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.plot canvas.overlay{touch-action:none;cursor:crosshair}#scrollSlider,#scrubSlider{flex:1;min-width:160px}#tagInput{width:65px}#labelInput{width:180px}.split{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:12px}.side{min-width:0}.tableWrap{max-height:285px;overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:5px;text-align:left;border-bottom:1px solid #e0e5eb;vertical-align:top;overflow-wrap:anywhere}th{position:sticky;top:0;background:#f3f6f8}tr.selected{background:#e5f1ff}td button{padding:2px 5px}#tagsList .row{flex-wrap:nowrap}#tagsList input[type=text]{min-width:0;width:100%}#tagsList input[type=number]{width:55px}#tagFilter{width:100%}#editor input,#editor textarea{width:100%}#editor .row>label{flex:1;min-width:100px}summary{cursor:pointer;font-weight:600}body.dragging{outline:4px dashed #347cb5;outline-offset:-5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}kbd{font:12px monospace;border:1px solid #c8cfd6;border-radius:3px;padding:1px 4px}progress{max-width:130px}#frequencyLegend{display:inline-block;width:85px;height:9px;background:linear-gradient(90deg,#080923,#322275,#96377a,#e7834a,#fcf3b0)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}@media(max-width:1000px){.split{grid-template-columns:1fr}.plot.spectral{height:280px}body{padding:0 8px;margin:10px auto}.side{display:grid;grid-template-columns:1fr 1fr;gap:8px}}@media(max-width:600px){.side{display:block}input[type=range]{max-width:100%}}
+
+/* A shared-width vertical plot stack keeps time coordinates pixel-aligned. */
+.plot-stack{display:flex;flex-direction:column;min-width:0}
+.plot-stack>.plot{flex:none;min-height:88px}
+.plot-stack>.plot.spectral{margin-top:0}
+.plot-stack>.plot.label-track{height:124px;background:#142233}
+.plot-resizer{height:11px;flex:none;cursor:row-resize;touch-action:none;background:#e1e8ef;border-block:1px solid #c8d3df;display:flex;align-items:center;justify-content:center;user-select:none}
+.plot-resizer::after{content:'';width:44px;height:3px;border-radius:2px;background:#8397ac}
+.plot-resizer:hover,.plot-resizer:focus-visible,.plot-resizer.is-dragging{background:#c0d9ed;outline:2px solid #377ab1;outline-offset:-2px}
+#importSourceControls{gap:10px;max-height:145px;overflow:auto}
+#importSourceControls label{padding:3px 7px;background:#eef4fa;border:1px solid #d5e0ea;border-radius:4px;overflow-wrap:anywhere}
+#importChoiceDialog{border:1px solid #9eb4c7;border-radius:7px;max-width:min(92vw,540px);padding:18px;box-shadow:0 8px 35px #0004}
+#importChoiceDialog::backdrop{background:#07182999}
+#importChoiceDialog .row button{flex:1;min-width:105px}
 </style>
 </head>
 <body>
@@ -84,12 +98,15 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="row"><label>Tag <input id="tagInput" type="text" maxlength="64" placeholder="Key"></label><label>Label <textarea id="labelInput" rows="1" maxlength="2000" placeholder="Optional note"></textarea></label><button id="addPointBtn" disabled>Add point at cursor</button><button id="undoBtn" disabled>Undo</button><button id="redoBtn" disabled>Redo</button><button id="clearBtn" disabled>Clear markers</button></div>
 <p class="hint">Wheel: pan · Ctrl/Cmd+wheel: time zoom · Alt+wheel: frequency zoom · Shift+wheel: scrub · Shift+click: remove nearby · Hold an alphanumeric key while drawing to tag.</p>
 </section>
+<div class="plot-stack" id="plotStack" aria-label="Synchronized audio and label tracks">
 <div class="plot" id="wavePlot"><canvas id="waveCanvas" aria-hidden="true"></canvas><canvas id="waveOverlay" class="overlay" tabindex="0" aria-label="Waveform annotation surface"></canvas></div>
 <div class="plot spectral" id="specPlot"><canvas id="specCanvas" aria-hidden="true"></canvas><canvas id="specOverlay" class="overlay" tabindex="0" aria-label="Spectrogram annotation surface"></canvas></div>
+</div>
 <div class="row hint"><span id="renderInfo" class="grow">No analysis yet.</span><output id="hoverInfo"></output></div>
 <div class="row hint"><label><input id="showAnnotations" type="checkbox" checked> Show annotations</label><label><input id="showLabelText" type="checkbox" checked> Label text</label><span id="annotationRenderInfo" class="grow">No annotations in view.</span></div>
+<div id="importSourceControls" class="row hint" aria-label="Imported label file visibility" hidden></div>
 <section class="panel" aria-label="Annotation import and export">
-<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge</option><option value="replace">Replace</option></select><button id="importBtn" disabled>Import</button></div>
+<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" multiple accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><label>Import as <select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge (overlay)</option><option value="replace">Replace existing</option><option value="stack">Stack (separate label row)</option></select></label><button id="importBtn" disabled>Import</button></div>
 <div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button><label>Jump to page <input id="pageJump" type="number" min="1" value="1" step="1" style="width:75px" aria-label="Jump to annotation page"></label></div>
 <div class="row hint"><progress id="importProgress" max="1" value="0" hidden aria-label="Annotation import progress"></progress><button id="cancelImport" disabled>Cancel import</button><span id="tableStatus" role="status"></span></div>
 <div class="tableWrap"><table><thead><tr><th>Type</th><th>Time (s)</th><th>Frequency (Hz)</th><th>Tag / label</th><th>Actions</th></tr></thead><tbody id="markerRows"></tbody></table></div>
@@ -100,6 +117,11 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
+<dialog id="importChoiceDialog" aria-labelledby="importChoiceTitle">
+<strong id="importChoiceTitle">Choose how to import labels</strong>
+<p class="hint">Choose a mode separately for this file. Replace clears the existing annotations, labels and stacked tracks; Stack creates one synchronized row between waveform and spectrogram.</p>
+<div class="row"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
+</dialog>
 <details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Import validates all records before applying changes and supports merge or replace; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
@@ -1294,7 +1316,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, tableCache: null, overlayLayers: { wave: null, spec: null }, annotationView: null, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1334,6 +1356,135 @@ self.onmessage = async ({ data: m }) => {
                 p.reject(Error('Worker closed.'));
             this.pending.clear();
         }
+    }
+    const MIN_TRACK_HEIGHT = 88;
+    function sourceKey(marker) {
+        return marker?.sourceId && app.importSources.has(marker.sourceId) ? marker.sourceId : null;
+    }
+    function markerVisibleOn(marker, layer) {
+        const id = sourceKey(marker), source = id ? app.importSources.get(id) : null;
+        if (source && !source.visible) return false;
+        if (layer === 'spec') return true;
+        if (layer === 'wave') return !source || source.mode !== 'stack';
+        return layer === 'track:' + id && source?.mode === 'stack';
+    }
+    function invalidateSourceViews() {
+        app.sourceVersion++;
+        app.filteredIndices.clear();
+        app.annotationViews.clear();
+        app.overlayLayers = {};
+    }
+    function renderImportSourceControls() {
+        const root = $('importSourceControls'), fragment = document.createDocumentFragment();
+        for (const source of app.importSources.values()) {
+            const label = document.createElement('label'), checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = source.visible;
+            checkbox.setAttribute('aria-label', 'Show labels from ' + source.filename);
+            checkbox.addEventListener('change', () => {
+                app.importSources = new Map(app.importSources);
+                app.importSources.set(source.id, { ...app.importSources.get(source.id), visible: checkbox.checked });
+                app.dirty = true;
+                invalidateSourceViews();
+                paintOverlays();
+            });
+            label.append(checkbox, document.createTextNode(source.filename + ' (' + (source.mode === 'stack' ? 'stack' : 'overlay') + ')'));
+            fragment.append(label);
+        }
+        root.replaceChildren(fragment);
+        root.hidden = !app.importSources.size;
+    }
+    function setTrackHeight(plot, height) {
+        const next = Math.max(MIN_TRACK_HEIGHT, Math.round(height));
+        plot.style.height = next + 'px';
+        app.trackHeights.set(plot.id === 'wavePlot' || plot.id === 'specPlot' ? plot.id : plot.dataset.sourceId, next);
+    }
+    function installPlotResizer(bar) {
+        const pair = () => [bar.previousElementSibling, bar.nextElementSibling];
+        const resize = (delta, firstHeight, secondHeight) => {
+            const [first, second] = pair();
+            const total = firstHeight + secondHeight;
+            const firstNew = clamp(Math.round(firstHeight + delta), MIN_TRACK_HEIGHT, total - MIN_TRACK_HEIGHT);
+            setTrackHeight(first, firstNew);
+            setTrackHeight(second, total - firstNew);
+            bar.setAttribute('aria-valuenow', String(firstNew));
+        };
+        bar.addEventListener('pointerdown', event => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            const [first, second] = pair();
+            const startY = event.clientY, firstHeight = first.getBoundingClientRect().height, secondHeight = second.getBoundingClientRect().height;
+            bar.classList.add('is-dragging');
+            bar.setPointerCapture(event.pointerId);
+            const move = e => { if (e.pointerId === event.pointerId) resize(e.clientY - startY, firstHeight, secondHeight); };
+            const stop = e => {
+                if (e.pointerId !== event.pointerId) return;
+                bar.removeEventListener('pointermove', move);
+                bar.removeEventListener('pointerup', stop);
+                bar.removeEventListener('pointercancel', stop);
+                bar.classList.remove('is-dragging');
+                if (bar.hasPointerCapture(event.pointerId)) bar.releasePointerCapture(event.pointerId);
+            };
+            bar.addEventListener('pointermove', move);
+            bar.addEventListener('pointerup', stop);
+            bar.addEventListener('pointercancel', stop);
+        });
+        bar.addEventListener('keydown', e => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            e.stopPropagation();
+            const [first, second] = pair();
+            resize(e.key === 'ArrowDown' ? 16 : -16, first.getBoundingClientRect().height, second.getBoundingClientRect().height);
+        });
+    }
+    function rebuildPlotSeparators() {
+        const stack = $('plotStack');
+        stack.querySelectorAll('.plot-resizer').forEach(node => node.remove());
+        const plots = Array.from(stack.querySelectorAll(':scope > .plot'));
+        for (let i = 1; i < plots.length; i++) {
+            const bar = document.createElement('div');
+            bar.className = 'plot-resizer';
+            bar.tabIndex = 0;
+            bar.setAttribute('role', 'separator');
+            bar.setAttribute('aria-orientation', 'horizontal');
+            bar.setAttribute('aria-label', 'Resize ' + (plots[i - 1].dataset.sourceId || plots[i - 1].id) + ' and ' + (plots[i].dataset.sourceId || plots[i].id));
+            bar.setAttribute('aria-valuemin', String(MIN_TRACK_HEIGHT));
+            bar.setAttribute('aria-valuenow', String(Math.round(plots[i - 1].getBoundingClientRect().height)));
+            plots[i].before(bar);
+            installPlotResizer(bar);
+        }
+    }
+    function rebuildLabelTracks() {
+        const stack = $('plotStack'), spec = $('specPlot');
+        const ids = new Set(Array.from(app.importSources.values()).filter(source => source.mode === 'stack').map(source => source.id));
+        stack.querySelectorAll(':scope > .label-track').forEach(node => {
+            if (!ids.has(node.dataset.sourceId)) {
+                app.resizeObserver?.unobserve(node);
+                node.remove();
+            }
+        });
+        for (const source of app.importSources.values()) {
+            if (source.mode !== 'stack') continue;
+            let plot = Array.from(stack.querySelectorAll(':scope > .label-track')).find(p => p.dataset.sourceId === source.id);
+            if (!plot) {
+                plot = document.createElement('div');
+                plot.className = 'plot label-track';
+                plot.dataset.sourceId = source.id;
+                plot.id = 'label-track-' + source.id.replace(/[^a-zA-Z0-9_-]/g, '-');
+                const base = document.createElement('canvas'), overlay = document.createElement('canvas');
+                base.setAttribute('aria-hidden', 'true');
+                overlay.className = 'overlay';
+                overlay.tabIndex = 0;
+                overlay.setAttribute('aria-label', 'Label track ' + source.filename);
+                plot.append(base, overlay);
+                setTrackHeight(plot, app.trackHeights.get(source.id) ?? 124);
+                bindAnnotationCanvas(overlay, false, source.id);
+                app.resizeObserver?.observe(plot);
+            }
+            spec.before(plot);
+        }
+        rebuildPlotSeparators();
+        paintAll();
     }
     function status(text, error = false) { $('status').textContent = text; $('status').className = error ? 'error' : 'ok'; }
     function report(e) {
