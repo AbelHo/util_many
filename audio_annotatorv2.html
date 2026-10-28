@@ -2321,9 +2321,10 @@ self.onmessage = async ({ data: m }) => {
         app.markerVersion++;
         app.tableSerial++;
         if (reindex) app.markerIndex = null;
-        app.annotationView = null;
+        app.annotationViews.clear();
+        app.filteredIndices.clear();
         app.tableCache = null;
-        app.overlayLayers.wave = app.overlayLayers.spec = null;
+        app.overlayLayers = {};
     }
     function lowerBound(values, value, inclusive = false) {
         let lo = 0, hi = values.length;
@@ -2334,24 +2335,35 @@ self.onmessage = async ({ data: m }) => {
         }
         return lo;
     }
-    function markerIndex() {
-        if (!app.markerIndex) {
-            const items = Array.from(app.markers.values()).sort((a, b) => a.start - b.start || a.end - b.end);
-            const maxEnd = new Float64Array(items.length), starts = new Float64Array(items.length), ends = new Float64Array(items.length);
-            const blockEnds = new Float64Array(Math.ceil(items.length / 256));
-            blockEnds.fill(-Infinity);
-            let maximum = -Infinity;
-            for (let i = 0; i < items.length; i++) {
-                maximum = Math.max(maximum, items[i].end);
-                maxEnd[i] = maximum;
-                starts[i] = items[i].start;
-                ends[i] = items[i].end;
-                blockEnds[i >>> 8] = Math.max(blockEnds[i >>> 8], items[i].end);
-            }
-            ends.sort();
-            app.markerIndex = { items, maxEnd, starts, ends, blockEnds };
+    function buildMarkerIndex(items) {
+        items.sort((a, b) => a.start - b.start || a.end - b.end);
+        const maxEnd = new Float64Array(items.length), starts = new Float64Array(items.length),
+            ends = new Float64Array(items.length), blockEnds = new Float64Array(Math.ceil(items.length / 256));
+        blockEnds.fill(-Infinity);
+        let maximum = -Infinity;
+        for (let i = 0; i < items.length; i++) {
+            maximum = Math.max(maximum, items[i].end);
+            maxEnd[i] = maximum;
+            starts[i] = items[i].start;
+            ends[i] = items[i].end;
+            blockEnds[i >>> 8] = Math.max(blockEnds[i >>> 8], items[i].end);
         }
+        ends.sort();
+        return { items, maxEnd, starts, ends, blockEnds };
+    }
+    function markerIndex() {
+        if (!app.markerIndex)
+            app.markerIndex = buildMarkerIndex(Array.from(app.markers.values()));
         return app.markerIndex;
+    }
+    function filteredMarkerIndex(layer) {
+        if (layer === 'all') return markerIndex();
+        let index = app.filteredIndices.get(layer);
+        if (!index) {
+            index = buildMarkerIndex(Array.from(app.markers.values()).filter(marker => markerVisibleOn(marker, layer)));
+            app.filteredIndices.set(layer, index);
+        }
+        return index;
     }
     function visibleMarkerCount(index, start, end) {
         return lowerBound(index.starts, end, true) - lowerBound(index.ends, start);
@@ -2365,16 +2377,25 @@ self.onmessage = async ({ data: m }) => {
         }
         return bins;
     }
-    function annotationView(g) {
-        const width = Math.max(1, Math.ceil(g.w)), key = [app.markerVersion, app.start, app.span, width].join('|');
-        if (app.annotationView?.key === key) return app.annotationView;
-        const index = markerIndex(), count = visibleMarkerCount(index, app.start, app.start + app.span);
+    function annotationView(g, layer = 'wave') {
+        const width = Math.max(1, Math.ceil(g.w));
+        const key = [app.markerVersion, app.sourceVersion, layer, app.start, app.span, width].join('|');
+        const cached = app.annotationViews.get(key);
+        if (cached) return cached;
+        const index = filteredMarkerIndex(layer);
+        const count = visibleMarkerCount(index, app.start, app.start + app.span);
         const dense = count > Math.min(2000, Math.max(40, Math.floor(width / 3)));
-        return app.annotationView = { key, count, dense,
+        const view = { key, count, dense,
             bins: dense ? markerDensity(index, app.start, app.start + app.span, width) : null };
+        // Cache across the waveform, spectrogram and label tracks, but not
+        // indefinitely across thousands of pans in long recordings.
+        if (app.annotationViews.size > Math.max(12, app.importSources.size * 2 + 4))
+            app.annotationViews.clear();
+        app.annotationViews.set(key, view);
+        return view;
     }
-    function forEachVisibleMarker(start, end, visit) {
-        const { items, maxEnd, blockEnds } = markerIndex();
+    function forEachVisibleMarker(start, end, visit, index = markerIndex()) {
+        const { items, maxEnd, blockEnds } = index;
         for (let i = lowerBound(maxEnd, start); i < items.length && items[i].start <= end; i++) {
             if ((i & 255) === 0 && blockEnds[i >>> 8] < start) {
                 i += 255;
@@ -2442,7 +2463,7 @@ self.onmessage = async ({ data: m }) => {
         }
         ctx.globalAlpha = 1;
     }
-    function paintOverlay(canvas, isSpec) {
+    function paintOverlay(canvas, isSpec, trackId = null) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
         if (!app.meta) {
@@ -2450,11 +2471,11 @@ self.onmessage = async ({ data: m }) => {
                 $('annotationRenderInfo').textContent = 'No annotations in view.';
             return;
         }
-        const key = isSpec ? 'spec' : 'wave';
+        const key = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
         const band = isSpec ? getDisplayFreqRange() : null;
         const show = $('showAnnotations').checked, text = $('showLabelText').checked;
-        const view = show ? annotationView(g) : null;
-        if (!isSpec) {
+        const view = show ? annotationView(g, key) : null;
+        if (key === 'wave') {
             const info = $('annotationRenderInfo');
             const message = !show ? 'Annotations hidden (all retained).' :
                 view.count.toLocaleString() + ' annotations in view · ' + (view.dense
@@ -2464,7 +2485,7 @@ self.onmessage = async ({ data: m }) => {
             if (info.textContent !== message) info.textContent = message;
         }
         const signature = [canvas.width, canvas.height, app.start, app.span,
-            app.markerVersion, show, text, isSpec ? currentScale() : '',
+            app.markerVersion, app.sourceVersion, key, show, text, isSpec ? currentScale() : '',
             band?.min, band?.max].join('|');
         let layer = app.overlayLayers[key];
         if (!layer || layer.signature !== signature) {
@@ -2501,7 +2522,7 @@ self.onmessage = async ({ data: m }) => {
                     const fits = text && label && x >= textRight && x + labelWidth < g.left + g.w;
                     drawMarker(pen, g, marker, isSpec, false, !!fits, false);
                     if (fits) textRight = x + labelWidth + 10;
-                });
+                }, filteredMarkerIndex(key));
             }
             pen.restore();
             layer = { signature, canvas: offscreen };
@@ -2517,9 +2538,11 @@ self.onmessage = async ({ data: m }) => {
         ctx.rect(g.left, g.top, g.w, g.h);
         ctx.clip();
         const selected = app.markers.get(app.selected);
-        if (show && selected && selected.end >= app.start && selected.start <= app.start + app.span)
+        if (show && selected && markerVisibleOn(selected, key) &&
+            selected.end >= app.start && selected.start <= app.start + app.span)
             drawMarker(ctx, g, selected, isSpec, false, text, true);
-        if (app.gesture?.kind === 'annotate' && app.gesture.current) {
+        if (app.gesture?.kind === 'annotate' && app.gesture.current &&
+            app.gesture.canvas === canvas) {
             const marker = gestureMarker(app.gesture);
             if (marker)
                 drawMarker(ctx, g, marker, isSpec, true);
@@ -2533,8 +2556,48 @@ self.onmessage = async ({ data: m }) => {
         ctx.stroke();
         ctx.restore();
     }
-    function paintOverlays() { paintOverlay($('waveOverlay'), false); paintOverlay($('specOverlay'), true); }
-    function paintAll() { drawBase($('waveCanvas'), false); drawBase($('specCanvas'), true); paintOverlays(); }
+    function drawLabelTrackBase(canvas, source) {
+        const { ctx, g } = sizedContext(canvas);
+        ctx.fillStyle = '#142233';
+        ctx.fillRect(0, 0, g.width, g.height);
+        ctx.strokeStyle = '#43586e';
+        ctx.fillStyle = '#e5edf7';
+        ctx.font = '11px system-ui';
+        ctx.textAlign = 'left';
+        ctx.fillText('Labels · ' + source.filename, 8, 14, Math.max(20, g.width - 20));
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(g.left, g.top, g.w, g.h);
+        ctx.clip();
+        const ticks = Math.max(2, Math.min(6, Math.floor(g.w / 100)));
+        for (let i = 0; i <= ticks; i++) {
+            const x = g.left + i * g.w / ticks;
+            ctx.globalAlpha = .3;
+            ctx.beginPath();
+            ctx.moveTo(x, g.top);
+            ctx.lineTo(x, g.top + g.h);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.textAlign = 'center';
+            ctx.fillText(app.meta ? fmt(app.start + i * app.span / ticks, app.span < .01 ? 6 : app.span < 1 ? 4 : 2) : '0', x, g.height - 8);
+        }
+        ctx.restore();
+    }
+    function paintOverlays() {
+        paintOverlay($('waveOverlay'), false);
+        paintOverlay($('specOverlay'), true);
+        for (const plot of $('plotStack').querySelectorAll(':scope > .label-track'))
+            paintOverlay(plot.querySelector('canvas.overlay'), false, plot.dataset.sourceId);
+    }
+    function paintAll() {
+        drawBase($('waveCanvas'), false);
+        drawBase($('specCanvas'), true);
+        for (const plot of $('plotStack').querySelectorAll(':scope > .label-track')) {
+            const source = app.importSources.get(plot.dataset.sourceId);
+            if (source) drawLabelTrackBase(plot.querySelector('canvas:not(.overlay)'), source);
+        }
+        paintOverlays();
+    }
     function tagColor(key) {
         let hash = 0;
         for (const c of key)
@@ -3287,10 +3350,11 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     function canvasPoint(e, canvas) { const g = geom(canvas), box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top, inside = x >= g.left && x <= g.left + g.w && y >= g.top && y <= g.top + g.h; const time = clamp(app.start + (x - g.left) / g.w * app.span, 0, app.meta.duration), frequency = fractionHz(1 - (y - g.top) / g.h); return { x, y, time: Math.round(time * app.meta.sampleRate) / app.meta.sampleRate, frequency, inside, g }; }
-    function nearestMarker(p, isSpec) {
+    function nearestMarker(p, isSpec, trackId = null) {
         // Aggregated geometry is not an individual marker: don't select/delete an
         // arbitrary hidden event. Use the table or zoom into the density strip.
-        if (!$('showAnnotations').checked || annotationView(p.g).dense) return null;
+        const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        if (!$('showAnnotations').checked || annotationView(p.g, layer).dense) return null;
         let best = null, distance = 11;
         const tolerance = 11 / p.g.w * app.span;
         forEachVisibleMarker(Math.max(0, p.time - tolerance), p.time + tolerance, m => {
@@ -3316,10 +3380,10 @@ self.onmessage = async ({ data: m }) => {
                 distance = d;
                 best = m;
             }
-        });
+        }, filteredMarkerIndex(layer));
         return best;
     }
-    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8 }; }
+    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8, sourceId: g.trackId || null }; }
     function cancelGesture() {
         const g = app.gesture;
         app.gesture = null;
@@ -3331,8 +3395,8 @@ self.onmessage = async ({ data: m }) => {
         }
         paintOverlays();
     }
-    for (const [id, isSpec] of [['waveOverlay', false], ['specOverlay', true]]) {
-        const canvas = $(id);
+    function bindAnnotationCanvas(canvas, isSpec, trackId = null) {
+        const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
         canvas.addEventListener('pointerdown', e => {
             cancelZoomPrefetch();
             if (!app.meta || e.button > 1)
@@ -3342,7 +3406,7 @@ self.onmessage = async ({ data: m }) => {
                 return;
             e.preventDefault();
             canvas.focus({ preventScroll: true });
-            const nearby = nearestMarker(point, isSpec);
+            const nearby = nearestMarker(point, isSpec, trackId);
             if (e.shiftKey && !app.held) {
                 if (nearby)
                     removeMarker(nearby.id);
@@ -3353,7 +3417,7 @@ self.onmessage = async ({ data: m }) => {
                 status('Draw frequency ranges in the spectrogram.', true);
                 return;
             }
-            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
+            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
             canvas.setPointerCapture(e.pointerId);
             paintOverlays();
         });
@@ -3363,7 +3427,7 @@ self.onmessage = async ({ data: m }) => {
             const p = canvasPoint(e, canvas);
             $('hoverInfo').textContent = p.inside ? fmt(p.time, 6) + ' s' + (isSpec ? ' · ' + fmt(p.frequency, 2) + ' Hz' : '') : '';
             if (p.inside && $('showAnnotations').checked && p.y >= p.g.top + p.g.h - 20) {
-                const view = annotationView(p.g);
+                const view = annotationView(p.g, layer);
                 if (view.dense) {
                     const bin = clamp(Math.floor((p.x - p.g.left) / p.g.w * view.bins.length), 0, view.bins.length - 1);
                     $('hoverInfo').textContent = fmt(p.time, 6) + ' s · ' + view.bins[bin].toLocaleString() + ' annotations overlap this time bin';
@@ -3417,7 +3481,7 @@ self.onmessage = async ({ data: m }) => {
         canvas.addEventListener('dblclick', e => {
             if (!app.meta || !$('showAnnotations').checked || document.querySelector('input[name=mode]:checked').value !== 'navigate') return;
             const p = canvasPoint(e, canvas);
-            if (p.inside && p.y >= p.g.top + p.g.h - 20 && annotationView(p.g).dense) {
+            if (p.inside && p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer).dense) {
                 e.preventDefault();
                 zoom(.125, p.time);
             }
@@ -3453,6 +3517,8 @@ self.onmessage = async ({ data: m }) => {
                 setView(app.start + delta / p.g.w * app.span, app.span);
         }, { passive: false });
     }
+    bindAnnotationCanvas($('waveOverlay'), false);
+    bindAnnotationCanvas($('specOverlay'), true);
     function handle(id, event, fn) {
         $(id).addEventListener(event, e => {
             try {
@@ -3729,11 +3795,21 @@ self.onmessage = async ({ data: m }) => {
     });
     window.addEventListener('pagehide', e => { cancelZoomPrefetch(); pause(); if (e.persisted)
         return; app.analysis?.close(); app.playback?.close(); app.context?.close(); URL.revokeObjectURL(workerURL); });
-    new ResizeObserver(() => {
+    app.resizeObserver = new ResizeObserver(entries => {
         paintAll();
-        if (app.meta)
-            requestRender();
-    }).observe($('wavePlot'));
+        // Only a spectrogram size change alters FFT pixel resolution. Avoid
+        // starting a new worker render on every pixel of splitter dragging.
+        if (app.meta && entries.some(entry => entry.target === $('specPlot'))) {
+            clearTimeout(app.plotRenderTimer);
+            app.plotRenderTimer = setTimeout(() => {
+                app.plotRenderTimer = 0;
+                if (app.meta) requestRender();
+            }, 180);
+        }
+    });
+    for (const plot of $('plotStack').querySelectorAll(':scope > .plot'))
+        app.resizeObserver.observe(plot);
+    rebuildPlotSeparators();
     function inspectMarkers(limit) {
         const markers = [];
         for (const marker of app.markers.values()) {
