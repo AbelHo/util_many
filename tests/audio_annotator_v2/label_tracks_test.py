@@ -100,7 +100,7 @@ with sync_playwright() as p:
 
     drag_splitter(1, 22)    # label A | label B
     drag_splitter(0, 18)    # waveform | label A
-    drag_splitter(2, -22)   # label B | spectrogram
+    drag_splitter(2, 22)    # label B | spectrogram
     page.locator('#plotStack > .plot-resizer').first.focus()
     h = page.locator('#wavePlot').evaluate('(p) => p.getBoundingClientRect().height')
     page.keyboard.press('ArrowDown')
