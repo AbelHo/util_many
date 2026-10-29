@@ -1,0 +1,32 @@
+name: Audio Annotator v2 label tracks
+
+on:
+  push:
+    branches:
+      - feature/audio-label-stacks-resizable-20261028
+      - feature/audio-label-inline-edit-compact-20261028
+      - feature/audio-tracks-10px-enter-edit-20261029
+    paths:
+      - audio_annotatorv2.html
+      - tests/audio_annotator_v2/*.py
+      - tests/audio_annotator_v2/*.cjs
+      - .github/workflows/audio-annotator-label-tracks.yml
+  workflow_dispatch:
+
+concurrency:
+  group: audio-annotator-label-tracks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --max-old-space-size=4096 tests/audio_annotator_v2/million_markers_test.cjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install playwright numpy soundfile
+      - run: python -m playwright install --with-deps chromium
+      - run: python tests/audio_annotator_v2/run.py --suite all

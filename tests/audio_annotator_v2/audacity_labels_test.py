@@ -139,7 +139,7 @@ with sync_playwright() as p:
     results.append('CR-only line endings import and undo cleanly')
 
     # Drop a TXT annotation alongside previously loaded audio.
-    # The drop handler intentionally follows the selected import mode.
+    # Every dropped file prompts explicitly; the picker mode is for picker imports.
     page.locator('#importMode').select_option('merge')
     page.evaluate("""(txt) => {
         const transfer = new DataTransfer();
@@ -148,6 +148,8 @@ with sync_playwright() as p:
             bubbles: true, cancelable: true, dataTransfer: transfer
         }));
     }""", extended)
+    page.locator('#importChoiceDialog[open]').wait_for()
+    page.locator('#importChoiceDialog [data-import-choice=merge]').click()
     count(16)
     page.locator('#undoBtn').click()
     count(8)

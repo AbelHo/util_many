@@ -23,23 +23,25 @@ assert.match(main, /MAX_IMPORT_BYTES = 256 \* 1048576/);
 const app = { meta: { duration: 2000000, sampleRate: 48000 }, loadEpoch: 0,
     markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [],
     historyBytes: 0, dirty: false, importBusy: false,
-    markerVersion: 0, markerIndex: null, tableCache: null,
+    markerVersion: 0, markerIndex: null, tableCache: null, sourceVersion: 0,
+    importSources: new Map(), filteredIndices: new Map(), annotationViews: new Map(),
     overlayLayers: { wave: null, spec: null } };
 let counter = 0;
 const env = {
     app, MAX_MARKERS: 1000000, MAX_IMPORT_BYTES: 256 * 1048576,
-    HISTORY_BYTES: 256 * 1048576, Float64Array, Map, Set, Promise,
+    HISTORY_BYTES: 256 * 1048576, Float64Array, Map, Set, Promise, TextDecoder,
     setTimeout, clearTimeout, Math, Number, Date, String, Error,
     uid: () => 'import-' + (++counter),
     clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
-    status: () => {}, refreshAnnotations: () => {},
+    status: () => {}, refreshAnnotations: () => {}, rebuildLabelTracks: () => {},
+    renderImportSourceControls: () => {},
     renderMarkerTable: () => {}, $: () => ({ value: '', checked: false })
 };
 vm.createContext(env);
 vm.runInContext(
     section('    function cleanText(', '    function normalizeTag(') +
     section('    const yieldUI =', '    function exportAudacityLabels(') +
-    section('    function invalidateMarkers()', '    function styleFor(') +
+    section('    function invalidateMarkers(', '    function styleFor(') +
     section('    function writableAnnotationMaps()', '    function addMarker(') +
     '\nthis.tests = { parseAudacityLabels, markerIndex, forEachVisibleMarker, transactSnapshot, transact, history };',
     env
