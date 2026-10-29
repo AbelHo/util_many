@@ -47,7 +47,7 @@ with sync_playwright() as p:
         if key == 'save':
             page.locator('.annotation-inline-editor button').filter(has_text='Save').click()
         elif key == 'enter':
-            page.get_by_label('Inline label').press('Control+Enter')
+            page.get_by_label('Inline label').press('Enter')
         elif key == 'cancel':
             page.locator('.annotation-inline-editor button').filter(has_text='Cancel').click()
         elif key == 'outside':
@@ -62,7 +62,7 @@ with sync_playwright() as p:
         separators = page.locator('#plotStack > .plot-resizer')
         assert separators.count() == plots.count() - 1
         for bar in separators.all():
-            assert abs(bar.bounding_box()['height'] - 5) < 1
+            assert abs(bar.bounding_box()['height'] - 3) < 1
         widths = plots.evaluate_all("""plots => plots.map(p => {
             const r=p.querySelector('canvas').getBoundingClientRect();
             return [r.left + 64, r.right - 16];
@@ -103,8 +103,26 @@ with sync_playwright() as p:
     cell.dblclick()
     assert page.get_by_label('Inline label').input_value() == 'Edited on spectrogram'
     update('changed-tag', 'Edited in the table', 'outside')
-    assert marker_by_start(.5)['label'] == 'Edited in the table'
+    assert marker_by_start(.5)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
     assert marker_by_start(.5)['tag'] == 'changed-tag'
+
+    # Ctrl+Enter and Cmd+Enter insert a newline without committing.
+    page.locator('#markerRows tr').first.locator('td.marker-description').dblclick()
+    label = page.get_by_label('Inline label')
+    label.fill('Line one')
+    label.press('Control+Enter')
+    assert label.input_value() == 'Line one\\n'.replace('\\n', '\n')
+    label.type('Line two')
+    label.press('Meta+Enter')
+    assert label.input_value() == 'Line one\\nLine two\\n'.replace('\\n', '\n')
+    assert page.locator('.annotation-inline-editor').count() == 1
+    label.type('Line three')
+    label.press('Enter')
+    assert marker_by_start(.5)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
+    page.locator('#undoBtn').click()
+    assert marker_by_start(.5)['label'] == 'Edited in the table'
+    page.locator('#redoBtn').click()
+    assert marker_by_start(.5)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
 
     # A canceled edit must not affect in-memory markers.
     page.locator('#markerRows tr').first.locator('td.marker-description').dblclick()
@@ -129,7 +147,7 @@ with sync_playwright() as p:
     update('merge', 'Updated waveform overlay')
     assert marker_by_start(2.1)['label'] == 'Updated waveform overlay'
 
-    # Shrink the waveform to minimum 48px; plots must remain time-aligned.
+    # Shrink the waveform to minimum 10px; plots must remain time-aligned.
     divider = page.locator('#plotStack > .plot-resizer').first
     divider.scroll_into_view_if_needed()
     rect = divider.bounding_box()
@@ -138,12 +156,12 @@ with sync_playwright() as p:
     page.mouse.move(rect['x'] + rect['width']/2, rect['y'] - 500, steps=8)
     page.mouse.up()
     h = page.locator('#wavePlot').bounding_box()['height']
-    assert 47.5 <= h <= 49, h
+    assert 9.5 <= h <= 11, h
     compact_heights()
     # Even at min height, the plot has a positive drawing area and cursor remains synchronized.
     assert page.locator('#waveOverlay').evaluate("""canvas => {
         const height = canvas.getBoundingClientRect().height;
-        return height >= 46 && height - 17 - 15 > 0; // 48px plot includes two 1px borders
+        return height >= 8 && height - 2 > 0; // 10px plot includes two 1px borders
     }""")
     assert not errors, errors
     (OUT/'inline-edit-results.json').write_text(json.dumps({
@@ -151,5 +169,5 @@ with sync_playwright() as p:
         'browser': browser.version
     }, indent=2))
     print('INLINE EDIT PASS: plot text/geometry, stacked/spectrogram/waveform, table,'
-          ' undo/redo, cancel, export, compact min height and 5px gaps')
+          ' undo/redo, cancel, export, compact min height and 3px gaps')
     browser.close()
