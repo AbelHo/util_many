@@ -34,7 +34,7 @@ channel, FFT and format version. This is not a whole-file hash; Rebuild refreshe
 Storage errors fall back to memory with visible status; raw audio/labels are not saved.
 Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel continuously adjusts
 waveform amplitude or zooms spectrogram frequency; Shift+wheel scrubs. Waveform
-amplitude uses the preset selector plus one transient custom value, with no preset
+amplitude uses the preset selector plus one retained custom value, with no preset
 limits on wheel scaling (only JavaScript's finite numeric range). Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
@@ -3843,8 +3843,8 @@ self.onmessage = async ({ data: m }) => {
         const preset = Array.from(control.options).find(option =>
             !option.dataset.customAmplitude && Number(option.value) === value);
         if (preset) {
+            // Preserve the last custom value so the user can select it again.
             control.value = preset.value;
-            custom?.remove();
         } else {
             const option = custom || new Option();
             option.dataset.customAmplitude = 'true';
@@ -4082,8 +4082,7 @@ self.onmessage = async ({ data: m }) => {
         requestRender();
     });
     handle('amplitude', 'change', () => {
-        const control = $('amplitude'), custom = control.querySelector('option[data-custom-amplitude]');
-        if (custom && custom !== control.selectedOptions[0]) custom.remove();
+        // Switching to a preset must not discard the last custom amplitude.
         drawBase($('waveCanvas'), false);
     });
     handle('waveformColor', 'input', paintAll);
