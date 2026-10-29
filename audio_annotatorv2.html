@@ -56,6 +56,11 @@ work. Cancel import leaves the previous annotations intact. Imports remain atomi
 The inspect() API caps returned marker objects at 50,000 by default; use
 inspect({ allMarkers: true }) for a deliberate full diagnostic copy.
 All user text enters the DOM through textContent/value, never interpolated HTML.
+Audio frequency filtering defaults off. Independent blank high/low cutoff inputs
+choose HP, LP, or one-pass band-pass FIR (rather than cascaded HP+LP).
+Bounded zero-phase FFT convolution filters native playback, waveform, FFTs and
+overviews without moving annotation times; source audio is never modified.
+Filtered overviews have distinct persistent cache keys from unfiltered views.
 Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransform supplies FFT image rows, axis ticks, mouse frequency and annotations.\nSee README.md/AGENTS.md for repository conventions; README is generated, not edited.
 -->
 <html lang="en">
@@ -66,7 +71,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <meta name="keywords" content="audio annotator, spectrogram, waveform, ultrasound, bioacoustics, WAV, RF64, FLAC, audio labeling, frequency annotation">
 <title>Audio Annotator v2</title>
 <style>
-:root{font:14px system-ui,sans-serif;color:#20252b;background:#f7f8fa;color-scheme:light}*{box-sizing:border-box}body{margin:18px auto;padding:0 16px;max-width:1800px}h1{font-size:23px;margin:0 0 6px}h2{font-size:16px;margin:8px 0}p{margin:6px 0}.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}.grow{flex:1;min-width:120px}.panel{background:white;border:1px solid #d5dbe1;border-radius:5px;padding:10px;margin:10px 0}.hint{font-size:12px;color:#596570}.badge{font-size:12px;padding:3px 7px;background:#e8eef5;border-radius:4px}button,select,input,textarea{font:inherit}textarea{padding:5px 7px;resize:vertical}button,select,input:not([type=range]):not([type=radio]):not([type=checkbox]):not([type=color]){padding:5px 7px}button{cursor:pointer;border:1px solid #b8c2cc;background:#fff;border-radius:4px}button:hover:not(:disabled){background:#edf3f8}button:disabled{opacity:.45;cursor:default}input[type=number]{width:95px}input[type=range]{vertical-align:middle}input[type=color]{width:38px;height:28px;padding:0}label{display:inline-flex;gap:5px;align-items:center}label.stack{display:flex;flex-direction:column;align-items:flex-start}#fileInput{max-width:360px}#status{min-height:22px;white-space:pre-wrap}#status.error{color:#a32222}#status.ok{color:#275b32}#fileInfo{overflow-wrap:anywhere}.plots{min-width:0}.plot{position:relative;width:100%;height:190px;overflow:hidden;border:1px solid #bfc9d1;background:#111b27}.plot.spectral{height:320px;margin-top:8px}.plot canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.plot canvas.overlay{touch-action:none;cursor:crosshair}#scrollSlider,#scrubSlider{flex:1;min-width:160px}#tagInput{width:65px}#labelInput{width:180px}.split{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:12px}.side{min-width:0}.tableWrap{max-height:285px;overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:5px;text-align:left;border-bottom:1px solid #e0e5eb;vertical-align:top;overflow-wrap:anywhere}th{position:sticky;top:0;background:#f3f6f8}tr.selected{background:#e5f1ff}td button{padding:2px 5px}#tagsList .row{flex-wrap:nowrap}#tagsList input[type=text]{min-width:0;width:100%}#tagsList input[type=number]{width:55px}#tagFilter{width:100%}#editor input,#editor textarea{width:100%}#editor .row>label{flex:1;min-width:100px}summary{cursor:pointer;font-weight:600}body.dragging{outline:4px dashed #347cb5;outline-offset:-5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}kbd{font:12px monospace;border:1px solid #c8cfd6;border-radius:3px;padding:1px 4px}progress{max-width:130px}#frequencyLegend{display:inline-block;width:85px;height:9px;background:linear-gradient(90deg,#080923,#322275,#96377a,#e7834a,#fcf3b0)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}@media(max-width:1000px){.split{grid-template-columns:1fr}.plot.spectral{height:280px}body{padding:0 8px;margin:10px auto}.side{display:grid;grid-template-columns:1fr 1fr;gap:8px}}@media(max-width:600px){.side{display:block}input[type=range]{max-width:100%}}
+:root{font:14px system-ui,sans-serif;color:#20252b;background:#f7f8fa;color-scheme:light}*{box-sizing:border-box}body{margin:18px auto;padding:0 16px;max-width:1800px}h1{font-size:23px;margin:0 0 6px}h2{font-size:16px;margin:8px 0}p{margin:6px 0}.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0}.grow{flex:1;min-width:120px}.panel{background:white;border:1px solid #d5dbe1;border-radius:5px;padding:10px;margin:10px 0}.hint{font-size:12px;color:#596570}.badge{font-size:12px;padding:3px 7px;background:#e8eef5;border-radius:4px}button,select,input,textarea{font:inherit}textarea{padding:5px 7px;resize:vertical}button,select,input:not([type=range]):not([type=radio]):not([type=checkbox]):not([type=color]){padding:5px 7px}button{cursor:pointer;border:1px solid #b8c2cc;background:#fff;border-radius:4px}button:hover:not(:disabled){background:#edf3f8}button:disabled{opacity:.45;cursor:default}input[type=number]{width:95px}#highPassHz,#lowPassHz{width:110px}#audioFilterInfo.error{color:#a32222}input[type=range]{vertical-align:middle}input[type=color]{width:38px;height:28px;padding:0}label{display:inline-flex;gap:5px;align-items:center}label.stack{display:flex;flex-direction:column;align-items:flex-start}#fileInput{max-width:360px}#status{min-height:22px;white-space:pre-wrap}#status.error{color:#a32222}#status.ok{color:#275b32}#fileInfo{overflow-wrap:anywhere}.plots{min-width:0}.plot{position:relative;width:100%;height:190px;overflow:hidden;border:1px solid #bfc9d1;background:#111b27}.plot.spectral{height:320px;margin-top:8px}.plot canvas{position:absolute;inset:0;width:100%;height:100%;display:block}.plot canvas.overlay{touch-action:none;cursor:crosshair}#scrollSlider,#scrubSlider{flex:1;min-width:160px}#tagInput{width:65px}#labelInput{width:180px}.split{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:12px}.side{min-width:0}.tableWrap{max-height:285px;overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:5px;text-align:left;border-bottom:1px solid #e0e5eb;vertical-align:top;overflow-wrap:anywhere}th{position:sticky;top:0;background:#f3f6f8}tr.selected{background:#e5f1ff}td button{padding:2px 5px}#tagsList .row{flex-wrap:nowrap}#tagsList input[type=text]{min-width:0;width:100%}#tagsList input[type=number]{width:55px}#tagFilter{width:100%}#editor input,#editor textarea{width:100%}#editor .row>label{flex:1;min-width:100px}summary{cursor:pointer;font-weight:600}body.dragging{outline:4px dashed #347cb5;outline-offset:-5px}.swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}kbd{font:12px monospace;border:1px solid #c8cfd6;border-radius:3px;padding:1px 4px}progress{max-width:130px}#frequencyLegend{display:inline-block;width:85px;height:9px;background:linear-gradient(90deg,#080923,#322275,#96377a,#e7834a,#fcf3b0)}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}@media(max-width:1000px){.split{grid-template-columns:1fr}.plot.spectral{height:280px}body{padding:0 8px;margin:10px auto}.side{display:grid;grid-template-columns:1fr 1fr;gap:8px}}@media(max-width:600px){.side{display:block}input[type=range]{max-width:100%}}
 
 /* A shared-width vertical plot stack keeps time coordinates pixel-aligned. */
 .plot-stack{display:flex;flex-direction:column;min-width:0}
@@ -105,6 +110,8 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><label>Channel <select id="channel"><option value="0">1</option></select></label><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
 <div class="row hint"><label><input id="rememberOverview" type="checkbox" checked> Remember overviews on this device</label><button id="clearSavedOverviews" disabled>Clear saved overviews</button></div>
 <div id="overviewInfo" class="hint" role="status">Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.</div>
+<div class="row" aria-label="Audio frequency filter controls"><strong>Audio filter</strong><label>High-pass cutoff (Hz) <input id="highPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="High-pass cutoff in Hz; blank disables high-pass" disabled></label><label>Low-pass cutoff (Hz) <input id="lowPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="Low-pass cutoff in Hz; blank disables low-pass" disabled></label><span id="audioFilterInfo" class="hint" role="status" aria-live="polite">Off · original audio</span></div>
+<div class="hint">Both blank: no filter. One cutoff: low-pass or high-pass. Both: one band-pass FIR (high-pass cutoff below low-pass). Affects plots, playback and overviews; source audio and annotations stay unchanged.</div>
 <div class="row"><label>FFT <select id="fftSize"><option>32</option><option>64</option><option>128</option><option>256</option><option>512</option><option>1024</option><option selected>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label><label>Y-axis scale <select id="frequencyScale" title="Frequency-axis display mapping; annotations remain stored in Hz"><option value="linear" selected>Linear (Hz)</option><option value="log">Logarithmic (octaves)</option><option value="mel">Mel</option><option value="bark">Bark</option><option value="erb">ERB</option><option value="period">Period (1/f)</option></select></label><label>Frequency min (Hz) <input id="displayFreqMin" type="number" min="0" step="any" value="0"></label><label>max (Hz) <input id="displayFreqMax" type="number" min="1" step="any" value="48000"></label><button id="fullBandBtn" disabled>Full Nyquist band</button><label>Floor (dBFS) <input id="dbMin" type="number" min="-180" max="0" value="-100"></label><label>Ceiling <input id="dbMax" type="number" min="-179" max="20" value="0"></label><label>Color <select id="colorMap"><option value="ember">Ember</option><option value="gray">Grayscale</option><option value="ocean">Ocean</option></select></label><span id="frequencyLegend" aria-hidden="true"></span></div>
 <div class="row"><button id="panLeft" disabled>◀ Pan</button><input id="scrollSlider" aria-label="Visible window start" type="range" min="0" max="1" step="any" value="0" disabled><button id="panRight" disabled>Pan ▶</button><output id="viewLabel">No window</output></div>
 </section>
@@ -139,7 +146,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <p class="hint">Choose a mode separately for this file. Replace clears the existing annotations, labels and stacked tracks; Stack creates one synchronized row between waveform and spectrogram.</p>
 <div class="row"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
 </dialog>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its drawing, not its records in the table or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its drawing, not its records in the table or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -693,6 +700,144 @@ function fftPlan(n) {
     plan = { window, reverse, cos, sin, sum, re: new Float64Array(n), im: new Float64Array(n) };
     return fftPlans.put(n, plan, n * 36);
 }
+
+/* Zero-phase, single-stage FIR filtering. A band-pass is one windowed-sinc
+   kernel (LP(high cutoff) - LP(low cutoff)), never cascaded HP and LP passes.
+   Fixed aligned FFT-convolution blocks make random seeks, adjacent chunks and
+   channel mixes produce identical samples without file-wide decoding or delay. */
+const FILTER_BLOCK = 16384, FILTER_FFT = 32768, filteredBlocks = new LRU(32 * MiB);
+let audioFilter = null, filterRevision = 0, filterKernel = null, filterKernelFFT = null;
+const filterSettingsKey = (f = audioFilter) => f ? JSON.stringify([f.high, f.low]) : 'off';
+function buildFilterKernel(f) {
+    const sampleRate = source.sampleRate, nyquist = sampleRate / 2;
+    const margins = [f.high === null ? Infinity : Math.min(f.high, nyquist - f.high),
+        f.low === null ? Infinity : Math.min(f.low, nyquist - f.low)];
+    if (f.high !== null && f.low !== null) margins.push(f.low - f.high);
+    const transition = Math.max(sampleRate / 8192, Math.min(...margins) * .3);
+    let taps = Math.max(65, Math.min(4097, Math.ceil(3.3 * sampleRate / transition)));
+    if (!(taps & 1)) taps++;
+    const radius = (taps - 1) / 2, coefficients = new Float64Array(taps);
+    const lowpass = (hz, offset) => offset === 0 ? 2 * hz / sampleRate :
+        Math.sin(2 * Math.PI * hz * offset / sampleRate) / (Math.PI * offset);
+    for (let i = 0; i < taps; i++) {
+        const t = i - radius, window = .54 + .46 * Math.cos(2 * Math.PI * t / (taps - 1));
+        const value = f.high !== null && f.low !== null ? lowpass(f.low, t) - lowpass(f.high, t)
+            : f.high !== null ? (t === 0 ? 1 : 0) - lowpass(f.high, t) : lowpass(f.low, t);
+        coefficients[i] = value * window;
+    }
+    // Normalize the appropriate *passband*, not DC for HP/BP (which must reject DC).
+    const reference = f.high === null ? 0 : f.low === null ?
+        (f.high + nyquist) / 2 : (f.high + f.low) / 2;
+    let gain = 0;
+    for (let i = 0; i < taps; i++)
+        gain += coefficients[i] * Math.cos(2 * Math.PI * reference * (i - radius) / sampleRate);
+    if (!Number.isFinite(gain) || gain < .05)
+        throw Error('Filter band is too narrow for this recording rate; widen the cutoffs.');
+    for (let i = 0; i < taps; i++) coefficients[i] /= gain;
+    return coefficients;
+}
+// Uses the existing bounded FFT-plan cache; unlike spectrum(), this transform
+// accepts time-order samples and explicitly performs bit-reversal and inverse FFT.
+function filterTransform(plan, inverse = false) {
+    const { re, im, reverse, cos, sin } = plan, n = re.length;
+    for (let i = 0; i < n; i++) {
+        const j = reverse[i];
+        if (j > i) {
+            let t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+    for (let len = 2; len <= n; len *= 2) {
+        const half = len / 2, step = n / len;
+        for (let offset = 0; offset < n; offset += len)
+            for (let j = 0; j < half; j++) {
+                const a = offset + j, b = a + half, k = j * step;
+                const s = inverse ? -sin[k] : sin[k];
+                const tr = re[b] * cos[k] - im[b] * s, ti = re[b] * s + im[b] * cos[k];
+                re[b] = re[a] - tr; im[b] = im[a] - ti;
+                re[a] += tr; im[a] += ti;
+            }
+    }
+    if (inverse)
+        for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+}
+function kernelSpectrum() {
+    if (!filterKernelFFT) {
+        const plan = fftPlan(FILTER_FFT);
+        plan.re.fill(0); plan.im.fill(0);
+        plan.re.set(filterKernel);
+        filterTransform(plan);
+        filterKernelFFT = { re: plan.re.slice(), im: plan.im.slice() };
+    }
+    return filterKernelFFT;
+}
+async function filteredBlock(index, channel, revision = filterRevision) {
+    const key = revision + ':' + channel + ':' + index, cached = filteredBlocks.get(key);
+    if (cached) return cached;
+    const kernel = filterKernel;
+    if (!kernel) throw Error('FILTER_CHANGED');
+    const radius = (kernel.length - 1) / 2;
+    const first = index * FILTER_BLOCK, count = Math.min(FILTER_BLOCK, source.frames - first);
+    // Read a symmetric halo: each output aligns with its original sample time,
+    // even across block boundaries and with zero padding at start/end of file.
+    const raw = await source.read(first - radius, count + radius * 2, channel);
+    if (revision !== filterRevision) throw Error('FILTER_CHANGED');
+    const kernelFFT = kernelSpectrum(), plan = fftPlan(FILTER_FFT);
+    plan.re.fill(0); plan.im.fill(0);
+    plan.re.set(raw);
+    filterTransform(plan);
+    for (let k = 0; k < FILTER_FFT; k++) {
+        const real = plan.re[k] * kernelFFT.re[k] - plan.im[k] * kernelFFT.im[k];
+        const imag = plan.re[k] * kernelFFT.im[k] + plan.im[k] * kernelFFT.re[k];
+        plan.re[k] = real; plan.im[k] = imag;
+    }
+    filterTransform(plan, true);
+    const data = new Float32Array(count), offset = kernel.length - 1;
+    for (let i = 0; i < count; i++) data[i] = plan.re[offset + i];
+    if (revision === filterRevision) filteredBlocks.put(key, data, data.byteLength);
+    return data;
+}
+async function filteredRead(start, count, channel) {
+    if (!audioFilter) return source.read(start, count, channel);
+    if (!Number.isInteger(start) || !Number.isInteger(count) || count < 0 || count > 4194304)
+        throw Error('Invalid filtered sample window.');
+    const out = new Float32Array(count), end = Math.min(source.frames, start + count);
+    let at = Math.max(0, start);
+    const revision = filterRevision;
+    while (at < end) {
+        const index = Math.floor(at / FILTER_BLOCK), block = await filteredBlock(index, channel, revision);
+        const local = at - index * FILTER_BLOCK, length = Math.min(end - at, block.length - local);
+        out.set(block.subarray(local, local + length), at - start);
+        at += length;
+    }
+    return out;
+}
+function updateAudioFilter(settings) {
+    const high = settings?.high ?? null, low = settings?.low ?? null, nyquist = source.sampleRate / 2;
+    for (const hz of [high, low])
+        if (hz !== null && (typeof hz !== 'number' || !Number.isFinite(hz) || hz <= 0 || hz >= nyquist))
+            throw Error('Filter cutoffs must be greater than 0 and below Nyquist (' + nyquist + ' Hz).');
+    if (high !== null && low !== null && high >= low)
+        throw Error('High-pass cutoff must be lower than low-pass cutoff.');
+    const next = high === null && low === null ? null : { high, low };
+    if (filterSettingsKey(next) === filterSettingsKey())
+        return { key: filterSettingsKey(), taps: filterKernel?.length || 0 };
+    const kernel = next ? buildFilterKernel(next) : null;
+    renderToken++;
+    if (pendingRender) postMessage({ id: pendingRender.id, result: { cancelled: true } });
+    pendingRender = null;
+    overviewToken++;
+    if (overview) overview.active = false;
+    overview = null;
+    overviewRevision++;
+    audioFilter = next;
+    filterKernel = kernel;
+    filterKernelFFT = null;
+    filterRevision++;
+    filteredBlocks.map.clear(); filteredBlocks.bytes = 0;
+    spectra.map.clear(); spectra.bytes = 0;
+    return { key: filterSettingsKey(), taps: filterKernel?.length || 0 };
+}
 function spectrum(samples, n, output = new Float32Array(n / 2 + 1)) {
     const plan = fftPlan(n), { re, im } = plan;
     im.fill(0);
@@ -724,7 +869,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
     // At four or fewer samples per pixel, preserve every native sample and its order.
     // Including pan margins, width is capped at 2400: at most 9600 samples (38 KiB).
     if (span <= width * 4) {
-        const samples = await source.read(first, span, channel);
+        const samples = await filteredRead(first, span, channel);
         guard(token);
         return { wave: new Float32Array(0), samples, firstSample: first, mode: 'samples' };
     }
@@ -736,7 +881,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
         const lo = new Float32Array(width).fill(Infinity), hi = new Float32Array(width).fill(-Infinity);
         for (let p = first; p < last; p += 65536) {
             guard(token);
-            const a = await source.read(p, Math.min(65536, last - p), channel);
+            const a = await filteredRead(p, Math.min(65536, last - p), channel);
             for (let i = 0; i < a.length; i++) {
                 const x = Math.min(width - 1, Math.floor((p + i - first) / span * width));
                 lo[x] = Math.min(lo[x], a[i]);
@@ -750,7 +895,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
         }
         for (let x = 0; x < width; x++) {
             if (lo[x] === Infinity) {
-                const p = first + Math.min(span - 1, Math.floor((x + .5) / width * span)), a = await source.read(p, 1, channel);
+                const p = first + Math.min(span - 1, Math.floor((x + .5) / width * span)), a = await filteredRead(p, 1, channel);
                 wave[x * 2] = wave[x * 2 + 1] = a[0];
             }
             else {
@@ -778,7 +923,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
         const n = Math.max(1, Math.min(2048, Math.floor((preview ? 65536 : 1048576 * overscan) / width)));
         for (let x = 0; x < width; x++) {
             guard(token);
-            const center = Math.floor(first + (x + .5) / width * span), a = await source.read(Math.max(first, center - Math.floor(n / 2)), Math.min(n, span), channel);
+            const center = Math.floor(first + (x + .5) / width * span), a = await filteredRead(Math.max(first, center - Math.floor(n / 2)), Math.min(n, span), channel);
             let lo = Infinity, hi = -Infinity;
             for (const v of a) {
                 lo = Math.min(lo, v);
@@ -796,7 +941,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
     guard(token);
     return { wave, mode };
 }
-function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
+function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes + (filterKernelFFT ? filterKernelFFT.re.byteLength + filterKernelFFT.im.byteLength : 0), filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), preview = p.preview === true;
     const overscan = preview ? 1 : clamp(Number(p.overscan) || 1, 1, 1.5);
@@ -856,7 +1001,7 @@ async function render(p, token) {
                     const frameKey = p.channel + ':' + n + ':' + frame * hop;
                     let frameDB = spectra.get(frameKey);
                     if (!frameDB) {
-                        frameDB = spectrum(await source.read(frame * hop - n / 2, n, p.channel), n);
+                        frameDB = spectrum(await filteredRead(frame * hop - n / 2, n, p.channel), n);
                         spectra.put(frameKey, frameDB, frameDB.byteLength);
                     }
                     for (let k = 0; k < localDB.length; k++) localDB[k] = Math.max(localDB[k], frameDB[k]);
@@ -865,7 +1010,7 @@ async function render(p, token) {
             }
             let db = spectralLevel ? null : localPeaks ? localDB : spectra.get(key);
             if (!spectralLevel && !db) {
-                const a = await source.read(center - n / 2, n, p.channel);
+                const a = await filteredRead(center - n / 2, n, p.channel);
                 db = spectrum(a, n);
                 spectra.put(key, db, db.byteLength);
             }
@@ -938,15 +1083,15 @@ function createOverview(channel, fft, previous = null) {
     const hop = fft / 4, frameCount = Math.ceil(source.frames / hop);
     const group = overviewBlock(frameCount, 8192), count = Math.ceil(frameCount / group);
     const freqGroup = Math.ceil((fft / 2 + 1) / 512), bands = Math.ceil((fft / 2 + 1) / freqGroup);
-    const reuse = previous?.waveReady && previous.channel === channel;
-    return { version: OVERVIEW_VERSION, channel, fft, hop, frameCount, group, freqGroup, bands,
+    const reuse = previous?.waveReady && previous.channel === channel && previous.filterKey === filterSettingsKey();
+    return { version: OVERVIEW_VERSION, channel, fft, filterKey: filterSettingsKey(), hop, frameCount, group, freqGroup, bands,
         waveLevels: reuse ? previous.waveLevels : [{ block, min: new Float32Array(bins).fill(Infinity), max: new Float32Array(bins).fill(-Infinity) }],
         specLevels: [{ block: group * hop, count, peaks: new Int16Array(count * bands).fill(-32768) }],
         wavePosition: reuse ? source.frames : 0, nextFrame: 0, waveReady: !!reuse,
         active: false, complete: false, revision: ++overviewRevision, storage: 'Memory only' };
 }
 function overviewState(o = overview) {
-    return o ? { channel: o.channel, fft: o.fft, active: o.active, progress: o.nextFrame / o.frameCount,
+    return o ? { channel: o.channel, fft: o.fft, filterKey: o.filterKey, active: o.active, progress: o.nextFrame / o.frameCount,
         complete: o.complete, waveReady: o.waveReady, revision: o.revision, storage: o.storage,
         bytes: overviewBytes(o), timeBin: o.group * o.hop / source.sampleRate, frequencyBin: o.freqGroup * source.sampleRate / o.fft }
         : { active: false, progress: 0, complete: false, revision: overviewRevision };
@@ -999,7 +1144,7 @@ async function overviewLoop(token) {
             // n/4-hop FFT windows. Keep overlap at chunk boundaries and zero-pad EOF.
             const p = Math.floor(o.nextFrame * o.hop / 65536) * 65536;
             const n = Math.min(65536, source.frames - p);
-            const a = await source.read(p - o.fft / 2, n + o.fft, o.channel);
+            const a = await filteredRead(p - o.fft / 2, n + o.fft, o.channel);
             if (o !== overview || !o.active || token !== overviewToken) return;
             const wave = o.waveLevels[0];
             if (o.wavePosition < p + n) {
@@ -1038,7 +1183,7 @@ async function overviewLoop(token) {
     catch (e) {
         if (e.message === 'OVERVIEW_CANCELLED' || o !== overview || token !== overviewToken) return;
         o.active = false;
-        postMessage({ event: 'overviewError', channel: o.channel, fft: o.fft, error: e.message });
+        postMessage({ event: 'overviewError', channel: o.channel, fft: o.fft, filterKey: o.filterKey, error: e.message });
     }
 }
 // IndexedDB is optional and holds derived summaries only, never raw audio or labels.
@@ -1127,8 +1272,8 @@ async function recordingOverviewKey() {
     })();
     return overviewIdentity;
 }
-function validOverviewRecord(r, channel, fft) {
-    if (!r || r.version !== OVERVIEW_VERSION || r.frames !== source.frames || r.sampleRate !== source.sampleRate ||
+function validOverviewRecord(r, channel, fft, filterKey = filterSettingsKey()) {
+    if (!r || (r.filterKey || "off") !== filterKey || r.version !== OVERVIEW_VERSION || r.frames !== source.frames || r.sampleRate !== source.sampleRate ||
         r.channel !== channel || r.fft !== fft || !Array.isArray(r.waveLevels) || !Array.isArray(r.specLevels)) return false;
     const hop = fft / 4, frameCount = Math.ceil(source.frames / hop), group = overviewBlock(frameCount, 8192);
     const freqGroup = Math.ceil((fft / 2 + 1) / 512), bands = Math.ceil((fft / 2 + 1) / freqGroup);
@@ -1151,14 +1296,19 @@ function validOverviewRecord(r, channel, fft) {
     }
     return index === r.specLevels.length && overviewBytes(r) === r.bytes && r.bytes < 20 * MiB;
 }
+async function overviewStorageKey(channel, fft, filterKey = filterSettingsKey()) {
+    const base = (await recordingOverviewKey()) + ':' + channel + ':' + fft;
+    // Keep compatibility with existing unfiltered IndexedDB overviews.
+    return filterKey === 'off' ? base : base + ':filter:' + filterKey;
+}
 async function saveOverview(o) {
     const generation = overviewStorageGeneration;
     try {
-        const key = (await recordingOverviewKey()) + ':' + o.channel + ':' + o.fft;
+        const key = await overviewStorageKey(o.channel, o.fft, o.filterKey);
         if (o !== overview || !o.remember || generation !== overviewStorageGeneration) return;
         const { channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels } = o;
         await overviewStorage('put', key, { key, version: OVERVIEW_VERSION, frames: source.frames, sampleRate: source.sampleRate,
-            channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
+            channel, fft, filterKey: o.filterKey, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
         if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
     } catch (e) {
         if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
@@ -1172,7 +1322,7 @@ async function selectOverview(channel, fft, remember) {
     overview = o;
     if (remember) {
         try {
-            const key = (await recordingOverviewKey()) + ':' + channel + ':' + fft;
+            const key = await overviewStorageKey(channel, fft, o.filterKey);
             const record = await overviewStorage('get', key);
             if (token !== overviewToken || overview !== o) return { stale: true };
             if (validOverviewRecord(record, channel, fft)) {
@@ -1209,7 +1359,7 @@ async function audioChunk(p) {
     const frames = Math.max(0, Math.min(Math.floor(p.frames), Math.ceil((source.frames - p.position) / ratio), Math.floor(262144 / ratio)));
     if (!frames)
         return { data: new Float32Array(), next: source.frames };
-    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await source.read(first, count, p.channel), out = new Float32Array(frames);
+    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await filteredRead(first, count, p.channel), out = new Float32Array(frames);
     if (ratio === 1 && Number.isInteger(p.position))
         out.set(a.subarray(32, 32 + frames));
     else {
@@ -1234,6 +1384,10 @@ self.onmessage = async ({ data: m }) => {
         }
         if (!source)
             throw Error('No audio source.');
+        if (m.type === 'setFilter') {
+            postMessage({ id: m.id, result: updateAudioFilter(m.params) });
+            return;
+        }
         if (m.type === 'render') {
             renderToken++;
             if (pendingRender)
@@ -1256,11 +1410,11 @@ self.onmessage = async ({ data: m }) => {
             postMessage({ id: m.id, result }, [result.data.buffer]);
             return;
         }
-        else if (m.type === 'read') {
+        else if (m.type === 'read' || m.type === 'readFiltered') {
             const p = m.params;
             if (p.count > 65536 || p.count < 0 || !Number.isInteger(p.start) || !Number.isInteger(p.count) || p.channel < -1 || p.channel >= source.channels)
                 throw Error('Invalid diagnostic sample window.');
-            result = await source.read(p.start, p.count, p.channel);
+            result = m.type === 'read' ? await source.read(p.start, p.count, p.channel) : await filteredRead(p.start, p.count, p.channel);
             postMessage({ id: m.id, result }, [result.buffer]);
             return;
         }
@@ -1268,7 +1422,7 @@ self.onmessage = async ({ data: m }) => {
             const p = m.params;
             if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(p.fft) || !Number.isFinite(p.time) || !Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels)
                 throw Error('Invalid spectral probe.');
-            const data = await source.read(Math.round(p.time * source.sampleRate) - p.fft / 2, p.fft, p.channel), db = spectrum(data, p.fft);
+            const data = await filteredRead(Math.round(p.time * source.sampleRate) - p.fft / 2, p.fft, p.channel), db = spectrum(data, p.fft);
             postMessage({ id: m.id, result: { sampleRate: source.sampleRate, db } }, [db.buffer]);
             return;
         }
@@ -1333,7 +1487,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1512,6 +1666,101 @@ self.onmessage = async ({ data: m }) => {
     function fmt(v, digits = 6) { return Number(v.toFixed(digits)).toString(); }
     function uid() { return globalThis.crypto?.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); }
     function channel() { return Number($('channel').value); }
+
+    function audioFilterKey(f = app.audioFilter) { return f ? JSON.stringify([f.high, f.low]) : 'off'; }
+    function readAudioFilterInputs() {
+        if (!app.meta) return null;
+        const cutoff = id => {
+            const input = $(id), value = input.value.trim();
+            if (input.validity.badInput) throw Error('Enter a valid numeric filter cutoff.');
+            if (!value) return null;
+            const hz = Number(value), nyquist = app.meta.sampleRate / 2;
+            if (!Number.isFinite(hz) || hz <= 0 || hz >= nyquist)
+                throw Error('Filter cutoffs must be above 0 and below Nyquist (' + fmt(nyquist) + ' Hz).');
+            return hz;
+        };
+        const high = cutoff('highPassHz'), low = cutoff('lowPassHz');
+        if (high !== null && low !== null && high >= low)
+            throw Error('High-pass cutoff must be lower than low-pass cutoff.');
+        return high === null && low === null ? null : { high, low };
+    }
+    function audioFilterLabel(f, taps = 0) {
+        if (!f) return 'Off · original audio';
+        const label = f.high !== null && f.low !== null ? 'Band-pass ' + fmt(f.high) + '–' + fmt(f.low) + ' Hz (one pass)'
+            : f.high !== null ? 'High-pass ' + fmt(f.high) + ' Hz' : 'Low-pass ' + fmt(f.low) + ' Hz';
+        return label + (taps ? ' · ' + taps + '-tap zero-phase FIR' : '');
+    }
+    async function applyAudioFilter() {
+        if (!app.meta) return;
+        // Coalesce edits while worker responses or overview restoration are pending.
+        if (app.filterUpdating) { app.filterQueued = true; return; }
+        let next;
+        try { next = readAudioFilterInputs(); }
+        catch (e) {
+            $('audioFilterInfo').textContent = e.message + ' · previous filter retained';
+            $('audioFilterInfo').classList.add('error');
+            return;
+        }
+        $('audioFilterInfo').classList.remove('error');
+        if (audioFilterKey(next) === audioFilterKey()) {
+            $('audioFilterInfo').textContent = audioFilterLabel(app.audioFilter, app.filterTaps);
+            return;
+        }
+        const serial = ++app.filterSerial, epoch = app.loadEpoch, previous = app.audioFilter, wasPlaying = app.playing || app.filterResumePlayback;
+        app.filterResumePlayback = wasPlaying;
+        app.filterUpdating = true;
+        pause();
+        $('playPauseBtn').disabled = true;
+        cancelZoomPrefetch();
+        app.renderSerial++;
+        clearTimeout(app.renderTimer); app.renderTimer = 0;
+        clearTimeout(app.refineTimer); app.refineTimer = 0;
+        app.analysis?.call('cancelRender').catch(() => {});
+        app.renderTarget = null;
+        app.lastRender = null; app.renderCache = []; app.renderCacheBytes = 0;
+        app.renderPending = true;
+        $('renderInfo').textContent = 'Applying audio filter…';
+        $('audioFilterInfo').textContent = 'Applying · ' + audioFilterLabel(next);
+        paintAll();
+        try {
+            const [analysis] = await Promise.all([
+                app.analysis.call('setFilter', next), app.playback.call('setFilter', next)
+            ]);
+            if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
+            app.audioFilter = next;
+            app.filterTaps = analysis.taps;
+            $('audioFilterInfo').textContent = audioFilterLabel(next, analysis.taps);
+            updateOverviewControls({ active: false, progress: 0 });
+            await restoreOverview();
+            if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
+            requestRender();
+            if (wasPlaying && !app.filterQueued) { app.filterResumePlayback = false; await play(); }
+        }
+        catch (e) {
+            if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
+            try {
+                await Promise.all([app.analysis.call('setFilter', previous), app.playback.call('setFilter', previous)]);
+            } catch { /* Preserve original error. */ }
+            app.audioFilter = previous;
+            $('audioFilterInfo').textContent = e.message + ' · previous filter retained';
+            $('audioFilterInfo').classList.add('error');
+            requestRender();
+            app.filterResumePlayback = false;
+            if (wasPlaying) await play();
+            report(e);
+        }
+        finally {
+            if (epoch === app.loadEpoch && serial === app.filterSerial) {
+                app.filterUpdating = false;
+                $('playPauseBtn').disabled = !app.meta;
+                if (app.filterQueued) {
+                    app.filterQueued = false;
+                    applyAudioFilter().catch(report);
+                }
+            }
+        }
+    }
+
     // Audacity-compatible display transforms (not filterbanks). Keep Hz as the
     // canonical unit for every selection, marker and exported annotation.
     // Source: Audacity NumberScale (Mel, Traunmueller Bark, ERB and Period).
@@ -1575,7 +1824,7 @@ self.onmessage = async ({ data: m }) => {
         $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
         return f;
     }
-    const readyControls = ['channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
+    const readyControls = ['highPassHz', 'lowPassHz', 'channel', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
             $(id).disabled = !enabled;
@@ -1591,6 +1840,12 @@ self.onmessage = async ({ data: m }) => {
         cancelZoomPrefetch();
         app.zoomHint = null;
         const epoch = ++app.loadEpoch;
+        app.filterSerial++;
+        app.filterUpdating = false; app.filterQueued = false; app.filterResumePlayback = false;
+        app.audioFilter = null; app.filterTaps = 0;
+        $('highPassHz').value = ''; $('lowPassHz').value = '';
+        $('audioFilterInfo').textContent = 'Off · original audio';
+        $('audioFilterInfo').classList.remove('error');
         app.overviewRequest++;
         app.importSerial++;
         pause();
@@ -1656,6 +1911,7 @@ self.onmessage = async ({ data: m }) => {
                 $('channel').append(new Option('Mix (average)', '-1'));
             $('displayFreqMin').value = 0;
             $('displayFreqMax').value = meta.sampleRate / 2;
+            $('highPassHz').max = $('lowPassHz').max = meta.sampleRate / 2;
             $('gotoInput').max = meta.duration;
             $('scrubSlider').max = meta.duration;
             $('scrubSlider').step = 1 / meta.sampleRate;
@@ -1922,7 +2178,7 @@ self.onmessage = async ({ data: m }) => {
         if (max <= min) max = Math.min(20, min + 1);
         return JSON.stringify([app.loadEpoch, channel(), Number($('fftSize').value),
             f.min, f.max, currentScale(), min, max, $('colorMap').value,
-            Math.ceil(g.w), Math.ceil(g.h), !!app.overview.complete, app.overview.revision || 0]);
+            Math.ceil(g.w), Math.ceil(g.h), audioFilterKey(), !!app.overview.complete, app.overview.revision || 0]);
     }
     function sameZoom(a, b) {
         return Math.abs(a - b) <= Math.max(1e-12, Math.max(a, b) * 1e-10);
@@ -2069,11 +2325,11 @@ self.onmessage = async ({ data: m }) => {
     }
     function renderDescription(r, prefix = 'Waveform: ') {
         const s = r.stats;
-        return prefix + (r.mode === 'samples' ? 'connected native samples' : r.mode + ' connected envelope') +
+        return prefix + (r.mode === 'samples' ? (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') : r.mode + ' connected envelope') +
             (r.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' +
             fmt(app.meta.sampleRate / r.fft, 2) + ' Hz · FFT hop ' + fmt(r.fft / 4 / app.meta.sampleRate, 5) +
             ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' : r.columns + ' sampled time columns') + ' · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
-            fmt((s.byteCache + s.frameCache + s.fftCache + s.overviewBytes + app.renderCacheBytes) / 1048576, 1) + ' MiB';
+            fmt((s.byteCache + s.frameCache + s.fftCache + (s.filterCache || 0) + s.overviewBytes + app.renderCacheBytes) / 1048576, 1) + ' MiB';
     }
     function requestRender() {
         cancelZoomPrefetch();
@@ -2187,13 +2443,13 @@ self.onmessage = async ({ data: m }) => {
     }
     function onWorkerEvent(m) {
         if (m.event === 'overview') {
-            if (m.channel !== channel() || m.fft !== Number($('fftSize').value)) return;
+            if (m.channel !== channel() || m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
             const changed = app.overview.revision !== m.revision;
             updateOverviewControls(m);
             if (m.complete && changed) requestRender();
         }
         else if (m.event === 'overviewError') {
-            if (m.channel !== channel() || m.fft !== Number($('fftSize').value)) return;
+            if (m.channel !== channel() || m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
             updateOverviewControls({ ...app.overview, active: false });
             $('overviewInfo').textContent = 'Overview indexing failed: ' + m.error;
         }
@@ -3746,6 +4002,7 @@ self.onmessage = async ({ data: m }) => {
             seek($('gotoInput').value);
     });
     handle('volume', 'input', updateVolume);
+    for (const id of ['highPassHz', 'lowPassHz']) handle(id, 'change', applyAudioFilter);
     handle('speed', 'change', () => {
         if (app.playing) {
             pause();
@@ -4025,7 +4282,7 @@ self.onmessage = async ({ data: m }) => {
         tracks: Array.from(app.importSources.values()).filter(source => source.mode === 'stack')
             .map(source => ({ id: source.id, filename: source.filename,
                 count: filteredMarkerIndex('track:' + source.id).items.length })),
-    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
                 return 0;
             const a = new Float32Array(app.analyser.fftSize);
