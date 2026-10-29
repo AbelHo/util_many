@@ -693,6 +693,141 @@ function fftPlan(n) {
     plan = { window, reverse, cos, sin, sum, re: new Float64Array(n), im: new Float64Array(n) };
     return fftPlans.put(n, plan, n * 36);
 }
+
+/* Zero-phase, single-stage FIR filtering. A band-pass is one windowed-sinc
+   kernel (LP(high cutoff) - LP(low cutoff)), never cascaded HP and LP passes.
+   Fixed aligned FFT-convolution blocks make random seeks, adjacent chunks and
+   channel mixes produce identical samples without file-wide decoding or delay. */
+const FILTER_BLOCK = 16384, FILTER_FFT = 32768, filteredBlocks = new LRU(32 * MiB);
+let audioFilter = null, filterRevision = 0, filterKernel = null, filterKernelFFT = null;
+const filterSettingsKey = (f = audioFilter) => f ? JSON.stringify([f.high, f.low]) : 'off';
+function buildFilterKernel(f) {
+    const sampleRate = source.sampleRate, nyquist = sampleRate / 2;
+    const margins = [f.high === null ? Infinity : Math.min(f.high, nyquist - f.high),
+        f.low === null ? Infinity : Math.min(f.low, nyquist - f.low)];
+    if (f.high !== null && f.low !== null) margins.push(f.low - f.high);
+    const transition = Math.max(sampleRate / 8192, Math.min(...margins) * .3);
+    let taps = Math.max(65, Math.min(4097, Math.ceil(3.3 * sampleRate / transition)));
+    if (!(taps & 1)) taps++;
+    const radius = (taps - 1) / 2, coefficients = new Float64Array(taps);
+    const lowpass = (hz, offset) => offset === 0 ? 2 * hz / sampleRate :
+        Math.sin(2 * Math.PI * hz * offset / sampleRate) / (Math.PI * offset);
+    for (let i = 0; i < taps; i++) {
+        const t = i - radius, window = .54 + .46 * Math.cos(2 * Math.PI * t / (taps - 1));
+        const value = f.high !== null && f.low !== null ? lowpass(f.low, t) - lowpass(f.high, t)
+            : f.high !== null ? (t === 0 ? 1 : 0) - lowpass(f.high, t) : lowpass(f.low, t);
+        coefficients[i] = value * window;
+    }
+    // Normalize the appropriate *passband*, not DC for HP/BP (which must reject DC).
+    const reference = f.high === null ? 0 : f.low === null ?
+        (f.high + nyquist) / 2 : (f.high + f.low) / 2;
+    let gain = 0;
+    for (let i = 0; i < taps; i++)
+        gain += coefficients[i] * Math.cos(2 * Math.PI * reference * (i - radius) / sampleRate);
+    if (!Number.isFinite(gain) || gain < .05)
+        throw Error('Filter band is too narrow for this recording rate; widen the cutoffs.');
+    for (let i = 0; i < taps; i++) coefficients[i] /= gain;
+    return coefficients;
+}
+// Uses the existing bounded FFT-plan cache; unlike spectrum(), this transform
+// accepts time-order samples and explicitly performs bit-reversal and inverse FFT.
+function filterTransform(plan, inverse = false) {
+    const { re, im, reverse, cos, sin } = plan, n = re.length;
+    for (let i = 0; i < n; i++) {
+        const j = reverse[i];
+        if (j > i) {
+            let t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+    for (let len = 2; len <= n; len *= 2) {
+        const half = len / 2, step = n / len;
+        for (let offset = 0; offset < n; offset += len)
+            for (let j = 0; j < half; j++) {
+                const a = offset + j, b = a + half, k = j * step;
+                const s = inverse ? -sin[k] : sin[k];
+                const tr = re[b] * cos[k] - im[b] * s, ti = re[b] * s + im[b] * cos[k];
+                re[b] = re[a] - tr; im[b] = im[a] - ti;
+                re[a] += tr; im[a] += ti;
+            }
+    }
+    if (inverse)
+        for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+}
+function kernelSpectrum() {
+    if (!filterKernelFFT) {
+        const plan = fftPlan(FILTER_FFT);
+        plan.re.fill(0); plan.im.fill(0);
+        plan.re.set(filterKernel);
+        filterTransform(plan);
+        filterKernelFFT = { re: plan.re.slice(), im: plan.im.slice() };
+    }
+    return filterKernelFFT;
+}
+async function filteredBlock(index, channel, revision = filterRevision) {
+    const key = revision + ':' + channel + ':' + index, cached = filteredBlocks.get(key);
+    if (cached) return cached;
+    const kernel = filterKernel, radius = (kernel.length - 1) / 2;
+    const first = index * FILTER_BLOCK, count = Math.min(FILTER_BLOCK, source.frames - first);
+    // Read a symmetric halo: each output aligns with its original sample time,
+    // even across block boundaries and with zero padding at start/end of file.
+    const raw = await source.read(first - radius, count + radius * 2, channel);
+    const kernelFFT = kernelSpectrum(), plan = fftPlan(FILTER_FFT);
+    plan.re.fill(0); plan.im.fill(0);
+    plan.re.set(raw);
+    filterTransform(plan);
+    for (let k = 0; k < FILTER_FFT; k++) {
+        const real = plan.re[k] * kernelFFT.re[k] - plan.im[k] * kernelFFT.im[k];
+        const imag = plan.re[k] * kernelFFT.im[k] + plan.im[k] * kernelFFT.re[k];
+        plan.re[k] = real; plan.im[k] = imag;
+    }
+    filterTransform(plan, true);
+    const data = new Float32Array(count), offset = kernel.length - 1;
+    for (let i = 0; i < count; i++) data[i] = plan.re[offset + i];
+    if (revision === filterRevision) filteredBlocks.put(key, data, data.byteLength);
+    return data;
+}
+async function filteredRead(start, count, channel) {
+    if (!audioFilter) return source.read(start, count, channel);
+    if (!Number.isInteger(start) || !Number.isInteger(count) || count < 0 || count > 4194304)
+        throw Error('Invalid filtered sample window.');
+    const out = new Float32Array(count), end = Math.min(source.frames, start + count);
+    let at = Math.max(0, start);
+    const revision = filterRevision;
+    while (at < end) {
+        const index = Math.floor(at / FILTER_BLOCK), block = await filteredBlock(index, channel, revision);
+        const local = at - index * FILTER_BLOCK, length = Math.min(end - at, block.length - local);
+        out.set(block.subarray(local, local + length), at - start);
+        at += length;
+    }
+    return out;
+}
+function updateAudioFilter(settings) {
+    const high = settings?.high ?? null, low = settings?.low ?? null, nyquist = source.sampleRate / 2;
+    for (const hz of [high, low])
+        if (hz !== null && (typeof hz !== 'number' || !Number.isFinite(hz) || hz <= 0 || hz >= nyquist))
+            throw Error('Filter cutoffs must be greater than 0 and below Nyquist (' + nyquist + ' Hz).');
+    if (high !== null && low !== null && high >= low)
+        throw Error('High-pass cutoff must be lower than low-pass cutoff.');
+    const next = high === null && low === null ? null : { high, low };
+    if (filterSettingsKey(next) === filterSettingsKey())
+        return { key: filterSettingsKey(), taps: filterKernel?.length || 0 };
+    const kernel = next ? buildFilterKernel(next) : null;
+    renderToken++;
+    if (pendingRender) postMessage({ id: pendingRender.id, result: { cancelled: true } });
+    pendingRender = null;
+    overviewToken++;
+    if (overview) overview.active = false;
+    overview = null;
+    overviewRevision++;
+    audioFilter = next;
+    filterKernel = kernel;
+    filterKernelFFT = null;
+    filterRevision++;
+    filteredBlocks.map.clear(); filteredBlocks.bytes = 0;
+    spectra.map.clear(); spectra.bytes = 0;
+    return { key: filterSettingsKey(), taps: filterKernel?.length || 0 };
+}
 function spectrum(samples, n, output = new Float32Array(n / 2 + 1)) {
     const plan = fftPlan(n), { re, im } = plan;
     im.fill(0);
@@ -724,7 +859,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
     // At four or fewer samples per pixel, preserve every native sample and its order.
     // Including pan margins, width is capped at 2400: at most 9600 samples (38 KiB).
     if (span <= width * 4) {
-        const samples = await source.read(first, span, channel);
+        const samples = await filteredRead(first, span, channel);
         guard(token);
         return { wave: new Float32Array(0), samples, firstSample: first, mode: 'samples' };
     }
@@ -736,7 +871,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
         const lo = new Float32Array(width).fill(Infinity), hi = new Float32Array(width).fill(-Infinity);
         for (let p = first; p < last; p += 65536) {
             guard(token);
-            const a = await source.read(p, Math.min(65536, last - p), channel);
+            const a = await filteredRead(p, Math.min(65536, last - p), channel);
             for (let i = 0; i < a.length; i++) {
                 const x = Math.min(width - 1, Math.floor((p + i - first) / span * width));
                 lo[x] = Math.min(lo[x], a[i]);
@@ -750,7 +885,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
         }
         for (let x = 0; x < width; x++) {
             if (lo[x] === Infinity) {
-                const p = first + Math.min(span - 1, Math.floor((x + .5) / width * span)), a = await source.read(p, 1, channel);
+                const p = first + Math.min(span - 1, Math.floor((x + .5) / width * span)), a = await filteredRead(p, 1, channel);
                 wave[x * 2] = wave[x * 2 + 1] = a[0];
             }
             else {
@@ -778,7 +913,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
         const n = Math.max(1, Math.min(2048, Math.floor((preview ? 65536 : 1048576 * overscan) / width)));
         for (let x = 0; x < width; x++) {
             guard(token);
-            const center = Math.floor(first + (x + .5) / width * span), a = await source.read(Math.max(first, center - Math.floor(n / 2)), Math.min(n, span), channel);
+            const center = Math.floor(first + (x + .5) / width * span), a = await filteredRead(Math.max(first, center - Math.floor(n / 2)), Math.min(n, span), channel);
             let lo = Infinity, hi = -Infinity;
             for (const v of a) {
                 lo = Math.min(lo, v);
@@ -796,7 +931,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
     guard(token);
     return { wave, mode };
 }
-function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
+function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes, filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), preview = p.preview === true;
     const overscan = preview ? 1 : clamp(Number(p.overscan) || 1, 1, 1.5);
@@ -856,7 +991,7 @@ async function render(p, token) {
                     const frameKey = p.channel + ':' + n + ':' + frame * hop;
                     let frameDB = spectra.get(frameKey);
                     if (!frameDB) {
-                        frameDB = spectrum(await source.read(frame * hop - n / 2, n, p.channel), n);
+                        frameDB = spectrum(await filteredRead(frame * hop - n / 2, n, p.channel), n);
                         spectra.put(frameKey, frameDB, frameDB.byteLength);
                     }
                     for (let k = 0; k < localDB.length; k++) localDB[k] = Math.max(localDB[k], frameDB[k]);
@@ -865,7 +1000,7 @@ async function render(p, token) {
             }
             let db = spectralLevel ? null : localPeaks ? localDB : spectra.get(key);
             if (!spectralLevel && !db) {
-                const a = await source.read(center - n / 2, n, p.channel);
+                const a = await filteredRead(center - n / 2, n, p.channel);
                 db = spectrum(a, n);
                 spectra.put(key, db, db.byteLength);
             }
@@ -938,15 +1073,15 @@ function createOverview(channel, fft, previous = null) {
     const hop = fft / 4, frameCount = Math.ceil(source.frames / hop);
     const group = overviewBlock(frameCount, 8192), count = Math.ceil(frameCount / group);
     const freqGroup = Math.ceil((fft / 2 + 1) / 512), bands = Math.ceil((fft / 2 + 1) / freqGroup);
-    const reuse = previous?.waveReady && previous.channel === channel;
-    return { version: OVERVIEW_VERSION, channel, fft, hop, frameCount, group, freqGroup, bands,
+    const reuse = previous?.waveReady && previous.channel === channel && previous.filterKey === filterSettingsKey();
+    return { version: OVERVIEW_VERSION, channel, fft, filterKey: filterSettingsKey(), hop, frameCount, group, freqGroup, bands,
         waveLevels: reuse ? previous.waveLevels : [{ block, min: new Float32Array(bins).fill(Infinity), max: new Float32Array(bins).fill(-Infinity) }],
         specLevels: [{ block: group * hop, count, peaks: new Int16Array(count * bands).fill(-32768) }],
         wavePosition: reuse ? source.frames : 0, nextFrame: 0, waveReady: !!reuse,
         active: false, complete: false, revision: ++overviewRevision, storage: 'Memory only' };
 }
 function overviewState(o = overview) {
-    return o ? { channel: o.channel, fft: o.fft, active: o.active, progress: o.nextFrame / o.frameCount,
+    return o ? { channel: o.channel, fft: o.fft, filterKey: o.filterKey, active: o.active, progress: o.nextFrame / o.frameCount,
         complete: o.complete, waveReady: o.waveReady, revision: o.revision, storage: o.storage,
         bytes: overviewBytes(o), timeBin: o.group * o.hop / source.sampleRate, frequencyBin: o.freqGroup * source.sampleRate / o.fft }
         : { active: false, progress: 0, complete: false, revision: overviewRevision };
@@ -999,7 +1134,7 @@ async function overviewLoop(token) {
             // n/4-hop FFT windows. Keep overlap at chunk boundaries and zero-pad EOF.
             const p = Math.floor(o.nextFrame * o.hop / 65536) * 65536;
             const n = Math.min(65536, source.frames - p);
-            const a = await source.read(p - o.fft / 2, n + o.fft, o.channel);
+            const a = await filteredRead(p - o.fft / 2, n + o.fft, o.channel);
             if (o !== overview || !o.active || token !== overviewToken) return;
             const wave = o.waveLevels[0];
             if (o.wavePosition < p + n) {
@@ -1038,7 +1173,7 @@ async function overviewLoop(token) {
     catch (e) {
         if (e.message === 'OVERVIEW_CANCELLED' || o !== overview || token !== overviewToken) return;
         o.active = false;
-        postMessage({ event: 'overviewError', channel: o.channel, fft: o.fft, error: e.message });
+        postMessage({ event: 'overviewError', channel: o.channel, fft: o.fft, filterKey: o.filterKey, error: e.message });
     }
 }
 // IndexedDB is optional and holds derived summaries only, never raw audio or labels.
@@ -1127,8 +1262,8 @@ async function recordingOverviewKey() {
     })();
     return overviewIdentity;
 }
-function validOverviewRecord(r, channel, fft) {
-    if (!r || r.version !== OVERVIEW_VERSION || r.frames !== source.frames || r.sampleRate !== source.sampleRate ||
+function validOverviewRecord(r, channel, fft, filterKey = filterSettingsKey()) {
+    if (!r || (r.filterKey || "off") !== filterKey || r.version !== OVERVIEW_VERSION || r.frames !== source.frames || r.sampleRate !== source.sampleRate ||
         r.channel !== channel || r.fft !== fft || !Array.isArray(r.waveLevels) || !Array.isArray(r.specLevels)) return false;
     const hop = fft / 4, frameCount = Math.ceil(source.frames / hop), group = overviewBlock(frameCount, 8192);
     const freqGroup = Math.ceil((fft / 2 + 1) / 512), bands = Math.ceil((fft / 2 + 1) / freqGroup);
@@ -1151,14 +1286,19 @@ function validOverviewRecord(r, channel, fft) {
     }
     return index === r.specLevels.length && overviewBytes(r) === r.bytes && r.bytes < 20 * MiB;
 }
+async function overviewStorageKey(channel, fft, filterKey = filterSettingsKey()) {
+    const base = (await recordingOverviewKey()) + ':' + channel + ':' + fft;
+    // Keep compatibility with existing unfiltered IndexedDB overviews.
+    return filterKey === 'off' ? base : base + ':filter:' + filterKey;
+}
 async function saveOverview(o) {
     const generation = overviewStorageGeneration;
     try {
-        const key = (await recordingOverviewKey()) + ':' + o.channel + ':' + o.fft;
+        const key = await overviewStorageKey(o.channel, o.fft, o.filterKey);
         if (o !== overview || !o.remember || generation !== overviewStorageGeneration) return;
         const { channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels } = o;
         await overviewStorage('put', key, { key, version: OVERVIEW_VERSION, frames: source.frames, sampleRate: source.sampleRate,
-            channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
+            channel, fft, filterKey: o.filterKey, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
         if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
     } catch (e) {
         if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
@@ -1172,7 +1312,7 @@ async function selectOverview(channel, fft, remember) {
     overview = o;
     if (remember) {
         try {
-            const key = (await recordingOverviewKey()) + ':' + channel + ':' + fft;
+            const key = await overviewStorageKey(channel, fft, o.filterKey);
             const record = await overviewStorage('get', key);
             if (token !== overviewToken || overview !== o) return { stale: true };
             if (validOverviewRecord(record, channel, fft)) {
@@ -1209,7 +1349,7 @@ async function audioChunk(p) {
     const frames = Math.max(0, Math.min(Math.floor(p.frames), Math.ceil((source.frames - p.position) / ratio), Math.floor(262144 / ratio)));
     if (!frames)
         return { data: new Float32Array(), next: source.frames };
-    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await source.read(first, count, p.channel), out = new Float32Array(frames);
+    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await filteredRead(first, count, p.channel), out = new Float32Array(frames);
     if (ratio === 1 && Number.isInteger(p.position))
         out.set(a.subarray(32, 32 + frames));
     else {
@@ -1234,6 +1374,10 @@ self.onmessage = async ({ data: m }) => {
         }
         if (!source)
             throw Error('No audio source.');
+        if (m.type === 'setFilter') {
+            postMessage({ id: m.id, result: updateAudioFilter(m.params) });
+            return;
+        }
         if (m.type === 'render') {
             renderToken++;
             if (pendingRender)
@@ -1268,7 +1412,7 @@ self.onmessage = async ({ data: m }) => {
             const p = m.params;
             if (![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(p.fft) || !Number.isFinite(p.time) || !Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels)
                 throw Error('Invalid spectral probe.');
-            const data = await source.read(Math.round(p.time * source.sampleRate) - p.fft / 2, p.fft, p.channel), db = spectrum(data, p.fft);
+            const data = await filteredRead(Math.round(p.time * source.sampleRate) - p.fft / 2, p.fft, p.channel), db = spectrum(data, p.fft);
             postMessage({ id: m.id, result: { sampleRate: source.sampleRate, db } }, [db.buffer]);
             return;
         }
