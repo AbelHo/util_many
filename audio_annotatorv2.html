@@ -36,9 +36,17 @@ Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel zooms frequency; Shift+wh
 scrubs. Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
-JSON/CSV and Audacity TXT (standard/extended spectral) import is validated atomically; merge/replace, tags, metadata and all marker
-types round-trip. Supports up to 1,000,000 markers and 256 MiB annotation files.
-Bulk imports/clear use undoable Map snapshots; ordinary edits use bounded deltas.
+JSON/CSV and Audacity TXT import is atomic (up to 1M markers / 256 MiB).
+Per-file modes: Merge adds an overlaid label set; Replace clears existing labels,
+tags and stacked tracks; Stack adds one time-aligned label row between waveform
+and spectrogram, overlaid on spectrogram only (not waveform). Multiple files/drop
+offer a separate mode choice per file. Each imported set has a visibility toggle;
+hidden labels remain in the table, memory and exports.
+Source IDs/provenance round-trip in JSON/CSV; Audacity TXT exports flattened labels.
+Rows share pan/zoom/cursor alignment; drag 3px splitters to resize to 10px minimum.
+Double-click plotted label text/geometry or a table Tag/label cell to edit in place;
+edits propagate to every display, undo/redo and exports. Enter saves, Ctrl/Cmd+Enter
+inserts a label newline; Esc cancels. Bulk edits use undoable Map snapshots.
 Sorted time indexes, cached canvas marker layers and a 100-row paged table keep
 navigation responsive with dense labels. Dense views show time-density bins that
 account for EVERY overlapping annotation, without a first-N display cutoff. Zoom
