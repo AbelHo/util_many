@@ -32,8 +32,10 @@ Completed summaries can be restored from optional IndexedDB storage (8 entries /
 128 MiB LRU). Keys include file metadata plus a SHA-256 sampled-content fingerprint,
 channel, FFT and format version. This is not a whole-file hash; Rebuild refreshes it.
 Storage errors fall back to memory with visible status; raw audio/labels are not saved.
-Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel adjusts waveform amplitude
-or zooms spectrogram frequency; Shift+wheel scrubs. Navigate mode drags the view; other modes add points, time ranges, or
+Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel continuously adjusts
+waveform amplitude or zooms spectrogram frequency; Shift+wheel scrubs. Waveform
+amplitude uses the preset selector plus one transient custom value, with no preset
+limits on wheel scaling (only JavaScript's finite numeric range). Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
 JSON/CSV and Audacity TXT import is atomic (up to 1M markers / 256 MiB files) tags, metadata and all marker
@@ -120,7 +122,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section class="panel" aria-label="Annotation tools">
 <div class="row"><strong>Mode</strong><label><input type="radio" name="mode" value="navigate" checked> Navigate</label><label><input type="radio" name="mode" value="point"> Point</label><label><input type="radio" name="mode" value="time_range"> Time range</label><label><input type="radio" name="mode" value="frequency_range"> Frequency range</label></div>
 <div class="row"><label>Tag <input id="tagInput" type="text" maxlength="64" placeholder="Key"></label><label>Label <textarea id="labelInput" rows="1" maxlength="2000" placeholder="Optional note"></textarea></label><button id="addPointBtn" disabled>Add point at cursor</button><button id="undoBtn" disabled>Undo</button><button id="redoBtn" disabled>Redo</button><button id="clearBtn" disabled>Clear markers</button></div>
-<p class="hint">Wheel: pan · Ctrl/Cmd+wheel: time zoom · Alt+wheel: waveform amplitude / spectrogram frequency zoom · Shift+wheel: scrub · Shift+click: remove nearby · Hold an alphanumeric key while drawing to tag.</p>
+<p class="hint">Wheel: pan · Ctrl/Cmd+wheel: time zoom · Alt+wheel: fine waveform amplitude / spectrogram frequency zoom · Shift+wheel: scrub · Shift+click: remove nearby · Hold an alphanumeric key while drawing to tag.</p>
 </section>
 <div class="plot-stack" id="plotStack" aria-label="Synchronized audio and label tracks">
 <div class="plot" id="wavePlot"><canvas id="waveCanvas" aria-hidden="true"></canvas><canvas id="waveOverlay" class="overlay" tabindex="0" aria-label="Waveform annotation surface"></canvas></div>
@@ -2483,13 +2485,23 @@ self.onmessage = async ({ data: m }) => {
         if (hz >= 10) return fmt(hz, 1);
         return fmt(hz, 2);
     }
+    function waveformAxisTick(value) {
+        if (!Number.isFinite(value)) return value < 0 ? '-∞' : '∞';
+        if (value !== 0 && (Math.abs(value) < .001 || Math.abs(value) >= 10000))
+            return value.toExponential(2);
+        return fmt(value, 2);
+    }
     // Shared path drawing: a contiguous line, not independent strokes per pixel.
     // Native samples preserve temporal order; wide views use peak-preserving bins.
     function drawWaveformTrace(ctx, g, r, x, w, amp, sampleRate) {
         // A fit-to-recording trace stretched by thousands of times is both
         // misleading and expensive to rasterize. The quick preview replaces it.
         if (w > g.w * 64 || x + w < g.left || x > g.left + g.w) return;
-        const middle = g.top + g.h / 2, scale = amp * g.h / 2;
+        const middle = g.top + g.h / 2, halfHeight = g.h / 2;
+        // Clip coordinates to a small multiple of the visible height before
+        // drawing. Very high custom gains must not produce infinite canvas
+        // coordinates, even if sample * amp overflows a finite double.
+        const waveformY = sample => middle - clamp(sample * amp, -2, 2) * halfHeight;
         ctx.strokeStyle = $('waveformColor').value;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -2502,14 +2514,14 @@ self.onmessage = async ({ data: m }) => {
                     continue;
                 }
                 const px = x + ((r.firstSample + i) - r.start * sampleRate) / (r.span * sampleRate) * w;
-                const py = middle - sample * scale;
+                const py = waveformY(sample);
                 if (connected) ctx.lineTo(px, py);
                 else ctx.moveTo(px, py);
                 connected = true;
             }
             if (r.samples.length === 1 && connected) {
                 const px = x + (r.firstSample - r.start * sampleRate) / (r.span * sampleRate) * w;
-                ctx.lineTo(px + 0.5, middle - r.samples[0] * scale);
+                ctx.lineTo(px + 0.5, waveformY(r.samples[0]));
             }
         } else {
             for (let i = 0; i < r.width; i++) {
@@ -2519,7 +2531,7 @@ self.onmessage = async ({ data: m }) => {
                     continue;
                 }
                 const px = x + (i + .5) / r.width * w;
-                const highY = middle - high * scale, lowY = middle - low * scale;
+                const highY = waveformY(high), lowY = waveformY(low);
                 if (connected) ctx.lineTo(px, highY);
                 else ctx.moveTo(px, highY);
                 ctx.lineTo(px, lowY);
@@ -2585,7 +2597,7 @@ self.onmessage = async ({ data: m }) => {
         for (let i = 0; i <= yTicks; i++) {
             const y = g.top + (yTicks ? i / yTicks : .5) * g.h;
             if (g.h >= 32) ctx.fillText(isSpec ? frequencyTick(fractionHz(1 - i / yTicks, f)) :
-                fmt((1 - i * 2 / yTicks) / Number($('amplitude').value), 2), g.left - 7, y + 4);
+                waveformAxisTick((1 - i * 2 / yTicks) / Number($('amplitude').value)), g.left - 7, y + 4);
             ctx.beginPath();
             ctx.moveTo(g.left, y);
             ctx.lineTo(g.left + g.w, y);
@@ -3825,6 +3837,25 @@ self.onmessage = async ({ data: m }) => {
         clearTimeout(pendingPointTimer);
         pendingPointTimer = 0;
     }
+    function setWaveAmplitude(value) {
+        const control = $('amplitude');
+        const custom = control.querySelector('option[data-custom-amplitude]');
+        const preset = Array.from(control.options).find(option =>
+            !option.dataset.customAmplitude && Number(option.value) === value);
+        if (preset) {
+            control.value = preset.value;
+            custom?.remove();
+        } else {
+            const option = custom || new Option();
+            option.dataset.customAmplitude = 'true';
+            option.value = String(value); // retain full precision for subsequent wheel steps
+            option.textContent = Number(value.toPrecision(7)) + ' (custom)';
+            if (!custom) control.add(option);
+            control.value = option.value;
+        }
+        // Gain only changes waveform geometry, not spectral data or annotations.
+        drawBase($('waveCanvas'), false);
+    }
     function bindAnnotationCanvas(canvas, isSpec, trackId = null) {
         const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
         canvas.addEventListener('pointerdown', e => {
@@ -3955,14 +3986,15 @@ self.onmessage = async ({ data: m }) => {
             if (e.ctrlKey || e.metaKey)
                 zoom(Math.exp(clamp(delta * .002, -1, 1)), p.time);
             else if (e.altKey && canvas === $('waveOverlay')) {
-                // Step through the existing amplitude presets, keeping the control
-                // and waveform scale in sync without reprocessing the audio.
-                const control = $('amplitude');
-                const next = clamp(control.selectedIndex + (delta < 0 ? 1 : -1),
-                    0, control.options.length - 1);
-                if (delta !== 0 && next !== control.selectedIndex) {
-                    control.selectedIndex = next;
-                    paintAll();
+                // Logarithmic scaling: fine, relative changes with trackpad or
+                // wheel; no artificial floor/ceiling at the selector presets.
+                if (delta !== 0) {
+                    const current = Number($('amplitude').value);
+                    const logGain = clamp(Math.log(current) - clamp(delta * .0015, -1, 1),
+                        Math.log(Number.MIN_VALUE), Math.log(Number.MAX_VALUE));
+                    const next = Math.max(Number.MIN_VALUE,
+                        Math.min(Number.MAX_VALUE, Math.exp(logGain)));
+                    if (next !== current) setWaveAmplitude(next);
                 }
             }
             else if (e.altKey) {
@@ -4049,7 +4081,11 @@ self.onmessage = async ({ data: m }) => {
         app.lastRender = null;
         requestRender();
     });
-    handle('amplitude', 'change', paintAll);
+    handle('amplitude', 'change', () => {
+        const control = $('amplitude'), custom = control.querySelector('option[data-custom-amplitude]');
+        if (custom && custom !== control.selectedOptions[0]) custom.remove();
+        drawBase($('waveCanvas'), false);
+    });
     handle('waveformColor', 'input', paintAll);
     handle('channel', 'change', async () => {
         const was = app.playing;
