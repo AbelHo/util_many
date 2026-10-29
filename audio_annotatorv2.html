@@ -32,8 +32,8 @@ Completed summaries can be restored from optional IndexedDB storage (8 entries /
 128 MiB LRU). Keys include file metadata plus a SHA-256 sampled-content fingerprint,
 channel, FFT and format version. This is not a whole-file hash; Rebuild refreshes it.
 Storage errors fall back to memory with visible status; raw audio/labels are not saved.
-Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel zooms frequency; Shift+wheel
-scrubs. Navigate mode drags the view; other modes add points, time ranges, or
+Mouse wheel pans; Ctrl/Cmd+wheel zooms time; Alt+wheel adjusts waveform amplitude
+or zooms spectrogram frequency; Shift+wheel scrubs. Navigate mode drags the view; other modes add points, time ranges, or
 frequency/time boxes. Shift+click removes a nearby marker; Delete removes selection.
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
 JSON/CSV and Audacity TXT import is atomic (up to 1M markers / 256 MiB files) tags, metadata and all marker
@@ -120,7 +120,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <section class="panel" aria-label="Annotation tools">
 <div class="row"><strong>Mode</strong><label><input type="radio" name="mode" value="navigate" checked> Navigate</label><label><input type="radio" name="mode" value="point"> Point</label><label><input type="radio" name="mode" value="time_range"> Time range</label><label><input type="radio" name="mode" value="frequency_range"> Frequency range</label></div>
 <div class="row"><label>Tag <input id="tagInput" type="text" maxlength="64" placeholder="Key"></label><label>Label <textarea id="labelInput" rows="1" maxlength="2000" placeholder="Optional note"></textarea></label><button id="addPointBtn" disabled>Add point at cursor</button><button id="undoBtn" disabled>Undo</button><button id="redoBtn" disabled>Redo</button><button id="clearBtn" disabled>Clear markers</button></div>
-<p class="hint">Wheel: pan · Ctrl/Cmd+wheel: time zoom · Alt+wheel: frequency zoom · Shift+wheel: scrub · Shift+click: remove nearby · Hold an alphanumeric key while drawing to tag.</p>
+<p class="hint">Wheel: pan · Ctrl/Cmd+wheel: time zoom · Alt+wheel: waveform amplitude / spectrogram frequency zoom · Shift+wheel: scrub · Shift+click: remove nearby · Hold an alphanumeric key while drawing to tag.</p>
 </section>
 <div class="plot-stack" id="plotStack" aria-label="Synchronized audio and label tracks">
 <div class="plot" id="wavePlot"><canvas id="waveCanvas" aria-hidden="true"></canvas><canvas id="waveOverlay" class="overlay" tabindex="0" aria-label="Waveform annotation surface"></canvas></div>
@@ -3954,6 +3954,17 @@ self.onmessage = async ({ data: m }) => {
             const p = canvasPoint(e, canvas), delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? p.g.h : 1);
             if (e.ctrlKey || e.metaKey)
                 zoom(Math.exp(clamp(delta * .002, -1, 1)), p.time);
+            else if (e.altKey && canvas === $('waveOverlay')) {
+                // Step through the existing amplitude presets, keeping the control
+                // and waveform scale in sync without reprocessing the audio.
+                const control = $('amplitude');
+                const next = clamp(control.selectedIndex + (delta < 0 ? 1 : -1),
+                    0, control.options.length - 1);
+                if (delta !== 0 && next !== control.selectedIndex) {
+                    control.selectedIndex = next;
+                    paintAll();
+                }
+            }
             else if (e.altKey) {
                 const f = getDisplayFreqRange(), kind = currentScale(), ny = app.meta.sampleRate / 2;
                 const floor = kind === 'log' || kind === 'period' ? Math.min(1, ny / 2) : 0;
