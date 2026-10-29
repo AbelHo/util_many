@@ -1407,11 +1407,11 @@ self.onmessage = async ({ data: m }) => {
             postMessage({ id: m.id, result }, [result.data.buffer]);
             return;
         }
-        else if (m.type === 'read') {
+        else if (m.type === 'read' || m.type === 'readFiltered') {
             const p = m.params;
             if (p.count > 65536 || p.count < 0 || !Number.isInteger(p.start) || !Number.isInteger(p.count) || p.channel < -1 || p.channel >= source.channels)
                 throw Error('Invalid diagnostic sample window.');
-            result = await source.read(p.start, p.count, p.channel);
+            result = m.type === 'read' ? await source.read(p.start, p.count, p.channel) : await filteredRead(p.start, p.count, p.channel);
             postMessage({ id: m.id, result }, [result.buffer]);
             return;
         }
@@ -1663,6 +1663,98 @@ self.onmessage = async ({ data: m }) => {
     function fmt(v, digits = 6) { return Number(v.toFixed(digits)).toString(); }
     function uid() { return globalThis.crypto?.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); }
     function channel() { return Number($('channel').value); }
+
+    function audioFilterKey(f = app.audioFilter) { return f ? JSON.stringify([f.high, f.low]) : 'off'; }
+    function readAudioFilterInputs() {
+        if (!app.meta) return null;
+        const cutoff = id => {
+            const input = $(id), value = input.value.trim();
+            if (input.validity.badInput) throw Error('Enter a valid numeric filter cutoff.');
+            if (!value) return null;
+            const hz = Number(value), nyquist = app.meta.sampleRate / 2;
+            if (!Number.isFinite(hz) || hz <= 0 || hz >= nyquist)
+                throw Error('Filter cutoffs must be above 0 and below Nyquist (' + fmt(nyquist) + ' Hz).');
+            return hz;
+        };
+        const high = cutoff('highPassHz'), low = cutoff('lowPassHz');
+        if (high !== null && low !== null && high >= low)
+            throw Error('High-pass cutoff must be lower than low-pass cutoff.');
+        return high === null && low === null ? null : { high, low };
+    }
+    function audioFilterLabel(f, taps = 0) {
+        if (!f) return 'Off · original audio';
+        const label = f.high !== null && f.low !== null ? 'Band-pass ' + fmt(f.high) + '–' + fmt(f.low) + ' Hz (one pass)'
+            : f.high !== null ? 'High-pass ' + fmt(f.high) + ' Hz' : 'Low-pass ' + fmt(f.low) + ' Hz';
+        return label + (taps ? ' · ' + taps + '-tap zero-phase FIR' : '');
+    }
+    async function applyAudioFilter() {
+        if (!app.meta) return;
+        // Coalesce edits while worker responses or overview restoration are pending.
+        if (app.filterUpdating) { app.filterQueued = true; return; }
+        let next;
+        try { next = readAudioFilterInputs(); }
+        catch (e) {
+            $('audioFilterInfo').textContent = e.message + ' · previous filter retained';
+            $('audioFilterInfo').classList.add('error');
+            return;
+        }
+        $('audioFilterInfo').classList.remove('error');
+        if (audioFilterKey(next) === audioFilterKey()) {
+            $('audioFilterInfo').textContent = audioFilterLabel(app.audioFilter, app.filterTaps);
+            return;
+        }
+        const serial = ++app.filterSerial, epoch = app.loadEpoch, previous = app.audioFilter, wasPlaying = app.playing;
+        app.filterUpdating = true;
+        pause();
+        $('playPauseBtn').disabled = true;
+        cancelZoomPrefetch();
+        app.renderSerial++;
+        clearTimeout(app.renderTimer); app.renderTimer = 0;
+        clearTimeout(app.refineTimer); app.refineTimer = 0;
+        app.analysis?.call('cancelRender').catch(() => {});
+        app.renderTarget = null;
+        app.lastRender = null; app.renderCache = []; app.renderCacheBytes = 0;
+        app.renderPending = true;
+        $('renderInfo').textContent = 'Applying audio filter…';
+        $('audioFilterInfo').textContent = 'Applying · ' + audioFilterLabel(next);
+        paintAll();
+        try {
+            const [analysis] = await Promise.all([
+                app.analysis.call('setFilter', next), app.playback.call('setFilter', next)
+            ]);
+            if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
+            app.audioFilter = next;
+            app.filterTaps = analysis.taps;
+            $('audioFilterInfo').textContent = audioFilterLabel(next, analysis.taps);
+            updateOverviewControls({ active: false, progress: 0 });
+            await restoreOverview();
+            if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
+            requestRender();
+            if (wasPlaying && !app.filterQueued) await play();
+        }
+        catch (e) {
+            if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
+            try {
+                await Promise.all([app.analysis.call('setFilter', previous), app.playback.call('setFilter', previous)]);
+            } catch { /* Preserve original error. */ }
+            app.audioFilter = previous;
+            $('audioFilterInfo').textContent = e.message + ' · previous filter retained';
+            $('audioFilterInfo').classList.add('error');
+            requestRender();
+            report(e);
+        }
+        finally {
+            if (epoch === app.loadEpoch && serial === app.filterSerial) {
+                app.filterUpdating = false;
+                $('playPauseBtn').disabled = !app.meta;
+                if (app.filterQueued) {
+                    app.filterQueued = false;
+                    applyAudioFilter().catch(report);
+                }
+            }
+        }
+    }
+
     // Audacity-compatible display transforms (not filterbanks). Keep Hz as the
     // canonical unit for every selection, marker and exported annotation.
     // Source: Audacity NumberScale (Mel, Traunmueller Bark, ERB and Period).
@@ -3904,6 +3996,7 @@ self.onmessage = async ({ data: m }) => {
             seek($('gotoInput').value);
     });
     handle('volume', 'input', updateVolume);
+    for (const id of ['highPassHz', 'lowPassHz']) handle(id, 'change', applyAudioFilter);
     handle('speed', 'change', () => {
         if (app.playing) {
             pause();
