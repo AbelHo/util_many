@@ -774,11 +774,14 @@ function kernelSpectrum() {
 async function filteredBlock(index, channel, revision = filterRevision) {
     const key = revision + ':' + channel + ':' + index, cached = filteredBlocks.get(key);
     if (cached) return cached;
-    const kernel = filterKernel, radius = (kernel.length - 1) / 2;
+    const kernel = filterKernel;
+    if (!kernel) throw Error('FILTER_CHANGED');
+    const radius = (kernel.length - 1) / 2;
     const first = index * FILTER_BLOCK, count = Math.min(FILTER_BLOCK, source.frames - first);
     // Read a symmetric halo: each output aligns with its original sample time,
     // even across block boundaries and with zero padding at start/end of file.
     const raw = await source.read(first - radius, count + radius * 2, channel);
+    if (revision !== filterRevision) throw Error('FILTER_CHANGED');
     const kernelFFT = kernelSpectrum(), plan = fftPlan(FILTER_FFT);
     plan.re.fill(0); plan.im.fill(0);
     plan.re.set(raw);
@@ -938,7 +941,7 @@ async function envelope(start, end, width, channel, token, preview = false, over
     guard(token);
     return { wave, mode };
 }
-function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes, filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
+function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes + (filterKernelFFT ? filterKernelFFT.re.byteLength + filterKernelFFT.im.byteLength : 0), filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), preview = p.preview === true;
     const overscan = preview ? 1 : clamp(Number(p.overscan) || 1, 1, 1.5);
@@ -1484,7 +1487,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterTaps: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1703,7 +1706,8 @@ self.onmessage = async ({ data: m }) => {
             $('audioFilterInfo').textContent = audioFilterLabel(app.audioFilter, app.filterTaps);
             return;
         }
-        const serial = ++app.filterSerial, epoch = app.loadEpoch, previous = app.audioFilter, wasPlaying = app.playing;
+        const serial = ++app.filterSerial, epoch = app.loadEpoch, previous = app.audioFilter, wasPlaying = app.playing || app.filterResumePlayback;
+        app.filterResumePlayback = wasPlaying;
         app.filterUpdating = true;
         pause();
         $('playPauseBtn').disabled = true;
@@ -1730,7 +1734,7 @@ self.onmessage = async ({ data: m }) => {
             await restoreOverview();
             if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
             requestRender();
-            if (wasPlaying && !app.filterQueued) await play();
+            if (wasPlaying && !app.filterQueued) { app.filterResumePlayback = false; await play(); }
         }
         catch (e) {
             if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
@@ -1741,6 +1745,8 @@ self.onmessage = async ({ data: m }) => {
             $('audioFilterInfo').textContent = e.message + ' · previous filter retained';
             $('audioFilterInfo').classList.add('error');
             requestRender();
+            app.filterResumePlayback = false;
+            if (wasPlaying) await play();
             report(e);
         }
         finally {
@@ -1835,7 +1841,7 @@ self.onmessage = async ({ data: m }) => {
         app.zoomHint = null;
         const epoch = ++app.loadEpoch;
         app.filterSerial++;
-        app.filterUpdating = false; app.filterQueued = false;
+        app.filterUpdating = false; app.filterQueued = false; app.filterResumePlayback = false;
         app.audioFilter = null; app.filterTaps = 0;
         $('highPassHz').value = ''; $('lowPassHz').value = '';
         $('audioFilterInfo').textContent = 'Off · original audio';
@@ -2319,7 +2325,7 @@ self.onmessage = async ({ data: m }) => {
     }
     function renderDescription(r, prefix = 'Waveform: ') {
         const s = r.stats;
-        return prefix + (r.mode === 'samples' ? 'connected native samples' : r.mode + ' connected envelope') +
+        return prefix + (r.mode === 'samples' ? (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') : r.mode + ' connected envelope') +
             (r.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' +
             fmt(app.meta.sampleRate / r.fft, 2) + ' Hz · FFT hop ' + fmt(r.fft / 4 / app.meta.sampleRate, 5) +
             ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' : r.columns + ' sampled time columns') + ' · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
