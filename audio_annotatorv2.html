@@ -62,10 +62,10 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 
 /* A shared-width vertical plot stack keeps time coordinates pixel-aligned. */
 .plot-stack{display:flex;flex-direction:column;min-width:0}
-.plot-stack>.plot{flex:none;min-height:48px}
+.plot-stack>.plot{flex:none;min-height:10px}
 .plot-stack>.plot.spectral{margin-top:0}
 .plot-stack>.plot.label-track{height:82px;background:#142233}
-.plot-resizer{height:5px;flex:none;cursor:row-resize;touch-action:none;background:#dce5ed;display:flex;align-items:center;justify-content:center;user-select:none}
+.plot-resizer{height:3px;flex:none;cursor:row-resize;touch-action:none;background:#dce5ed;display:flex;align-items:center;justify-content:center;user-select:none}
 .plot-resizer::after{content:'';width:34px;height:2px;border-radius:2px;background:#8496a7}
 .plot-resizer:hover,.plot-resizer:focus-visible,.plot-resizer.is-dragging{background:#c0d9ed;outline:2px solid #377ab1;outline-offset:-2px}
 #markerRows td.marker-description{cursor:text}
@@ -1366,7 +1366,7 @@ self.onmessage = async ({ data: m }) => {
             this.pending.clear();
         }
     }
-    const MIN_TRACK_HEIGHT = 48;
+    const MIN_TRACK_HEIGHT = 10;
     function sourceKey(marker) {
         return marker?.sourceId && app.importSources.has(marker.sourceId) ? marker.sourceId : null;
     }
@@ -2192,10 +2192,13 @@ self.onmessage = async ({ data: m }) => {
     }
     const canvases = ['waveCanvas', 'waveOverlay', 'specCanvas', 'specOverlay'];
     function geom(canvas) {
-        const box = canvas.getBoundingClientRect(), compact = box.height < 90;
-        const top = compact ? 17 : 23, bottom = compact ? 15 : 28;
+        const box = canvas.getBoundingClientRect(), tiny = box.height < 34, compact = box.height < 90;
+        // Tiny rows are useful as compact overview strips: retain a genuine,
+        // positive drawable area instead of placing it below the canvas.
+        const top = tiny ? 1 : compact ? 17 : 23;
+        const bottom = tiny ? 1 : compact ? 15 : 28;
         return { left: 64, top, w: Math.max(20, box.width - 80),
-            h: Math.max(8, box.height - top - bottom), width: box.width, height: box.height };
+            h: Math.max(1, box.height - top - bottom), width: box.width, height: box.height };
     }
     function sizedContext(canvas) {
         const g = geom(canvas), dpr = Math.min(devicePixelRatio || 1, 2), w = Math.max(1, Math.round(g.width * dpr)), h = Math.max(1, Math.round(g.height * dpr));
@@ -2848,7 +2851,7 @@ self.onmessage = async ({ data: m }) => {
         labelLabel.append(label);
         const hint = document.createElement('div');
         hint.className = 'hint';
-        hint.textContent = 'Ctrl/Cmd+Enter: save · Esc: cancel · Click outside: save';
+        hint.textContent = 'Enter: save · Ctrl/Cmd+Enter: new line · Esc: cancel';
         const actions = document.createElement('div');
         actions.className = 'row';
         const saveButton = document.createElement('button'), cancelButton = document.createElement('button');
@@ -2890,10 +2893,16 @@ self.onmessage = async ({ data: m }) => {
                 event.stopPropagation();
                 closeInlineMarkerEditor();
             }
-            else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey || event.target === tag)) {
+            else if (event.key === 'Enter') {
                 event.preventDefault();
                 event.stopPropagation();
-                commit();
+                if ((event.ctrlKey || event.metaKey) && event.target === label) {
+                    // Explicit newline within the multiline label. Preserve caret
+                    // position and selection; plain Enter saves instead.
+                    label.setRangeText('\n', label.selectionStart, label.selectionEnd, 'end');
+                    label.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                else if (!event.ctrlKey && !event.metaKey) commit();
             }
         });
         label.focus({ preventScroll: true });
