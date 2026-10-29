@@ -103,7 +103,7 @@ with sync_playwright() as p:
     cell.dblclick()
     assert page.get_by_label('Inline label').input_value() == 'Edited on spectrogram'
     update('changed-tag', 'Edited in the table', 'outside')
-    assert marker_by_start(.5)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
+    assert marker_by_start(.5)['label'] == 'Edited in the table'
     assert marker_by_start(.5)['tag'] == 'changed-tag'
 
     # Ctrl+Enter and Cmd+Enter insert a newline without committing.
@@ -127,17 +127,17 @@ with sync_playwright() as p:
     # A canceled edit must not affect in-memory markers.
     page.locator('#markerRows tr').first.locator('td.marker-description').dblclick()
     update('never-saved', 'This is discarded', 'cancel')
-    assert marker_by_start(.5)['label'] == 'Edited in the table'
+    assert marker_by_start(.5)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
 
     # Undo/redo must update the table and the exported annotation values.
     page.locator('#undoBtn').click()
-    assert marker_by_start(.5)['label'] == 'Edited on spectrogram'
-    page.locator('#redoBtn').click()
     assert marker_by_start(.5)['label'] == 'Edited in the table'
+    page.locator('#redoBtn').click()
+    assert marker_by_start(.5)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
     with page.expect_download() as event:
         page.locator('#exportJson').click()
     exported = json.loads(event.value.path().read_text(encoding='utf-8'))
-    assert next(m for m in exported['markers'] if abs(m['start'] - .5) < .00001)['label'] == 'Edited in the table'
+    assert next(m for m in exported['markers'] if abs(m['start'] - .5) < .00001)['label'] == 'Line one\\nLine two\\nLine three'.replace('\\n', '\n')
 
     # Merge: waveform overlay's plotted label is also editable.
     labels('merge.txt', '2.1\t2.1\tMerge overlay label\n', 'merge')
