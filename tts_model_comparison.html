@@ -97,7 +97,7 @@ const SAMPLE=$('text').value;
 const LABELS={browser:'Browser native TTS',kitten:'KittenTTS Nano',pocket7:'Pocket TTS 7 M',pocket18:'Pocket TTS 18 M',kokoro:'Kokoro 82 M',piper:'Piper TTS'};
 const session={version:0,id:'',backend:null,busy:false,loading:false,speaking:false,paused:false,stopId:0,generated:null,objectUrl:null,pocketEnd:false,autoPending:false,gestureUnblock:null};
 const logLines=[];
-let audioEl=new Audio();audioEl.preload='auto';
+let audioEl=new Audio();audioEl.preload='auto';let audioFinish=null;
 let audioCtx=null;
 let streamSources=new Set(),streamNext=0,streamSamples=[],streamRate=24000,streamDone=false,streamFirst=0,streamStart=0,streamGenMs=0,streamPromise=null,streamResolve=null;
 const stamp=()=>new Date().toLocaleTimeString();
@@ -120,7 +120,7 @@ function fileBlob(input){if(input instanceof Blob)return input;if(input instance
 function wav(samples,sampleRate){const ab=new ArrayBuffer(44+samples.length*2),d=new DataView(ab);const word=(at,x)=>[...x].forEach((c,i)=>d.setUint8(at+i,c.charCodeAt(0)));word(0,'RIFF');d.setUint32(4,36+samples.length*2,true);word(8,'WAVE');word(12,'fmt ');d.setUint32(16,16,true);d.setUint16(20,1,true);d.setUint16(22,1,true);d.setUint32(24,sampleRate,true);d.setUint32(28,sampleRate*2,true);d.setUint16(32,2,true);d.setUint16(34,16,true);word(36,'data');d.setUint32(40,samples.length*2,true);for(let i=0;i<samples.length;i++){const x=Math.max(-1,Math.min(1,samples[i]));d.setInt16(44+2*i,x<0?x*32768:x*32767,true)}return new Blob([ab],{type:'audio/wav'})}
 function joinPCM(parts){const len=parts.reduce((n,p)=>n+p.length,0);const a=new Float32Array(len);let at=0;for(const p of parts){a.set(p,at);at+=p.length}return a}
 function setGenerated(blob){if(session.objectUrl){URL.revokeObjectURL(session.objectUrl);session.objectUrl=null}session.generated=blob;if(blob instanceof Blob)session.objectUrl=URL.createObjectURL(blob);updateControls()}
-function clearPlayback(){audioEl.pause();audioEl.removeAttribute('src');audioEl.load();for(const src of streamSources){try{src.stop()}catch{}}streamSources.clear();streamNext=0;streamSamples=[];streamDone=false;streamStart=0;if(audioCtx)audioCtx.resume().catch(()=>{});}
+function clearPlayback(){if(audioFinish){const finish=audioFinish;audioFinish=null;finish()}audioEl.pause();audioEl.removeAttribute('src');audioEl.load();for(const src of streamSources){try{src.stop()}catch{}}streamSources.clear();streamNext=0;streamSamples=[];streamDone=false;streamStart=0;if(audioCtx)audioCtx.resume().catch(()=>{});}
 function stopPlayback(){session.stopId++;session.speaking=false;session.paused=false;session.busy=false;clearPlayback();if(session.backend?.kind==='pocket')session.backend.stop();if(session.id==='browser'&&'speechSynthesis' in window)window.speechSynthesis.cancel();updateControls()}
 function takeAudioGesture(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'playback'})}catch(e){log('AudioContext unavailable: '+e.message)}}if(audioCtx?.state==='suspended')audioCtx.resume().catch(()=>{});/* Call inside select/Play user gesture for iOS. */}
 function emptyAudio(){setGenerated(null);clearMetrics()}
@@ -188,7 +188,7 @@ async function speakNative(text,token){return new Promise((resolve,reject)=>{
  if(!('speechSynthesis' in window))return reject(new Error('speechSynthesis not supported'));
  speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);const selected=speechSynthesis.getVoices().find(x=>x.voiceURI===getVoice());if(selected){u.voice=selected;u.lang=selected.lang}u.rate=speed();u.onend=()=>resolve();u.onerror=e=>reject(new Error('Speech Synthesis: '+e.error));speechSynthesis.speak(u)
 })}
-function waitForAudio(){return new Promise((resolve,reject)=>{audioEl.onended=resolve;audioEl.onerror=()=>reject(new Error('Audio playback failed'))})}
+function waitForAudio(){return new Promise((resolve,reject)=>{audioFinish=resolve;audioEl.onended=()=>{audioFinish=null;resolve()};audioEl.onerror=()=>{audioFinish=null;reject(new Error('Audio playback failed'))}})}
 async function speakText(text,announce=false){
  if(!session.backend||session.loading)throw Error('Wait for the selected model to finish loading');
  const backend=session.backend,id=session.id,version=session.version,voice=getVoice();
