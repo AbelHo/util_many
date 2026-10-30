@@ -1,0 +1,250 @@
+<!doctype html>
+<!--
+Programmer Reference Summary — Browser TTS Model Comparison
+Purpose: compare six TTS backends on the actual browser/device, independently of
+Codex and without server-side inference. One root HTML utility, no build step.
+Do NOT edit README.md (util_many auto-generates it from root HTML files).
+Backends are selected lazily; model files and runtime modules are not fetched
+until selected. A successful selection speaks its own model name. Browser TTS
+uses speechSynthesis. Kitten uses the upstream plain-HTML UMD SDK with
+nano-int8, Kokoro uses kokoro-js q8/WASM, Piper uses the Mintplex browser SDK,
+and Pocket 18M uses the MIT-licensed tablefolk ONNX/WASM worker loaded at runtime.
+Pocket 7M has official weights but no verified compatible public browser ONNX
+bundle at authoring time. It is *not* silently routed to the 18M model: a user
+may supply a compatible Pocket ONNX bundle directory URL (same bundle schema).
+No model is bundled or uploaded, no synthesis calls go to a remote TTS service.
+All external CDNs/model assets are used only after selection and may be blocked
+by CSP, mobile memory limits, or remote CORS. Cache managed by each upstream
+runtime. Test via GitHub Pages HTTPS or a local static server (not file://).
+Playback: speechSynthesis pause/resume or HTMLAudioElement for finished WAV;
+Pocket streams PCM through AudioContext scheduled nodes (pause = suspend).
+Changing models/Stop prevents stale synthesis from playing. Unknown model errors
+are surfaced, never substituted by a different engine. Dynamic text is never
+inserted through innerHTML. Browser autoplay restrictions may require Play tap.
+Source references and reproduction notes appear in the About panel.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Compare six entirely client-side text-to-speech backends on smartphones and desktop: Pocket TTS 7M and 18M, KittenTTS Nano, Kokoro-82M, Piper, and native browser speech. Lazy model downloads, customizable voices, play/pause, latency benchmarks, browser diagnostics and WAV export in one standalone HTML utility.">
+<meta name="keywords" content="text-to-speech, TTS benchmark, Pocket TTS 7M, Pocket TTS 18M, KittenTTS Nano, Kokoro 82M, Piper TTS, browser TTS, WebAssembly, ONNX, mobile speech, offline inference">
+<title>Browser TTS Model Comparison — 6 Engines</title>
+<style>
+:root{color-scheme:light;--bg:#f6f7fb;--card:#fff;--ink:#14223b;--muted:#52627a;--line:#dae1ec;--accent:#245dc4;--good:#137b52;--warn:#905a06;--bad:#b12b3c;--surface:#eef4ff}
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);margin:0;line-height:1.5;font-size:15px}main{max-width:1040px;padding:24px 20px 65px;margin:auto}h1{font-size:clamp(25px,4vw,36px);letter-spacing:-.035em;line-height:1.15;margin:0 0 10px}h2{font-size:18px;margin:0 0 12px}p{margin:8px 0}header{margin-bottom:20px}.subtitle{color:var(--muted);max-width:730px}.grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(260px,.8fr);gap:16px}.card{background:var(--card);border:1px solid var(--line);padding:19px;border-radius:15px;box-shadow:0 2px 8px #15223b09}.card+.card{margin-top:16px}.grid .card+.card{margin-top:0}label{display:block;font-weight:600;font-size:13px;margin-bottom:7px}input,select,textarea,button{font:inherit}select,textarea,input[type=url]{background:white;color:var(--ink);width:100%;border:1px solid #b8c5d6;border-radius:9px;padding:10px 12px;min-width:0}select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-visible{outline:3px solid #91b8fa;outline-offset:1px}textarea{min-height:155px;resize:vertical;line-height:1.55}button{padding:9px 14px;border-radius:9px;border:1px solid #b9c6d9;color:var(--ink);background:#fff;cursor:pointer;font-weight:600}button:hover:not(:disabled){background:#edf3fb}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}button.primary:hover:not(:disabled){background:#164eaf}button.danger{border-color:#e4bbc2;color:var(--bad)}.field{margin-bottom:17px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row.tight{gap:7px}.row>button{flex-shrink:0}.selectpair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.subtle{color:var(--muted);font-size:13px}.small{font-size:12px;color:var(--muted)}.pill{display:inline-flex;gap:6px;align-items:center;border-radius:999px;background:#e8edf6;padding:4px 9px;color:#425775;font-size:12px;font-weight:650}.pill.good{color:var(--good);background:#d9f5e8}.pill.warn{color:var(--warn);background:#fff1d5}.pill.bad{color:var(--bad);background:#ffe1e7}.controls{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0 9px}.controls button{min-width:82px}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.metric{background:#f3f6fa;border:1px solid #e2e8f0;padding:10px;border-radius:10px}.metric dt{font-size:12px;color:var(--muted)}.metric dd{font-size:19px;font-weight:750;margin:2px 0 0;font-variant-numeric:tabular-nums}.signal{padding:11px 13px;border-radius:10px;background:var(--surface);color:#214374;border:1px solid #d0e3ff;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.signal.warn{background:#fff7e4;color:#825311;border-color:#f1d9a5}.signal.bad{background:#fff0f1;color:#9b2034;border-color:#ffd2d8}progress{width:100%;height:10px;accent-color:var(--accent);margin-top:10px}.hint{border-left:3px solid #bac8db;padding:5px 0 5px 11px;margin-top:12px;color:var(--muted);font-size:12px}.info-list{font-size:13px;margin:0;padding-left:19px}.info-list li{margin:7px 0}.log{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#0e1d32;color:#d5e8ff;border-radius:10px;padding:12px;max-height:220px;overflow:auto;margin-top:10px}details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}summary{cursor:pointer;font-weight:650;color:#2b4a81}a{color:var(--accent)}input[type=range]{width:130px;accent-color:var(--accent)}.rate-label{font-size:12px;color:var(--muted)}.advanced{padding:13px;border:1px solid #ecd5aa;border-radius:10px;background:#fffaf0;margin-top:11px}.advanced label{margin-top:7px}.split-note{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}.status-grid{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}.voicebox{min-height:38px}@media(max-width:760px){main{padding:18px 13px 40px}.grid{grid-template-columns:1fr}.grid .card+.card{margin-top:16px}.selectpair{grid-template-columns:1fr}.card{padding:15px}.controls button{flex:1}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric dd{font-size:16px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Browser TTS Model Comparison</h1>
+<p class="subtitle">Six engines, one test page. Model inference runs on <strong>this device</strong>, not the server. Select an engine to fetch only its assets and hear it announce its name. Test voice quality, mobile memory limits, load time and playback controls.</p>
+</header>
+<div class="grid">
+<section aria-label="TTS controls">
+<div class="card">
+<h2>1. Choose an engine</h2>
+<div class="field"><label for="engine">Text-to-speech backend</label><select id="engine"><option value="">Choose a model (nothing downloads yet)</option><option value="browser">Browser native TTS — baseline</option><option value="kitten">KittenTTS Nano int8 — 15M (~25 MB)</option><option value="pocket7">Pocket TTS 7M — experimental, needs ONNX export URL</option><option value="pocket18">Pocket TTS 18M — ONNX/WASM (~40 MB initial)</option><option value="kokoro">Kokoro-82M — q8/WASM (~90 MB)</option><option value="piper">Piper TTS — per-voice ONNX (~60 MB)</option></select></div>
+<div class="status-grid"><span class="pill" id="badge">Not loaded</span><span class="small" id="engineNote">No engine assets have been requested.</span></div>
+<div class="signal" id="status" role="status" aria-live="polite">Select an engine to begin.</div>
+<progress id="progress" max="100" value="0" hidden aria-label="Model download progress"></progress>
+<div class="advanced" id="pocket7Panel" hidden>
+<strong>Pocket 7M browser export required</strong>
+<p class="small">The official 7M checkpoint is not itself an ONNX browser bundle. Supply a trustworthy HTTPS URL pointing to a <em>7M</em> ONNX export directory that contains the same <code>bundle.json</code> graph/schema files as the Pocket 18M browser worker. Otherwise 7M is marked unavailable; it will never play the 18M model under the 7M label.</p>
+<label for="pocket7Base">Compatible 7M ONNX bundle directory (advanced)</label><input id="pocket7Base" type="url" placeholder="https://huggingface.co/…/resolve/…/english_7m_refl_2026-10/" autocomplete="off" spellcheck="false">
+<div class="row" style="margin-top:10px"><button type="button" id="loadPocket7">Load supplied 7M export</button><a class="small" href="https://github.com/kyutai-labs/pocket-tts" target="_blank" rel="noopener noreferrer">Official Pocket TTS</a></div>
+</div>
+<div class="split-note selectpair"><div><label for="voice">Voice</label><select class="voicebox" id="voice" disabled><option>Load an engine first</option></select></div><div><label for="speed">Speaking speed</label><div class="row"><input type="range" id="speed" min="0.6" max="1.6" step="0.05" value="1"><output id="speedValue" class="rate-label">1.00×</output></div><div class="small" id="speedHint">Voice speed or playback rate, depending on model.</div></div></div>
+</div>
+<div class="card">
+<h2>2. Test speech</h2>
+<label for="text">Test text (editable, stays in this browser)</label>
+<textarea id="text" spellcheck="true">Hello! This is a test of natural speech from a browser-based text-to-speech engine. The quick brown fox jumps over the lazy dog. Today is October 30th, 2026. How does it handle numbers like 123.45, abbreviations like AI and GPU, and punctuation? Finally, can it speak longer paragraphs smoothly on a normal smartphone?</textarea>
+<div class="row tight" style="margin-top:7px"><button type="button" id="resetText">Restore sample text</button><span class="small" id="chars">0 characters</span></div>
+<div class="controls"><button id="play" type="button" class="primary" disabled>▶ Play</button><button id="pause" type="button" disabled>⏸ Pause</button><button id="resume" type="button" disabled>⏵ Resume</button><button id="stop" type="button" class="danger" disabled>■ Stop</button><button id="download" type="button" disabled>↓ WAV</button></div>
+<p class="small">Selecting a successfully loaded model automatically speaks its name once. Play uses the text above. Pause/resume controls already-generated playback; inference may continue if the model does not support cancellation.</p>
+</div>
+</section>
+<aside aria-label="Diagnostics and help">
+<div class="card">
+<h2>Device & performance</h2>
+<dl class="metrics"><div class="metric"><dt>Model load</dt><dd id="loadMs">—</dd></div><div class="metric"><dt>Generate / total</dt><dd id="generateMs">—</dd></div><div class="metric"><dt>First audio</dt><dd id="firstMs">—</dd></div><div class="metric"><dt>Audio length</dt><dd id="duration">—</dd></div><div class="metric"><dt>Generation RTF*</dt><dd id="rtf">—</dd></div><div class="metric"><dt>Browser storage</dt><dd id="storage">—</dd></div></dl>
+<p class="small">*RTF = generation seconds / audio seconds; lower is faster. Measured on your device, not a cross-device benchmark.</p>
+<div class="hint" id="environment">Checking local runtime capabilities…</div>
+<details><summary>Event / error log</summary><div class="log" id="log" aria-label="Diagnostics log"></div><div class="row" style="margin-top:7px"><button id="copyLog" type="button">Copy log</button><button id="clearLog" type="button">Clear log</button></div></details>
+</div>
+<div class="card">
+<h2>What is being compared?</h2>
+<ul class="info-list"><li><strong>Browser:</strong> built-in OS/browser voice; may itself use a remote service.</li><li><strong>Kitten:</strong> 15M-parameter Nano int8, ONNX Runtime Web, browser cache.</li><li><strong>Pocket 18M:</strong> independently maintained ONNX worker using WASM, streaming PCM.</li><li><strong>Pocket 7M:</strong> intentionally marked experimental until a compatible export is supplied. No fake fallback.</li><li><strong>Kokoro:</strong> 82M model, quantized q8, local WASM inference.</li><li><strong>Piper:</strong> VITS model downloaded separately per selected voice.</li></ul>
+<details><summary>Dependencies, attribution & limitations</summary>
+<p class="small">All synthesis for the five neural engines is client-side, using on-demand code and model downloads. The web page itself has no backend, npm, build step or bundled weights. Browser TTS may be cloud-backed depending on voice. Hugging Face or CDN failures, COOP/COEP/thread restrictions, unsupported WebAssembly/WebGPU, memory pressure and browser autoplay policies can prevent execution, especially on iOS. Keep this tab foregrounded during heavy synthesis.</p>
+<p class="small"><a href="https://github.com/KittenML/KittenTTS-web" target="_blank" rel="noopener noreferrer">Kitten SDK (Apache-2.0)</a>; <a href="https://github.com/hexgrad/kokoro" target="_blank" rel="noopener noreferrer">Kokoro</a>; <a href="https://github.com/Mintplex-Labs/piper-tts-web" target="_blank" rel="noopener noreferrer">Piper browser SDK</a>; <a href="https://github.com/runvnc/tablefolk/blob/main/app/tts/pocket18-worker.js" target="_blank" rel="noopener noreferrer">Pocket 18M browser worker (MIT, Copyright © 2026 Jason)</a>; <a href="https://huggingface.co/maxime/pocket-tts-18m-onnx" target="_blank" rel="noopener noreferrer">Pocket 18M ONNX assets</a>; <a href="https://github.com/kyutai-labs/pocket-tts" target="_blank" rel="noopener noreferrer">Pocket upstream</a>.</p>
+<p class="small">Pocket 18M's MIT-licensed worker is fetched from upstream rather than copied into this file; attribution is shown above. It depends on ONNX Runtime Web and a SentencePiece module from external CDNs. Loading a custom 7M model URL trusts that origin; only use exports from sources you trust.</p>
+</details>
+</div>
+</aside>
+</div>
+</main>
+<script type="module">
+'use strict';
+const $ = id => document.getElementById(id);
+const KITTEN_JS='https://cdn.jsdelivr.net/gh/KittenML/KittenTTS-web@c846fe92858f3447f4912226471f5a63983b3f94/examples/html/assets/kittentts-web.js';
+const POCKET_WORKER_JS='https://cdn.jsdelivr.net/gh/runvnc/tablefolk@4dc2b5d881852a2c03aff025098e5cb6c833e2bf/app/tts/pocket18-worker.js';
+const KOKORO_JS='https://esm.sh/kokoro-js@1.2.1?bundle';
+const PIPER_JS='https://esm.sh/@mintplex-labs/piper-tts-web@1.0.3?bundle';
+const SAMPLE=$('text').value;
+const LABELS={browser:'Browser native TTS',kitten:'KittenTTS Nano',pocket7:'Pocket TTS 7 M',pocket18:'Pocket TTS 18 M',kokoro:'Kokoro 82 M',piper:'Piper TTS'};
+const session={version:0,id:'',backend:null,busy:false,loading:false,speaking:false,paused:false,stopId:0,generated:null,objectUrl:null,pocketEnd:false,autoPending:false,gestureUnblock:null};
+const logLines=[];
+let audioEl=new Audio();audioEl.preload='auto';
+let audioCtx=null;
+let streamSources=new Set(),streamNext=0,streamSamples=[],streamRate=24000,streamDone=false,streamFirst=0,streamStart=0,streamGenMs=0,streamPromise=null,streamResolve=null;
+const stamp=()=>new Date().toLocaleTimeString();
+function log(s){const msg=`[${stamp()}] ${s}`;logLines.push(msg);if(logLines.length>180)logLines.shift();$('log').textContent=logLines.join('\n');$('log').scrollTop=$('log').scrollHeight;console.info('[tts-comparison]',s)}
+function status(s,tone='normal'){$('status').textContent=s;$('status').className='signal'+(tone==='bad'?' bad':tone==='warn'?' warn':'');log(s)}
+function badge(s,tone=''){$('badge').textContent=s;$('badge').className='pill'+(tone?' '+tone:'')}
+function metric(id,value){$(id).textContent=value}
+const fmtMs=n=>Number.isFinite(n)?Math.round(n)+' ms':'—';
+function clearMetrics(){['loadMs','generateMs','firstMs','duration','rtf'].forEach(k=>metric(k,'—'))}
+function resetProgress(){$('progress').hidden=true;$('progress').removeAttribute('value')}
+function setProgress(percentage,label){$('progress').hidden=false;if(Number.isFinite(percentage))$('progress').value=Math.max(0,Math.min(100,percentage));else $('progress').removeAttribute('value');if(label)$('engineNote').textContent=label}
+async function storageUsage(){try{const x=await navigator.storage?.estimate?.();metric('storage',x?.usage?`${(x.usage/1048576).toFixed(1)} MB`:'—')}catch{metric('storage','—')}}
+function updateControls(){const ready=Boolean(session.backend&&!session.loading);$('engine').disabled=false;$('play').disabled=!ready||session.busy;$('pause').disabled=!session.speaking||session.paused;$('resume').disabled=!session.speaking||!session.paused;$('stop').disabled=!(session.loading||session.speaking||session.busy);$('download').disabled=!(session.generated instanceof Blob);$('voice').disabled=!ready;$('loadPocket7').disabled=session.loading}
+function assignVoices(voices,defaultValue){const s=$('voice');s.replaceChildren();for(const v of voices){const id=typeof v==='string'?v:v.id;const title=typeof v==='string'?v:(v.name||v.id);if(!id)continue;s.append(new Option(title,id))}if(!s.options.length)s.append(new Option('No voices found',''));if(defaultValue&&[...s.options].some(x=>x.value===defaultValue))s.value=defaultValue;updateControls()}
+function getVoice(){return $('voice').value}
+function speed(){return Number($('speed').value)||1}
+function checkCurrent(v){if(v!==session.version)throw new Error('Model selection changed')}
+async function loadScript(url){return new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src=url;sc.async=true;sc.onload=resolve;sc.onerror=()=>reject(new Error('Could not load browser SDK: '+url));document.head.append(sc)})}
+function fileBlob(input){if(input instanceof Blob)return input;if(input instanceof Uint8Array||input instanceof ArrayBuffer)return new Blob([input],{type:'audio/wav'});if(ArrayBuffer.isView(input))return new Blob([input],{type:'audio/wav'});throw new Error('TTS runtime did not return a WAV blob')}
+function wav(samples,sampleRate){const ab=new ArrayBuffer(44+samples.length*2),d=new DataView(ab);const word=(at,x)=>[...x].forEach((c,i)=>d.setUint8(at+i,c.charCodeAt(0)));word(0,'RIFF');d.setUint32(4,36+samples.length*2,true);word(8,'WAVE');word(12,'fmt ');d.setUint32(16,16,true);d.setUint16(20,1,true);d.setUint16(22,1,true);d.setUint32(24,sampleRate,true);d.setUint32(28,sampleRate*2,true);d.setUint16(32,2,true);d.setUint16(34,16,true);word(36,'data');d.setUint32(40,samples.length*2,true);for(let i=0;i<samples.length;i++){const x=Math.max(-1,Math.min(1,samples[i]));d.setInt16(44+2*i,x<0?x*32768:x*32767,true)}return new Blob([ab],{type:'audio/wav'})}
+function joinPCM(parts){const len=parts.reduce((n,p)=>n+p.length,0);const a=new Float32Array(len);let at=0;for(const p of parts){a.set(p,at);at+=p.length}return a}
+function setGenerated(blob){if(session.objectUrl){URL.revokeObjectURL(session.objectUrl);session.objectUrl=null}session.generated=blob;if(blob instanceof Blob)session.objectUrl=URL.createObjectURL(blob);updateControls()}
+function clearPlayback(){audioEl.pause();audioEl.removeAttribute('src');audioEl.load();for(const src of streamSources){try{src.stop()}catch{}}streamSources.clear();streamNext=0;streamSamples=[];streamDone=false;streamStart=0;if(audioCtx)audioCtx.resume().catch(()=>{});}
+function stopPlayback(){session.stopId++;session.speaking=false;session.paused=false;session.busy=false;clearPlayback();if(session.backend?.kind==='pocket')session.backend.stop();if(session.id==='browser'&&'speechSynthesis' in window)window.speechSynthesis.cancel();updateControls()}
+function takeAudioGesture(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'playback'})}catch(e){log('AudioContext unavailable: '+e.message)}}if(audioCtx?.state==='suspended')audioCtx.resume().catch(()=>{});/* Call inside select/Play user gesture for iOS. */}
+function emptyAudio(){setGenerated(null);clearMetrics()}
+async function resetEngine(){stopPlayback();const old=session.backend;session.backend=null;session.loading=false;session.autoPending=false;emptyAudio();assignVoices([],null);if(old?.dispose)try{await old.dispose()}catch(e){log('Release: '+e.message)}}
+async function initBrowser(){if(!('speechSynthesis' in window))throw Error('SpeechSynthesis is not available');const update=()=>{if(session.id!=='browser')return;const voices=speechSynthesis.getVoices();assignVoices(voices.map(v=>({id:v.voiceURI,name:v.name+' · '+v.lang+(v.localService?' · local':' · possibly remote')})),voices.find(v=>v.lang.startsWith('en'))?.voiceURI);};update();speechSynthesis.addEventListener?.('voiceschanged',update);return {kind:'browser',async generate(text){return {nativeText:text}},dispose(){speechSynthesis.cancel()}}}
+async function initKitten(){if(!window.KittenTTSWeb)await loadScript(KITTEN_JS);const {KittenTTS}=window.KittenTTSWeb||{};if(!KittenTTS)throw Error('Kitten browser SDK not available');const engine=await KittenTTS.create({model:'nano-int8',defaultVoice:'bella',analytics:false},(p,info)=>setProgress((p||0)*100,info?.asset||info?.stage||'Loading Kitten assets'));assignVoices(['bella','jasper','luna','bruno','rosie','hugo','kiki','leo'],'bella');return {kind:'wav',async generate(text,voice){const x=await engine.generate(text,{voice,speed:speed()});return fileBlob(x.wavData())},dispose:()=>engine.dispose()}}
+async function initKokoro(){const {KokoroTTS}=await import(KOKORO_JS);if(!KokoroTTS)throw Error('Kokoro module missing KokoroTTS');const tts=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX',{dtype:'q8',device:'wasm',progress_callback:p=>{if(p?.status==='progress'&&p.total)setProgress(100*p.loaded/p.total,p.file||'Downloading Kokoro');else if(p?.status)status('Kokoro: '+p.status)}});const voices=tts.list_voices();const entries=Array.isArray(voices)?voices.map(v=>typeof v==='string'?v:(v.id||v.name)):Object.keys(voices||{});assignVoices(entries.length?entries:['af_heart','af_bella','af_sky','am_adam','bm_george'],'af_heart');return {kind:'wav',async generate(text,voice){const a=await tts.generate(text,{voice,speed:speed()});if(typeof a.toBlob==='function')return a.toBlob();if(a.audio&&a.sampling_rate)return wav(a.audio,a.sampling_rate);throw Error('Kokoro returned unsupported audio format')},dispose:async()=>{if(tts.dispose)await tts.dispose()}}}
+async function initPiper(){const tts=await import(PIPER_JS);if(typeof tts.download!=='function'||typeof tts.predict!=='function')throw Error('Piper browser module did not provide download/predict');let voice='en_US-hfc_female-medium';let list=[voice,'en_US-lessac-medium','en_US-amy-medium'];try{const catalog=await tts.voices();if(catalog){const keys=Object.keys(catalog).filter(k=>k.startsWith('en_'));if(keys.length)list=keys.sort()}}catch(e){log('Piper voice index unavailable, using known voice IDs: '+e.message)}assignVoices(list,voice);const downloaded=new Set();async function ensureVoice(v){if(downloaded.has(v))return;status('Downloading Piper voice '+v);await tts.download(v,p=>{const frac=p?.total>0?100*p.loaded/p.total:null;setProgress(frac,p?.url?'Piper: '+p.url:'Downloading Piper voice')});downloaded.add(v)}await ensureVoice(voice);return {kind:'wav',async generate(text,v){await ensureVoice(v);return fileBlob(await tts.predict({text,voiceId:v}))},async setVoice(v){await ensureVoice(v)},dispose:()=>{}}}
+const BUILTIN_POCKET_VOICES=['alba','azelma','cosette','eponine','fantine','javert','jean','marius'];
+async function initPocket(type,base){
+  const upstream=await fetch(POCKET_WORKER_JS,{cache:'force-cache'});
+  if(!upstream.ok)throw Error('Pocket worker download failed: HTTP '+upstream.status);
+  let source=await upstream.text();
+  if(type==='pocket7'){
+    const match=source.match(/const BASE\s*=\s*"[^"]+"\s*;/);
+    if(!match)throw Error('Pocket browser worker no longer has a configurable model base');
+    source=source.replace(match[0],'const BASE = '+JSON.stringify(base)+';');
+  }
+  const workerUrl=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+  let worker;try{worker=new Worker(workerUrl,{type:'module'})}catch(e){URL.revokeObjectURL(workerUrl);throw e}
+  URL.revokeObjectURL(workerUrl);
+  const backend={kind:'pocket',worker,voices:BUILTIN_POCKET_VOICES,loadResolve:null,loadReject:null,generateResolve:null,generateReject:null,setVoiceResolve:null,setVoiceReject:null,disposed:false,metrics:null,rate:24000};
+  let settleTimer=0;
+  const fail=e=>{const err=new Error(typeof e==='string'?e:(e?.message||'Pocket inference failed'));if(backend.loadReject){backend.loadReject(err);backend.loadReject=null}if(backend.generateReject){backend.generateReject(err);backend.generateReject=null}if(backend.setVoiceReject){backend.setVoiceReject(err);backend.setVoiceReject=null}status(err.message,'bad')};
+  worker.onerror=e=>fail('Pocket worker error: '+(e.message||'unknown'));
+  worker.onmessage=e=>{const m=e.data||{};switch(m.type){
+    case 'status':if(m.status&&session.backend===backend)status('Pocket: '+m.status);break;
+    case 'runtime_info':log('Pocket runtime: '+JSON.stringify(m.data));break;
+    case 'voices_loaded':backend.voices=m.voices||BUILTIN_POCKET_VOICES;if(session.backend===backend)assignVoices(backend.voices,m.defaultVoice||'alba');break;
+    case 'bundle_loaded':backend.rate=m.sampleRate||24000;break;
+    case 'loaded':if(backend.loadResolve){backend.loadResolve(backend);backend.loadResolve=null}break;
+    case 'voice_set':if(backend.setVoiceResolve){backend.setVoiceResolve();backend.setVoiceResolve=null}break;
+    case 'generation_started':backend.metrics=null;break;
+    case 'audio_chunk':if(backend===session.backend&&session.speaking)receivePocketAudio(m.data,backend.rate);break;
+    case 'generation_metrics':backend.metrics=m.metrics;if(m.metrics){streamGenMs=(m.metrics.totalTime||0)*1000;log('Pocket RTFx: '+(m.metrics.rtfx||0).toFixed(2))}break;
+    case 'stream_ended':if(backend.generateResolve){backend.generateResolve({kind:'stream',metrics:backend.metrics});backend.generateResolve=null}break;
+    case 'error':fail('Pocket error: '+(m.error||m.message||'unknown'));break;
+  }};
+  backend.load=()=>new Promise((resolve,reject)=>{backend.loadResolve=resolve;backend.loadReject=reject;worker.postMessage({type:'load',data:{language:'english_18m_refl_2026-10'}})});
+  backend.setVoice=v=>new Promise((resolve,reject)=>{backend.setVoiceResolve=resolve;backend.setVoiceReject=reject;worker.postMessage({type:'set_voice',data:{voiceName:v}})});
+  backend.generate=(text,voice)=>new Promise((resolve,reject)=>{backend.generateResolve=resolve;backend.generateReject=reject;worker.postMessage({type:'generate',data:{text,voice}})});
+  backend.stop=()=>{try{worker.postMessage({type:'stop'})}catch{};if(backend.generateReject){backend.generateReject(new Error('Generation stopped'));backend.generateReject=null}};
+  backend.dispose=()=>{backend.disposed=true;backend.stop();worker.terminate();backend.loadReject?.(new Error('Model changed'));backend.setVoiceReject?.(new Error('Model changed'))};
+  // Install backend before `load()` so its progress and voice messages are visible.
+  session.backend=backend;
+  await backend.load();
+  return backend;
+}
+async function buildBackend(id){if(id==='browser')return initBrowser();if(id==='kitten')return initKitten();if(id==='kokoro')return initKokoro();if(id==='piper')return initPiper();if(id==='pocket18')return initPocket(id);if(id==='pocket7'){
+ const value=$('pocket7Base').value.trim();if(!value)throw Error('Pocket 7M has no confirmed compatible browser ONNX export. Supply an export URL below to test the real 7M weights.');
+ const url=new URL(value);if(url.protocol!=='https:'||url.username||url.password||!url.pathname.endsWith('/'))throw Error('Provide a trusted HTTPS model directory URL ending in /');
+ if(!/7m/i.test(url.href))throw Error('The Pocket 7M URL must identify a 7M export (to prevent accidentally playing 18M).');
+ status('Checking Pocket 7M export manifest…');const m=await fetch(url.href+'bundle.json');if(!m.ok)throw Error('Pocket 7M ONNX bundle.json unavailable (HTTP '+m.status+'). Need a browser-compatible export, not official safetensors.');
+ const j=await m.json();if(!j.graphs?.flow_lm_main||!j.graphs?.mimi_decoder||j.flow?.type!=='drifting')throw Error('7M export format incompatible with Pocket browser ONNX worker');
+ return initPocket(id,url.href);
+ }throw Error('Unknown backend')}
+function resetPocketStream(){streamSamples=[];streamRate=24000;streamFirst=0;streamStart=performance.now();streamGenMs=0;streamNext=0;streamDone=false}
+function receivePocketAudio(data,rate){const samples=data instanceof Float32Array?data:new Float32Array(data);streamRate=rate||24000;streamSamples.push(samples);if(!streamFirst){streamFirst=performance.now()-streamStart;metric('firstMs',fmtMs(streamFirst))}if(!audioCtx)return;
+ const b=audioCtx.createBuffer(1,samples.length,streamRate);b.copyToChannel(samples,0);const src=audioCtx.createBufferSource();src.buffer=b;src.playbackRate.value=speed();src.connect(audioCtx.destination);
+ const t=Math.max(audioCtx.currentTime+0.06,streamNext||0);streamNext=t+b.duration/speed();streamSources.add(src);
+ src.onended=()=>{streamSources.delete(src);if(streamDone&&streamSources.size===0){session.speaking=false;session.paused=false;updateControls()}};
+ try{src.start(t)}catch(e){log('Audio start blocked: '+e.message);status('Audio playback blocked. Tap Play to enable audio.','warn')}
+}
+async function speakNative(text,token){return new Promise((resolve,reject)=>{
+ if(!('speechSynthesis' in window))return reject(new Error('speechSynthesis not supported'));
+ speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);const selected=speechSynthesis.getVoices().find(x=>x.voiceURI===getVoice());if(selected){u.voice=selected;u.lang=selected.lang}u.rate=speed();u.onend=()=>resolve();u.onerror=e=>reject(new Error('Speech Synthesis: '+e.error));speechSynthesis.speak(u)
+})}
+function waitForAudio(){return new Promise((resolve,reject)=>{audioEl.onended=resolve;audioEl.onerror=()=>reject(new Error('Audio playback failed'))})}
+async function speakText(text,announce=false){
+ if(!session.backend||session.loading)throw Error('Wait for the selected model to finish loading');
+ const backend=session.backend,id=session.id,version=session.version,voice=getVoice();
+ if(!text.trim())throw Error('Enter some text');
+ // Stop previous audio; backend object remains loaded.
+ stopPlayback();const call=++session.stopId;session.speaking=true;session.busy=true;session.paused=false;session.generated=null;updateControls();
+ const began=performance.now();resetPocketStream();let generationAt=0;
+ try{
+  if(backend.kind==='browser'){
+    status((announce?'Announcing':'Speaking')+' · '+LABELS[id]);session.busy=false;updateControls();
+    await speakNative(text,call);if(session.version===version&&call===session.stopId){metric('generateMs','native');session.speaking=false}
+  }else if(backend.kind==='pocket'){
+    if(!audioCtx)takeAudioGesture();if(audioCtx?.state==='suspended')await audioCtx.resume();
+    status('Generating streamed Pocket TTS audio…');session.busy=true;updateControls();
+    const result=await backend.generate(text,voice);checkCurrent(version);if(call!==session.stopId)return;
+    streamDone=true;const audio=joinPCM(streamSamples);setGenerated(wav(audio,streamRate));generationAt=performance.now()-began;
+    metric('generateMs',fmtMs(generationAt));metric('duration',(audio.length/streamRate).toFixed(2)+' s');metric('rtf',audio.length?(generationAt/1000/(audio.length/streamRate)).toFixed(2)+'×':'—');
+    status('Pocket generation complete. '+(streamSources.size?'Playing buffered chunks.':'Finished.'));
+    if(!streamSources.size){session.speaking=false;session.paused=false}
+  }else{
+    status((announce?'Announcing':'Generating')+' · '+LABELS[id]);setProgress(null,'Synthesizing audio locally…');
+    const out=await backend.generate(text,voice);checkCurrent(version);if(call!==session.stopId)return;
+    const blob=fileBlob(out);setGenerated(blob);generationAt=performance.now()-began;metric('generateMs',fmtMs(generationAt));metric('firstMs',fmtMs(generationAt));
+    audioEl.src=session.objectUrl;audioEl.playbackRate=id==='piper'?speed():1;
+    const playable=waitForAudio();const playAttempt=audioEl.play();session.busy=false;updateControls();await playAttempt;
+    status('Playing · '+LABELS[id]);await playable;
+    if(session.version===version&&call===session.stopId){session.speaking=false;session.paused=false;const duration=audioEl.duration;if(Number.isFinite(duration)&&duration>0){metric('duration',duration.toFixed(2)+' s');metric('rtf',(generationAt/1000/duration).toFixed(2)+'×')}}
+  }
+ }catch(err){if(call!==session.stopId||version!==session.version)return;if(err.message==='Generation stopped'||err.message==='Model selection changed')return;session.speaking=false;session.paused=false;session.busy=false;status(err.message,'bad');log('Error stack: '+(err.stack||err))}
+ finally{if(version===session.version&&call===session.stopId){session.busy=false;updateControls();storageUsage()}}
+}
+async function chooseEngine(id){const version=++session.version;session.id=id;session.loading=!!id;session.busy=false;badge('Not loaded');$('pocket7Panel').hidden=id!=='pocket7';$('engineNote').textContent=id?'Fetching the selected runtime and weights only…':'No engine assets requested';resetProgress();clearMetrics();
+ stopPlayback();const prev=session.backend;session.backend=null;setGenerated(null);assignVoices([],null);if(prev?.dispose)Promise.resolve(prev.dispose()).catch(e=>log('Cleanup: '+e.message));
+ if(!id){status('Select an engine to begin.');session.loading=false;updateControls();return}
+ takeAudioGesture();badge('Loading','warn');status('Preparing '+LABELS[id]+'…');if(id==='pocket18'||id==='pocket7')setProgress(null,'Loading Pocket ONNX runtime and model...');updateControls();const start=performance.now();
+ try{
+  const backend=await buildBackend(id);if(session.version!==version){await backend.dispose?.();return}session.backend=backend;session.loading=false;
+  metric('loadMs',fmtMs(performance.now()-start));badge('Ready','good');resetProgress();$('engineNote').textContent='Ready for local synthesis.';status(LABELS[id]+' loaded. Announcing its name…');updateControls();await speakText('You are listening to '+LABELS[id]+'.',true);
+ }catch(err){if(session.version!==version)return;session.loading=false;const failed=session.backend;session.backend=null;try{await failed?.dispose?.()}catch{};badge('Unavailable','bad');resetProgress();status(err.message||String(err),'bad');$('engineNote').textContent=id==='pocket7'?'A matching 7M ONNX export is required.':'An initialization error occurred; see log.';updateControls()}
+}
+function pause(){if(!session.speaking||session.paused)return;session.paused=true;if(session.id==='browser')speechSynthesis.pause();else if(session.backend?.kind==='pocket')audioCtx?.suspend().catch(e=>log(e.message));else audioEl.pause();badge('Paused','warn');updateControls()}
+function resume(){if(!session.speaking||!session.paused)return;session.paused=false;if(session.id==='browser')speechSynthesis.resume();else if(session.backend?.kind==='pocket')audioCtx?.resume().catch(e=>log(e.message));else audioEl.play().catch(e=>status('Resume blocked: '+e.message,'warn'));badge('Ready','good');updateControls()}
+function startClicked(){takeAudioGesture();if(session.speaking&&session.paused){resume();return}if(!session.backend)return;if(session.speaking)stopPlayback();speakText($('text').value)}
+function exportWav(){if(!(session.generated instanceof Blob))return;const a=document.createElement('a'),url=URL.createObjectURL(session.generated);a.href=url;a.download='browser-tts-'+(session.id||'unknown')+'-'+Date.now()+'.wav';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000)}
+$('engine').addEventListener('change',e=>chooseEngine(e.target.value));$('loadPocket7').onclick=()=>{if(session.id==='pocket7')chooseEngine('pocket7')};
+$('pocket7Base').value=localStorage.getItem('tts-test-pocket7-url')||'';$('pocket7Base').addEventListener('input',()=>localStorage.setItem('tts-test-pocket7-url',$('pocket7Base').value));
+$('voice').addEventListener('change',async()=>{const current=session.backend,v=getVoice();if(current?.setVoice){try{badge('Loading voice','warn');await current.setVoice(v);badge('Ready','good')}catch(e){status('Voice load failed: '+e.message,'bad')}}});
+$('play').onclick=startClicked;$('pause').onclick=pause;$('resume').onclick=resume;$('stop').onclick=()=>{if(session.loading){++session.version;session.loading=false;const aborted=session.backend;session.backend=null;Promise.resolve(aborted?.dispose?.()).catch(()=>{});stopPlayback();badge('Canceled','warn');status('Model load canceled. Select the model again if needed.','warn')}else{stopPlayback();badge(session.backend?'Ready':'Not loaded');status('Stopped. You can play another sample.')}};$('download').onclick=exportWav;
+$('speed').addEventListener('input',()=>{$('speedValue').value=speed().toFixed(2)+'×';if(session.backend?.kind==='pocket')$('speedHint').textContent='Pocket: playback speed (changes pitch)';else if(session.id==='piper')$('speedHint').textContent='Piper: playback speed (changes pitch)';else $('speedHint').textContent='Native synthesis speed';});
+$('resetText').onclick=()=>{$('text').value=SAMPLE;$('chars').textContent=SAMPLE.length+' characters'};
+$('text').addEventListener('input',()=>{$('chars').textContent=$('text').value.length+' characters'});$('chars').textContent=SAMPLE.length+' characters';
+$('clearLog').onclick=()=>{logLines.length=0;$('log').textContent=''};$('copyLog').onclick=()=>navigator.clipboard.writeText(logLines.join('\n')).catch(e=>status('Clipboard unavailable: '+e.message,'warn'));
+audioEl.onloadedmetadata=()=>{if(session.backend?.kind==='wav'&&Number.isFinite(audioEl.duration))metric('duration',audioEl.duration.toFixed(2)+' s')};
+const environment=[navigator.userAgentData?.platform||navigator.platform||'unknown platform','WASM: '+('WebAssembly' in window?'yes':'no'),'WebGPU: '+(navigator.gpu?'yes':'no'),'cross-origin isolated: '+(crossOriginIsolated?'yes':'no'),'CPU threads: '+(navigator.hardwareConcurrency||'?'),'memory: '+(navigator.deviceMemory||'?')+' GB'];$('environment').textContent=environment.join(' · ');
+window.addEventListener('beforeunload',()=>{stopPlayback();session.backend?.dispose?.();if(session.objectUrl)URL.revokeObjectURL(session.objectUrl);audioCtx?.close()});
+updateControls();storageUsage();log('Ready. No model requested. Select an engine to load only its weights.');
+</script>
+</body>
+</html>
