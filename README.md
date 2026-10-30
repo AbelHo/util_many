@@ -12,6 +12,7 @@ Simple Utility Websites
 - [OHLCV URL Chart](https://AbelHo.github.io/util_many/ohlcv_url_chart.html)
 - [SQLite Database Viewer](https://AbelHo.github.io/util_many/sqlite_viewer.html)
 - [Sound Sync Maximum Valid Distance Calculator](https://AbelHo.github.io/util_many/sync_max_distance.html)
+- [Browser TTS Model Comparison — 6 Engines](https://AbelHo.github.io/util_many/tts_model_comparison.html)
 - [USearch Database Viewer](https://AbelHo.github.io/util_many/usearch_viewer.html)
 - [Video Frame Annotator](https://AbelHo.github.io/util_many/video_frame_annotator.html)
 
