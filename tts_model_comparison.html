@@ -201,7 +201,7 @@ async function speakText(text,announce=false){
     status((announce?'Announcing':'Speaking')+' · '+LABELS[id]);session.busy=false;updateControls();
     await speakNative(text,call);if(session.version===version&&call===session.stopId){metric('generateMs','native');session.speaking=false}
   }else if(backend.kind==='pocket'){
-    if(!audioCtx)takeAudioGesture();if(audioCtx?.state==='suspended')await audioCtx.resume();
+    if(!audioCtx)takeAudioGesture();if(!audioCtx)throw Error('Web Audio API unavailable for Pocket streaming playback');if(audioCtx.state==='suspended')await audioCtx.resume();
     status('Generating streamed Pocket TTS audio…');session.busy=true;updateControls();
     const result=await backend.generate(text,voice);checkCurrent(version);if(call!==session.stopId)return;
     streamDone=true;const audio=joinPCM(streamSamples);setGenerated(wav(audio,streamRate));generationAt=performance.now()-began;
@@ -218,7 +218,7 @@ async function speakText(text,announce=false){
     if(session.version===version&&call===session.stopId){session.speaking=false;session.paused=false;const duration=audioEl.duration;if(Number.isFinite(duration)&&duration>0){metric('duration',duration.toFixed(2)+' s');metric('rtf',(generationAt/1000/duration).toFixed(2)+'×')}}
   }
  }catch(err){if(call!==session.stopId||version!==session.version)return;if(err.message==='Generation stopped'||err.message==='Model selection changed')return;session.speaking=false;session.paused=false;session.busy=false;status(err.message,'bad');log('Error stack: '+(err.stack||err))}
- finally{if(version===session.version&&call===session.stopId){session.busy=false;updateControls();storageUsage()}}
+ finally{if(version===session.version&&call===session.stopId){session.busy=false;resetProgress();updateControls();storageUsage()}}
 }
 async function chooseEngine(id){const version=++session.version;session.id=id;session.loading=!!id;session.busy=false;badge('Not loaded');$('pocket7Panel').hidden=id!=='pocket7';$('engineNote').textContent=id?'Fetching the selected runtime and weights only…':'No engine assets requested';resetProgress();clearMetrics();
  stopPlayback();const prev=session.backend;session.backend=null;setGenerated(null);assignVoices([],null);if(prev?.dispose)Promise.resolve(prev.dispose()).catch(e=>log('Cleanup: '+e.message));
