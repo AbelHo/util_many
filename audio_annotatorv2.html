@@ -2594,6 +2594,7 @@ self.onmessage = async ({ data: m }) => {
     }
     function requestRender() {
         cancelZoomPrefetch();
+        scheduleSecondaryRenders();
         const gradients = { ember: '#080923,#322275,#96377a,#e7834a,#fcf3b0', gray: '#000,#fff', ocean: '#040c1f,#0e3b62,#12858e,#78cfa4,#f2f8cc' };
         $('frequencyLegend').style.background = 'linear-gradient(90deg,' + gradients[$('colorMap').value] + ')';
         if (!app.meta)
@@ -2809,7 +2810,7 @@ self.onmessage = async ({ data: m }) => {
             (right - left) / w * imageWidth, (bottom - top) / h * imageHeight,
             left, top, right - left, bottom - top];
     }
-    function drawBase(canvas, isSpec) {
+    function drawBase(canvas, isSpec, displayChannel = channel()) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
         ctx.fillStyle = '#111b27';
@@ -2818,11 +2819,12 @@ self.onmessage = async ({ data: m }) => {
         ctx.beginPath();
         ctx.rect(g.left, g.top, g.w, g.h);
         ctx.clip();
-        const r = app.lastRender;
+        const focused = displayChannel === channel();
+        const r = focused ? app.lastRender : app.secondaryViews.get(displayChannel)?.result;
         if (r && app.meta) {
             const x = tX(r.start, g), w = r.span / app.span * g.w;
             if (isSpec) {
-                if (r.scale === currentScale()) {
+                if (r.image && r.scale === currentScale()) {
                     const y = fY(r.fmax, g), h = fY(r.fmin, g) - y;
                     ctx.imageSmoothingEnabled = false;
                     const rect = clippedImageRect(x, y, w, h, g, r.image.width, r.image.height);
@@ -2865,10 +2867,13 @@ self.onmessage = async ({ data: m }) => {
             ctx.globalAlpha = 1;
         }
         ctx.textAlign = 'left';
-        ctx.fillText(isSpec ? 'Spectrogram · Hz (k = 1000 Hz)' : 'Waveform · full scale', 8, 14);
+        ctx.fillText((isSpec ? 'Spectrogram · ' : 'Waveform · ') +
+            (app.meta ? channelName(displayChannel) : (isSpec ? 'Hz (k = 1000 Hz)' : 'full scale')) +
+            (focused && app.meta ? ' (focus)' : ''), 8, 14, Math.max(10, g.width - (focused ? 140 : 100)));
         ctx.textAlign = 'right';
-        ctx.fillStyle = app.renderPending ? '#ffda86' : '#d8e3ef';
-        ctx.fillText(app.renderPending ? 'Updating preview…' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
+        ctx.fillStyle = focused && app.renderPending || !r ? '#ffda86' : '#d8e3ef';
+        ctx.fillText(!r && app.meta ? 'Loading…' : focused && app.renderPending ? 'Updating preview…' :
+            isSpec && !focused ? 'Fast preview' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
     }
 
     // Endpoints allow exact overlap counts and density bins in O(pixels * log N),
@@ -3037,7 +3042,7 @@ self.onmessage = async ({ data: m }) => {
         const band = isSpec ? getDisplayFreqRange() : null;
         const show = $('showAnnotations').checked, text = $('showLabelText').checked;
         const view = show ? annotationView(g, key) : null;
-        if (key === 'wave') {
+        if (key === 'wave' && canvas === $('waveOverlay')) {
             const info = $('annotationRenderInfo');
             const message = !show ? 'Annotations hidden (all retained).' :
                 view.count.toLocaleString() + ' annotations in view · ' + (view.dense
@@ -3049,7 +3054,8 @@ self.onmessage = async ({ data: m }) => {
         const signature = [canvas.width, canvas.height, app.start, app.span,
             app.markerVersion, app.sourceVersion, key, show, text, isSpec ? currentScale() : '',
             band?.min, band?.max].join('|');
-        let layer = app.overlayLayers[key];
+        const rasterKey = key + ':' + canvas.id;
+        let layer = app.overlayLayers[rasterKey];
         if (!layer || layer.signature !== signature) {
             const offscreen = document.createElement('canvas');
             offscreen.width = canvas.width;
@@ -3092,7 +3098,7 @@ self.onmessage = async ({ data: m }) => {
             }
             pen.restore();
             layer = { signature, canvas: offscreen, textHits };
-            app.overlayLayers[key] = layer;
+            app.overlayLayers[rasterKey] = layer;
         }
         // Marker raster is stable while only the playback cursor moves.
         ctx.save();
@@ -3151,12 +3157,18 @@ self.onmessage = async ({ data: m }) => {
     function paintOverlays() {
         paintOverlay($('waveOverlay'), false);
         paintOverlay($('specOverlay'), true);
+        for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec'))
+            if (secondaryVisible(plot))
+                paintOverlay(plot.querySelector('canvas.overlay'), plot.dataset.kind === 'spec');
         for (const plot of $('plotStack').querySelectorAll(':scope > .label-track'))
             paintOverlay(plot.querySelector('canvas.overlay'), false, plot.dataset.sourceId);
     }
     function paintAll() {
         drawBase($('waveCanvas'), false);
         drawBase($('specCanvas'), true);
+        for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec'))
+            if (secondaryVisible(plot))
+                drawBase(plot.querySelector('canvas:not(.overlay)'), plot.dataset.kind === 'spec', Number(plot.dataset.channel));
         for (const plot of $('plotStack').querySelectorAll(':scope > .label-track')) {
             const source = app.importSources.get(plot.dataset.sourceId);
             if (source) drawLabelTrackBase(plot.querySelector('canvas:not(.overlay)'), source);
@@ -4037,7 +4049,7 @@ self.onmessage = async ({ data: m }) => {
             if (text && p.x >= x - 3 && p.x <= x + width + 3 &&
                 p.y >= p.g.top - 3 && p.y <= p.g.top + 17) return selected;
         }
-        const hits = app.overlayLayers[layer]?.textHits || [];
+        const hits = app.overlayLayers[layer + ':' + canvas.id]?.textHits || [];
         for (let i = hits.length - 1; i >= 0; i--) {
             const h = hits[i];
             if (p.x >= h.x - 3 && p.x <= h.x + h.w + 3 &&
@@ -4114,6 +4126,9 @@ self.onmessage = async ({ data: m }) => {
         }
         // Gain only changes waveform geometry, not spectral data or annotations.
         drawBase($('waveCanvas'), false);
+        for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave'))
+            if (secondaryVisible(plot))
+                drawBase(plot.querySelector('canvas:not(.overlay)'), false, Number(plot.dataset.channel));
     }
     function bindAnnotationCanvas(canvas, isSpec, trackId = null) {
         const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
@@ -4148,7 +4163,9 @@ self.onmessage = async ({ data: m }) => {
             if (!app.meta)
                 return;
             const p = canvasPoint(e, canvas);
-            $('hoverInfo').textContent = p.inside ? fmt(p.time, 6) + ' s' + (isSpec ? ' · ' + fmt(p.frequency, 2) + ' Hz' : '') : '';
+            $('hoverInfo').textContent = p.inside ? (canvas.closest('[data-channel]') ?
+                channelName(Number(canvas.closest('[data-channel]').dataset.channel)) + ' · ' : '') +
+                fmt(p.time, 6) + ' s' + (isSpec ? ' · ' + fmt(p.frequency, 2) + ' Hz' : '') : '';
             if (p.inside && $('showAnnotations').checked && p.y >= p.g.top + p.g.h - 20) {
                 const view = annotationView(p.g, layer);
                 if (view.dense) {
@@ -4244,7 +4261,7 @@ self.onmessage = async ({ data: m }) => {
             const p = canvasPoint(e, canvas), delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? p.g.h : 1);
             if (e.ctrlKey || e.metaKey)
                 zoom(Math.exp(clamp(delta * .002, -1, 1)), p.time);
-            else if (e.altKey && canvas === $('waveOverlay')) {
+            else if (e.altKey && !isSpec && !trackId) {
                 // Logarithmic scaling: fine, relative changes with trackpad or
                 // wheel; no artificial floor/ceiling at the selector presets.
                 if (delta !== 0) {
@@ -4342,7 +4359,7 @@ self.onmessage = async ({ data: m }) => {
     });
     handle('amplitude', 'change', () => {
         // Switching to a preset must not discard the last custom amplitude.
-        drawBase($('waveCanvas'), false);
+        setWaveAmplitude(Number($('amplitude').value));
     });
     handle('waveformColor', 'input', paintAll);
     handle('channel', 'change', async () => {
