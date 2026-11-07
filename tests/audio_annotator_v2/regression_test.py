@@ -35,7 +35,7 @@ with sync_playwright() as p:
    # Diagnostic uses the same centered Hann kernel as the visualization.
    with sf.SoundFile(F/'ultrasonic_PCM_24.wav') as f:f.seek(round(.5*f.samplerate)-4096);a=f.read(8192,dtype='float32',always_2d=True)[:,ch]
    w=np.hanning(8192);amp=np.abs(np.fft.rfft(a*w))*2/w.sum();amp[[0,-1]]/=2;reference=20*np.log10(np.maximum(amp,1e-9));error=float(np.max(np.abs(db-reference)));maxerr=max(maxerr,error);assert error<.002,error
-  page.locator('#channel').select_option('1');wait();page.locator('#channel').select_option('-1');wait();assert page.locator('#channel').input_value()=='-1'
+  page.locator('#channelPicker').evaluate('(node) => node.open = true');page.locator('#channelChoices button[data-focus-channel="1"]').click();wait();page.locator('#channelChoices button[data-focus-channel="-1"]').click();wait();assert state()['focusChannel']==-1
   return {'ultrasonic_peaks_hz':peaks,'max_fft_error_db':maxerr}
  record('Native ultrasonic FFT matches NumPy; channel/mix UI',fft_check)
  def extensible():
