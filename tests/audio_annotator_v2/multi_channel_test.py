@@ -104,7 +104,7 @@ with sync_playwright() as playwright:
     align()
     page.locator('#channel-spec-1').scroll_into_view_if_needed()
     page.wait_for_function('''() => document.querySelector("#channel-spec-1 canvas:not(.overlay)")?.width > 0''')
-    page.wait_for_function('''() => AudioAnnotatorV2.inspect().secondaryPreviewCount >= 2''', timeout=20000)
+    page.wait_for_function('''() => AudioAnnotatorV2.inspect().secondarySpectrumChannels.includes(1)''', timeout=20000)
 
     # Select all physical channels; only nearby plots receive background rendering.
     open_picker()
