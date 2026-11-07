@@ -42,7 +42,11 @@ with sync_playwright() as playwright:
     def state():
         return page.evaluate('AudioAnnotatorV2.inspect()')
 
+    def open_picker():
+        page.locator('#channelPicker').evaluate('(node) => node.open = true')
+
     def choices(*channels):
+        open_picker()
         for c in channels:
             page.locator(f'#channelChoices input[data-channel="{c}"]').check()
 
@@ -53,6 +57,7 @@ with sync_playwright() as playwright:
         )
 
     def focus(ch):
+        open_picker()
         page.locator(f'#channelChoices button[data-focus-channel="{ch}"]').click()
         page.wait_for_function('(ch) => AudioAnnotatorV2.inspect().focusChannel === ch', arg=ch)
 
@@ -102,6 +107,7 @@ with sync_playwright() as playwright:
     page.wait_for_function('''() => AudioAnnotatorV2.inspect().secondaryPreviewCount >= 2''', timeout=20000)
 
     # Select all physical channels; only nearby plots receive background rendering.
+    open_picker()
     page.locator('#channelSelectAll').click()
     wave_rows(7)
     assert state()['selectedChannels'] == list(range(8))
@@ -134,6 +140,7 @@ with sync_playwright() as playwright:
 
     # Remove a focused channel: another selected channel becomes the focus.
     focus(4)
+    open_picker()
     page.locator('#channelChoices input[data-channel="4"]').uncheck()
     page.wait_for_function('AudioAnnotatorV2.inspect().focusChannel !== 4')
     assert 4 not in state()['selectedChannels']
@@ -145,9 +152,11 @@ with sync_playwright() as playwright:
     assert -1 in state()['selectedChannels']
 
     # Only focused leaves one visible track; the final track cannot be unticked.
+    open_picker()
     page.locator('#channelSolo').click()
     wave_rows(0)
     assert state()['selectedChannels'] == [-1]
+    open_picker()
     page.locator('#channelChoices input[data-channel="-1"]').uncheck()
     assert state()['selectedChannels'] == [-1]
     assert page.locator('#channelChoices input[data-channel="-1"]').is_checked()
