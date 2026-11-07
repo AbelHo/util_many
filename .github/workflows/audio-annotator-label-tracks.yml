@@ -6,6 +6,7 @@ on:
       - feature/audio-label-stacks-resizable-20261028
       - feature/audio-label-inline-edit-compact-20261028
       - feature/audio-tracks-10px-enter-edit-20261029
+      - feat/audio-annotator-multi-channel-tracks
     paths:
       - audio_annotatorv2.html
       - tests/audio_annotator_v2/*.py
