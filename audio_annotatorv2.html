@@ -1831,6 +1831,7 @@ self.onmessage = async ({ data: m }) => {
         plot.append(canvas, overlay, button);
         setTrackHeight(plot, app.trackHeights.get(plot.id) ?? (kind === 'spec' ? 210 : 142));
         bindAnnotationCanvas(overlay, kind === 'spec');
+        app.resizeObserver?.observe(plot);
         app.secondaryObserver?.observe(plot);
         return plot;
     }
@@ -1849,6 +1850,7 @@ self.onmessage = async ({ data: m }) => {
         for (const plot of stack.querySelectorAll(':scope > .channel-wave, :scope > .channel-spec')) {
             if (!want.has(plot.dataset.channel) || plot.dataset.kind === 'spec' && !$('otherSpectrograms').checked) {
                 app.secondaryObserver?.unobserve(plot);
+                app.resizeObserver?.unobserve(plot);
                 app.visibleSecondary.delete(plot);
                 delete app.overlayLayers['wave:' + plot.querySelector('canvas.overlay').id];
                 delete app.overlayLayers['spec:' + plot.querySelector('canvas.overlay').id];
