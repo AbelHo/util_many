@@ -137,6 +137,7 @@ with sync_playwright() as playwright:
     }''')
     assert metrics['p95'] < 160, metrics
     assert metrics['max'] < 700, metrics
+    print('MULTICHANNEL GUI LATENCY', metrics, flush=True)
 
     # Remove a focused channel: another selected channel becomes the focus.
     focus(4)
@@ -157,7 +158,7 @@ with sync_playwright() as playwright:
     wave_rows(0)
     assert state()['selectedChannels'] == [-1]
     open_picker()
-    page.locator('#channelChoices input[data-channel="-1"]').uncheck()
+    page.locator('#channelChoices input[data-channel="-1"]').click()
     assert state()['selectedChannels'] == [-1]
     assert page.locator('#channelChoices input[data-channel="-1"]').is_checked()
 
