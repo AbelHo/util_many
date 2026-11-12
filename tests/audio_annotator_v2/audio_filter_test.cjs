@@ -87,6 +87,17 @@ const near = (a, b, eps = 2e-6) => assert.ok(Math.abs(a - b) < eps, a + ' not cl
         const audio = await worker.audioChunk({ position: 32000, frames: 512, speed: 1,
             outputRate: sampleRate, channel: 0 });
         for (let i = 0; i < audio.data.length; i++) near(audio.data[i], ch0[i]);
+        const both = await worker.audioChunk({ position: 32000, frames: 512, speed: 1,
+            outputRate: sampleRate, channels: [0, 1] });
+        const onlySecond = await worker.audioChunk({ position: 32000, frames: 512, speed: 1,
+            outputRate: sampleRate, channels: [1] });
+        for (let i = 0; i < both.data.length; i++) {
+            near(both.data[i], (ch0[i] + ch1[i]) / 2);
+            near(onlySecond.data[i], ch1[i]);
+        }
+        for (const channels of [[], [0, 0], [0, 2], [-1, 0]])
+            await assert.rejects(() => worker.audioChunk({ position: 32000, frames: 512,
+                speed: 1, outputRate: sampleRate, channels }));
         assert.ok(worker.statistics().filterCache > 0, 'Filtered caches should be used');
         const overview = worker.createOverview(0, 1024);
         assert.equal(overview.filterKey, worker.filterSettingsKey());
