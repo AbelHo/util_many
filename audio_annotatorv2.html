@@ -3054,6 +3054,12 @@ self.onmessage = async ({ data: m }) => {
         }
         ctx.globalAlpha = 1;
     }
+    function layerForCanvas(canvas, isSpec, trackId = null) {
+        if (trackId) return 'track:' + trackId;
+        const plot = canvas.closest('[data-channel]');
+        const ch = plot ? Number(plot.dataset.channel) : channel();
+        return (isSpec ? 'spec:' : 'wave:') + ch;
+    }
     function paintOverlay(canvas, isSpec, trackId = null) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
@@ -3062,11 +3068,11 @@ self.onmessage = async ({ data: m }) => {
                 $('annotationRenderInfo').textContent = 'No annotations in view.';
             return;
         }
-        const key = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        const key = layerForCanvas(canvas, isSpec, trackId);
         const band = isSpec ? getDisplayFreqRange() : null;
         const show = $('showAnnotations').checked, text = $('showLabelText').checked;
         const view = show ? annotationView(g, key) : null;
-        if (key === 'wave' && canvas === $('waveOverlay')) {
+        if (canvas === $('waveOverlay')) {
             const info = $('annotationRenderInfo');
             const message = !show ? 'Annotations hidden (all retained).' :
                 view.count.toLocaleString() + ' annotations in view · ' + (view.dense
@@ -3567,6 +3573,7 @@ self.onmessage = async ({ data: m }) => {
         for (const m of rows.slice(app.page * 100, (app.page + 1) * 100)) {
             const tr = document.createElement('tr');
             tr.dataset.id = m.id;
+            tr.title = m.channel == null ? 'All channels' : channelName(m.channel) + ' only';
             if (m.id === app.selected)
                 tr.className = 'selected';
             for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), markerFrequencyText(m)]) {
@@ -3817,7 +3824,7 @@ self.onmessage = async ({ data: m }) => {
         return lines.length ? lines.join('\n') + '\n' : '';
     }
     // AUDACITY_LABEL_IO_END
-    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json', 'source_id'];
+    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json', 'source_id', 'channel'];
     const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
     function exportCSV() {
         const data = exportObject(), metadata = { ...data, csvTextEncoding: 'apostrophe-prefix' };
@@ -3828,7 +3835,7 @@ self.onmessage = async ({ data: m }) => {
         const lines = [csvHeader.map(csvCell).join(','), row.map(csvCell).join(',')];
         for (const m of data.markers) {
             const text = v => "'" + v;
-            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), '', text(m.sourceId || '')].map(csvCell).join(','));
+            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), '', text(m.sourceId || ''), m.channel].map(csvCell).join(','));
         }
         return lines.join('\r\n') + '\r\n';
     }
@@ -3903,7 +3910,7 @@ self.onmessage = async ({ data: m }) => {
             if (!rows.length)
                 throw Error('Empty CSV.');
             const header = rows.shift(), col = name => header.indexOf(name);
-            if (new Set(header).size !== header.length || csvHeader.slice(0, -1).some(h => col(h) < 0))
+            if (new Set(header).size !== header.length || csvHeader.slice(0, -2).some(h => col(h) < 0))
                 throw Error('CSV needs the Audio Annotator v2 column headers.');
             const metadataRows = rows.filter(r => r[col('record_type')] === 'metadata');
             if (metadataRows.length !== 1)
@@ -3928,7 +3935,8 @@ self.onmessage = async ({ data: m }) => {
                     return value;
                 };
                 data.markers.push({ id: textField('id'), type: get('type'), start: get('start_seconds'), end: get('end_seconds'), frequency: get('frequency_hz') === '' ? null : get('frequency_hz'), freqMin: get('freq_min_hz') === '' ? null : get('freq_min_hz'), freqMax: get('freq_max_hz') === '' ? null : get('freq_max_hz'), tag: textField('tag'), label: textField('label'), color: get('color'), alpha: get('alpha'), createdAt: textField('created_at'),
-                    sourceId: col('source_id') >= 0 ? textField('source_id') : null });
+                    sourceId: col('source_id') >= 0 ? textField('source_id') : null,
+                    channel: col('channel') >= 0 && get('channel') !== '' ? get('channel') : null });
             }
         }
         if (!data || data.schema !== 'audio-annotator-v2' || data.version !== 1 || !Array.isArray(data.markers) || !Array.isArray(data.tags) || !data.meta)
@@ -4093,10 +4101,11 @@ self.onmessage = async ({ data: m }) => {
         }
         return null;
     }
-    function nearestMarker(p, isSpec, trackId = null) {
+    function nearestMarker(p, isSpec, trackId = null, canvas = null) {
         // Aggregated geometry is not an individual marker: don't select/delete an
         // arbitrary hidden event. Use the table or zoom into the density strip.
-        const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        const layer = canvas ? layerForCanvas(canvas, isSpec, trackId) :
+            trackId ? 'track:' + trackId : isSpec ? 'spec:' + channel() : 'wave:' + channel();
         if (!$('showAnnotations').checked || annotationView(p.g, layer).dense) return null;
         let best = null, distance = 11;
         const tolerance = 11 / p.g.w * app.span;
@@ -4126,7 +4135,7 @@ self.onmessage = async ({ data: m }) => {
         }, filteredMarkerIndex(layer));
         return best;
     }
-    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8, sourceId: g.trackId || null }; }
+    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8, sourceId: g.trackId || null, channel: g.isSpec ? g.audioChannel : null }; }
     function cancelGesture() {
         const g = app.gesture;
         app.gesture = null;
@@ -4166,7 +4175,7 @@ self.onmessage = async ({ data: m }) => {
                 drawBase(plot.querySelector('canvas:not(.overlay)'), false, Number(plot.dataset.channel));
     }
     function bindAnnotationCanvas(canvas, isSpec, trackId = null) {
-        const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        const layer = () => layerForCanvas(canvas, isSpec, trackId);
         canvas.addEventListener('pointerdown', e => {
             cancelZoomPrefetch();
             if (!app.meta || e.button > 1)
@@ -4176,7 +4185,7 @@ self.onmessage = async ({ data: m }) => {
                 return;
             e.preventDefault();
             canvas.focus({ preventScroll: true });
-            const nearby = markerAtText(point, layer, canvas) || nearestMarker(point, isSpec, trackId);
+            const nearby = markerAtText(point, layer(), canvas) || nearestMarker(point, isSpec, trackId, canvas);
             if (e.shiftKey && !app.held) {
                 if (nearby)
                     removeMarker(nearby.id);
@@ -4190,7 +4199,11 @@ self.onmessage = async ({ data: m }) => {
             // Keep range drags functional even when they start inside an existing
             // annotation. A nearby Point click is briefly deferred on pointerup
             // so its matching double-click can open the editor without adding one.
-            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
+            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point,
+                audioChannel: isSpec ? Number(layer().slice(5)) : null,
+                current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span,
+                tag: app.held ?? $('tagInput').value, label: $('labelInput').value,
+                nearby: nearby?.id, moved: false };
             canvas.setPointerCapture(e.pointerId);
             paintOverlays();
         });
@@ -4202,7 +4215,7 @@ self.onmessage = async ({ data: m }) => {
                 channelName(Number(canvas.closest('[data-channel]').dataset.channel)) + ' · ' : '') +
                 fmt(p.time, 6) + ' s' + (isSpec ? ' · ' + fmt(p.frequency, 2) + ' Hz' : '') : '';
             if (p.inside && $('showAnnotations').checked && p.y >= p.g.top + p.g.h - 20) {
-                const view = annotationView(p.g, layer);
+                const view = annotationView(p.g, layer());
                 if (view.dense) {
                     const bin = clamp(Math.floor((p.x - p.g.left) / p.g.w * view.bins.length), 0, view.bins.length - 1);
                     $('hoverInfo').textContent = fmt(p.time, 6) + ' s · ' + view.bins[bin].toLocaleString() + ' annotations overlap this time bin';
@@ -4270,14 +4283,14 @@ self.onmessage = async ({ data: m }) => {
             if (!app.meta || !$('showAnnotations').checked) return;
             const p = canvasPoint(e, canvas);
             if (!p.inside) return;
-            const marker = markerAtText(p, layer, canvas) || nearestMarker(p, isSpec, trackId);
+            const marker = markerAtText(p, layer(), canvas) || nearestMarker(p, isSpec, trackId, canvas);
             if (marker) {
                 e.preventDefault();
                 e.stopPropagation();
                 cancelGesture();
                 openInlineMarkerEditor(marker.id, e.clientX, e.clientY);
             }
-            else if (p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer).dense &&
+            else if (p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer()).dense &&
                 document.querySelector('input[name=mode]:checked').value === 'navigate') {
                 e.preventDefault();
                 zoom(.125, p.time);
@@ -4509,7 +4522,8 @@ self.onmessage = async ({ data: m }) => {
         const min = $('editMin').value, max = $('editMax').value;
         // Preserve imported point spectral ranges even when one end is undefined.
         const pair = old.type === 'frequency_range' || old.type === 'point' && (old.freqMin !== null || old.freqMax !== null || max !== '');
-        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value,
+        const m = normalizeMarker({ ...old, channel: $('editChannel').value,
+            start: $('editStart').value, end: $('editEnd').value,
             frequency: old.type === 'point' && !pair ? min : null,
             freqMin: pair ? min : null, freqMax: pair ? max : null, tag, label });
         transact({ markers: [{ id: m.id, before: old, after: m }], tags: m.tag && !app.tags.has(m.tag) ? [{ key: m.tag, before: null, after: tagDefinition(m.tag) }] : [] });
