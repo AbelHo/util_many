@@ -120,7 +120,6 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 .channel-choice button:disabled{opacity:.65}
 .plot.channel-wave{height:142px}
 .plot.channel-spec{height:210px}
-.plot .channel-focus{position:absolute;z-index:3;top:2px;right:7px;font-size:11px;padding:1px 6px;opacity:.88}
 #channelViewInfo{flex-basis:100%}
 @media(max-width:600px){.channel-menu{max-height:270px}.plot.channel-wave{height:110px}.plot.channel-spec{height:160px}}
 </style>
@@ -135,8 +134,8 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div id="outputInfo" class="hint">Playback output is separate from the file’s native analysis rate. Slow ultrasonic recordings down to hear them.</div>
 </section>
 <section class="panel" aria-label="View settings">
-<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><span class="row" style="margin:0"><span>Channels</span><details id="channelPicker" class="channel-picker is-disabled"><summary id="channelSummary">Channel 1</summary><div class="channel-menu"><div class="row"><button type="button" id="channelSelectAll" disabled>Select all</button><button type="button" id="channelSolo" disabled>Only focused</button></div><div id="channelChoices" role="group" aria-label="Displayed audio channels"></div></div></details></span><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
-<div class="row hint"><label><input id="otherSpectrograms" type="checkbox" disabled> Spectrograms for all displayed channels (fast previews)</label><span id="channelViewInfo">Check channels to add waveform rows. Focus selects detailed spectrogram and mono playback.</span></div>
+<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><span class="row" style="margin:0"><span>Channels</span><details id="channelPicker" class="channel-picker is-disabled"><summary id="channelSummary">Channel 1</summary><div class="channel-menu"><div class="row"><button type="button" id="channelSelectAll" disabled>Select all</button><button type="button" id="channelSolo" disabled>First only</button></div><div id="channelChoices" role="group" aria-label="Displayed audio channels"></div></div></details></span><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row hint"><span id="channelViewInfo">Check channels to show synchronized waveforms and spectrograms; selected channels play together as an averaged mono mix.</span></div>
 <div class="row hint"><label><input id="rememberOverview" type="checkbox" checked> Remember overviews on this device</label><button id="clearSavedOverviews" disabled>Clear saved overviews</button></div>
 <div id="overviewInfo" class="hint" role="status">Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.</div>
 <div class="row" aria-label="Audio frequency filter controls"><strong>Audio filter</strong><label>High-pass cutoff (Hz) <input id="highPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="High-pass cutoff in Hz; blank disables high-pass" disabled></label><label>Low-pass cutoff (Hz) <input id="lowPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="Low-pass cutoff in Hz; blank disables low-pass" disabled></label><span id="audioFilterInfo" class="hint" role="status" aria-live="polite">Off · original audio</span></div>
@@ -1387,10 +1386,28 @@ async function audioChunk(p) {
     const ratio = source.sampleRate * p.speed / p.outputRate;
     if (!Number.isFinite(ratio) || ratio <= 0 || p.position < 0 || p.position > source.frames)
         throw Error('Invalid playback request.');
+    // The UI plays every checked physical channel together. A single-channel
+    // request and legacy diagnostic channel=-1 requests remain supported.
+    const channels = p.channels === undefined ? [p.channel] : p.channels;
+    if (!Array.isArray(channels) || !channels.length || channels.length > source.channels ||
+        channels.some(ch => !Number.isInteger(ch) || (p.channels === undefined ? ch < -1 : ch < 0) || ch >= source.channels) ||
+        new Set(channels).size !== channels.length)
+        throw Error('Invalid playback channel selection.');
     const frames = Math.max(0, Math.min(Math.floor(p.frames), Math.ceil((source.frames - p.position) / ratio), Math.floor(262144 / ratio)));
     if (!frames)
         return { data: new Float32Array(), next: source.frames };
-    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await filteredRead(first, count, p.channel), out = new Float32Array(frames);
+    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33;
+    const a = await filteredRead(first, count, channels[0]);
+    if (channels.length > 1) {
+        // Mix before playback-only sinc resampling, using one reusable accumulator
+        // instead of retaining an AudioBuffer for each channel.
+        for (let c = 1; c < channels.length; c++) {
+            const next = await filteredRead(first, count, channels[c]);
+            for (let i = 0; i < count; i++) a[i] += next[i];
+        }
+        for (let i = 0; i < count; i++) a[i] /= channels.length;
+    }
+    const out = new Float32Array(frames);
     if (ratio === 1 && Number.isInteger(p.position))
         out.set(a.subarray(32, 32 + frames));
     else {
@@ -1739,75 +1756,55 @@ self.onmessage = async ({ data: m }) => {
     }
     function syncChannelPicker() {
         $('channelSummary').textContent = app.selectedChannels.size === 1 ?
-            channelName(channel()) : app.selectedChannels.size + ' channels · focus ' + (channel() === -1 ? 'Mix' : channel() + 1);
+            channelName(orderedChannels()[0]) : app.selectedChannels.size + ' channels selected';
         for (const input of $('channelChoices').querySelectorAll('input[data-channel]'))
             input.checked = app.selectedChannels.has(Number(input.dataset.channel));
-        for (const button of $('channelChoices').querySelectorAll('button[data-focus-channel]')) {
-            button.disabled = Number(button.dataset.focusChannel) === channel();
-            button.textContent = button.disabled ? 'Focused' : 'Focus';
-        }
         if (app.meta) $('channelViewInfo').textContent =
-            app.selectedChannels.size + ' of ' + (app.meta.channels + (app.meta.channels > 1 ? 1 : 0)) +
-            ' available tracks displayed · ' + channelName(channel()) +
-            ' supplies detailed spectrogram, overview and playback.' +
-            ($('otherSpectrograms').checked ? ' Additional spectrograms are lower-resolution previews.' : '');
+            app.selectedChannels.size + ' of ' + app.meta.channels +
+            ' channels shown as synchronized waveforms and spectrograms · playback: ' +
+            (app.selectedChannels.size === 1 ? channelName(orderedChannels()[0]) :
+                'average of all ' + app.selectedChannels.size + ' checked channels') +
+            '. Spectral overview indexes ' + channelName(channel()) + '.';
     }
     function populateChannelPicker() {
         const fragment = document.createDocumentFragment();
-        for (let c = 0; c < app.meta.channels; c++) appendChoice(c);
-        if (app.meta.channels > 1) appendChoice(-1);
-        function appendChoice(ch) {
+        for (let c = 0; c < app.meta.channels; c++) {
             const row = document.createElement('div'), label = document.createElement('label');
-            const check = document.createElement('input'), focus = document.createElement('button');
+            const check = document.createElement('input');
             row.className = 'channel-choice';
             check.type = 'checkbox';
-            check.dataset.channel = String(ch);
-            check.setAttribute('aria-label', 'Show ' + channelName(ch));
-            label.append(check, document.createTextNode(channelName(ch)));
-            focus.type = 'button';
-            focus.dataset.focusChannel = String(ch);
-            focus.setAttribute('aria-label', 'Focus ' + channelName(ch) + ' for detailed spectrogram and playback');
-            row.append(label, focus);
+            check.dataset.channel = String(c);
+            check.setAttribute('aria-label', 'Display and play ' + channelName(c));
+            label.append(check, document.createTextNode(channelName(c)));
+            row.append(label);
             fragment.append(row);
         }
         $('channelChoices').replaceChildren(fragment);
         syncChannelPicker();
     }
-    function setSelectedChannels(channels) {
-        if (!app.meta || !channels.size) return;
+    async function setSelectedChannels(channels) {
+        if (!app.meta || !channels.size ||
+            [...channels].some(ch => !Number.isInteger(ch) || ch < 0 || ch >= app.meta.channels)) return;
+        if (channels.size === app.selectedChannels.size &&
+            [...channels].every(ch => app.selectedChannels.has(ch))) return;
+        const wasPlaying = app.playing, epoch = app.loadEpoch, serial = ++app.focusSerial;
+        const referenceChanged = !channels.has(channel());
+        if (wasPlaying) pause(); // Drop old scheduled segments before selecting a new mix.
         app.selectedChannels = channels;
-        if (!channels.has(channel())) {
-            focusChannel(orderedChannels()[0]).catch(report);
-            return;
-        }
+        if (referenceChanged) app.viewChannel = orderedChannels()[0];
         syncChannelPicker();
         rebuildChannelPlots();
-    }
-    async function focusChannel(ch) {
-        if (!app.meta || (ch !== -1 && (ch < 0 || ch >= app.meta.channels))) return;
-        app.selectedChannels.add(ch);
-        if (ch === channel()) {
-            syncChannelPicker();
-            rebuildChannelPlots();
-            return;
-        }
-        const wasPlaying = app.playing, epoch = app.loadEpoch, focusSerial = ++app.focusSerial;
-        pause();
-        cancelZoomPrefetch();
-        app.viewChannel = ch;
-        app.lastRender = null;
-        app.renderCache = [];
-        app.renderCacheBytes = 0;
-        updateOverviewControls({ active: false, progress: 0 });
-        syncChannelPicker();
-        rebuildChannelPlots();
-        requestRender();
-        try {
+        if (referenceChanged) {
+            cancelZoomPrefetch();
+            app.lastRender = null;
+            app.renderCache = [];
+            app.renderCacheBytes = 0;
+            updateOverviewControls({ active: false, progress: 0 });
+            requestRender();
             await restoreOverview();
-            if (wasPlaying && epoch === app.loadEpoch && focusSerial === app.focusSerial)
-                await play();
         }
-        catch (e) { if (epoch === app.loadEpoch && focusSerial === app.focusSerial) report(e); }
+        if (wasPlaying && epoch === app.loadEpoch && serial === app.focusSerial)
+            await play();
     }
     function channelPlot(ch, kind) {
         const plot = document.createElement('div');
@@ -1822,13 +1819,7 @@ self.onmessage = async ({ data: m }) => {
         overlay.id = plot.id + '-overlay';
         overlay.tabIndex = 0;
         overlay.setAttribute('aria-label', channelName(ch) + (kind === 'spec' ? ' spectrogram' : ' waveform') + ' annotation surface');
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'channel-focus';
-        button.textContent = 'Focus ' + (ch === -1 ? 'Mix' : ch + 1);
-        button.title = 'Use this channel for detailed spectrogram, overview and playback';
-        button.addEventListener('click', () => focusChannel(ch).catch(report));
-        plot.append(canvas, overlay, button);
+        plot.append(canvas, overlay);
         setTrackHeight(plot, app.trackHeights.get(plot.id) ?? (kind === 'spec' ? 210 : 142));
         bindAnnotationCanvas(overlay, kind === 'spec');
         app.resizeObserver?.observe(plot);
@@ -1848,7 +1839,7 @@ self.onmessage = async ({ data: m }) => {
         const stack = $('plotStack'), desired = app.meta ? orderedChannels().filter(ch => ch !== channel()) : [];
         const want = new Set(desired.map(String));
         for (const plot of stack.querySelectorAll(':scope > .channel-wave, :scope > .channel-spec')) {
-            if (!want.has(plot.dataset.channel) || plot.dataset.kind === 'spec' && !$('otherSpectrograms').checked) {
+            if (!want.has(plot.dataset.channel)) {
                 app.secondaryObserver?.unobserve(plot);
                 app.resizeObserver?.unobserve(plot);
                 app.visibleSecondary.delete(plot);
@@ -1864,7 +1855,7 @@ self.onmessage = async ({ data: m }) => {
             before.before(plot);
         }
         let after = $('specPlot');
-        if ($('otherSpectrograms').checked) for (const ch of desired) {
+        for (const ch of desired) {
             let plot = stack.querySelector('#channel-spec-' + (ch === -1 ? 'mix' : ch));
             if (!plot) plot = channelPlot(ch, 'spec');
             after.after(plot);
@@ -2091,7 +2082,7 @@ self.onmessage = async ({ data: m }) => {
         $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
         return f;
     }
-    const readyControls = ['highPassHz', 'lowPassHz', 'channelSelectAll', 'channelSolo', 'otherSpectrograms', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
+    const readyControls = ['highPassHz', 'lowPassHz', 'channelSelectAll', 'channelSolo', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
             $(id).disabled = !enabled;
@@ -2343,7 +2334,7 @@ self.onmessage = async ({ data: m }) => {
         try {
             const context = app.context;
             while (app.playing && epoch === app.playEpoch && app.nextWhen < context.currentTime + .9 && app.nextPosition < app.meta.frames) {
-                const position = app.nextPosition, speed = Number($('speed').value), result = await app.playback.call('audio', { position, frames: Math.max(1, Math.round(context.sampleRate * .3)), speed, outputRate: context.sampleRate, channel: channel() });
+                const position = app.nextPosition, speed = Number($('speed').value), result = await app.playback.call('audio', { position, frames: Math.max(1, Math.round(context.sampleRate * .3)), speed, outputRate: context.sampleRate, channels: orderedChannels() });
                 if (!app.playing || epoch !== app.playEpoch)
                     return;
                 if (!result.data.length) {
@@ -4382,24 +4373,16 @@ self.onmessage = async ({ data: m }) => {
         else chosen.delete(ch);
         if (!chosen.size) {
             box.checked = true; // Keep at least one drawable, playable track.
-            status('Keep one channel selected. Use Only focused to show just one.');
+            status('Keep one channel selected. Use First only to show one channel.');
             return;
         }
         setSelectedChannels(chosen);
-    });
-    handle('channelChoices', 'click', e => {
-        const button = e.target.closest('button[data-focus-channel]');
-        if (button) return focusChannel(Number(button.dataset.focusChannel));
     });
     handle('channelSelectAll', 'click', () => {
         if (!app.meta) return;
         setSelectedChannels(new Set(Array.from({ length: app.meta.channels }, (_, i) => i)));
     });
-    handle('channelSolo', 'click', () => setSelectedChannels(new Set([channel()])));
-    handle('otherSpectrograms', 'change', () => {
-        if (app.meta) rebuildChannelPlots();
-        syncChannelPicker();
-    });
+    handle('channelSolo', 'click', () => setSelectedChannels(new Set([orderedChannels()[0]])));
     document.addEventListener('pointerdown', e => {
         const picker = $('channelPicker');
         if (picker.open && !picker.contains(e.target)) picker.open = false;
