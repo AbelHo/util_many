@@ -49,13 +49,19 @@ with sync_playwright() as playwright:
     def open_picker():
         page.locator('#channelPicker').evaluate('(node) => node.open = true')
 
-    def check_channel(ch):
-        open_picker()
-        page.locator(f'#channelChoices input[data-channel="{ch}"]').check()
+    def picker_box(ch, view):
+        assert view in ('wave', 'spec')
+        return page.locator(f'#channelChoices input[data-channel="{ch}"][data-view="{view}"]')
 
-    def uncheck_channel(ch):
+    def check_channel(ch, view=None):
         open_picker()
-        page.locator(f'#channelChoices input[data-channel="{ch}"]').uncheck()
+        for kind in ((view,) if view else ('wave', 'spec')):
+            picker_box(ch, kind).check()
+
+    def uncheck_channel(ch, view=None):
+        open_picker()
+        for kind in ((view,) if view else ('wave', 'spec')):
+            picker_box(ch, kind).uncheck()
 
     def rows(n):
         page.wait_for_function(
@@ -64,6 +70,7 @@ with sync_playwright() as playwright:
 
     def align():
         positions = page.evaluate('''() => [...document.querySelectorAll("#plotStack > .plot")]
+            .filter(plot => !plot.hidden)
             .map(plot => {
                 const r = plot.querySelector("canvas").getBoundingClientRect();
                 return [r.left + 64, r.right - 16];
@@ -86,8 +93,14 @@ with sync_playwright() as playwright:
     page.locator('#fileInput').set_input_files(str(audio))
     page.wait_for_function('AudioAnnotatorV2.inspect().meta?.channels === 8')
     assert state()['selectedChannels'] == [0]
+    assert state()['selectedWaveChannels'] == [0]
+    assert state()['selectedSpectrogramChannels'] == [0]
     assert state()['playbackChannels'] == [0]
-    assert page.locator('#channelChoices input[data-channel]').count() == 8
+    assert page.locator('#channelChoices input[data-view="wave"]').count() == 8
+    assert page.locator('#channelChoices input[data-view="spec"]').count() == 8
+    assert picker_box(0, 'wave').is_checked() and picker_box(0, 'spec').is_checked()
+    assert not picker_box(1, 'wave').is_checked() and not picker_box(1, 'spec').is_checked()
+    assert page.locator('#channelChoices .channel-head').inner_text().split() == ['Channel', 'Waveform', 'Spectrogram']
     assert page.locator('[data-focus-channel]').count() == 0
     assert page.locator('#otherSpectrograms').count() == 0
 
@@ -102,6 +115,26 @@ with sync_playwright() as playwright:
     page.wait_for_function(
         'AudioAnnotatorV2.inspect().secondarySpectrumChannels.includes(2)',
         timeout=25000)
+
+    # Waveform and spectrogram can be switched independently for a channel.
+    uncheck_channel(2, 'wave')
+    assert state()['selectedWaveChannels'] == [0, 1, 3]
+    assert state()['selectedSpectrogramChannels'] == [0, 1, 2, 3]
+    assert state()['playbackChannels'] == [0, 1, 2, 3]
+    assert page.locator('#channel-wave-2').count() == 0
+    assert page.locator('#channel-spec-2').count() == 1
+    uncheck_channel(3, 'spec')
+    assert state()['selectedWaveChannels'] == [0, 1, 3]
+    assert state()['selectedSpectrogramChannels'] == [0, 1, 2]
+    assert state()['playbackChannels'] == [0, 1, 2, 3]
+    assert page.locator('#channel-wave-3').count() == 1
+    assert page.locator('#channel-spec-3').count() == 0
+    assert page.locator('#plotStack > .plot-resizer').count() == 5
+    align()
+    # Re-enable both views before testing global imported label overlays.
+    check_channel(2, 'wave')
+    check_channel(3, 'spec')
+    rows(3)
 
     # Audacity TXT does not contain channel IDs: overlay it on every spectrogram.
     audacity('global.txt', '0.5\t0.6\tGlobal label\n')
@@ -206,27 +239,86 @@ with sync_playwright() as playwright:
     assert metrics['max'] < 700, metrics
     print('MULTICHANNEL GUI LATENCY', metrics, flush=True)
 
-    uncheck_channel(0)
-    page.wait_for_function('AudioAnnotatorV2.inspect().referenceChannel === 1')
-    assert state()['playbackChannels'] == [1, 2, 3, 4, 5, 6, 7]
+    # Spectrogram-only mode: hide ALL waveforms but keep analysis, display
+    # and playback functioning on all eight selected spectral channels.
+    for ch in range(8):
+        uncheck_channel(ch, 'wave')
+    assert state()['selectedWaveChannels'] == []
+    assert state()['selectedSpectrogramChannels'] == list(range(8))
+    assert state()['playbackChannels'] == list(range(8))
+    assert page.locator('#wavePlot').is_hidden()
+    assert page.locator('#plotStack > .channel-wave').count() == 0
+    assert page.locator('#specPlot').is_visible()
+    assert page.locator('#plotStack > .channel-spec').count() == 7
+    assert page.locator('#plotStack > .plot-resizer').count() == 7
+    align()
+
+    # Waveform-only mode: hide ALL spectrograms, while keeping native
+    # waveform analysis, marker overlays and playback available.
+    open_picker()
+    page.locator('#channelSelectAll').click()
+    for ch in range(8):
+        uncheck_channel(ch, 'spec')
+    assert state()['selectedWaveChannels'] == list(range(8))
+    assert state()['selectedSpectrogramChannels'] == []
+    assert state()['playbackChannels'] == list(range(8))
+    assert page.locator('#specPlot').is_hidden()
+    assert page.locator('#plotStack > .channel-spec').count() == 0
+    assert page.locator('#wavePlot').is_visible()
+    assert page.locator('#plotStack > .channel-wave').count() == 7
+    assert page.locator('#plotStack > .plot-resizer').count() == 7
+    align()
+
+    # Mixed-kind selection: waveform on Channel 1, spectrogram on
+    # Channel 2. The primary spectral plot is hidden, but the second
+    # channel's spectrogram still receives a real worker render.
     open_picker()
     page.locator('#channelSolo').click()
-    rows(0)
-    assert state()['selectedChannels'] == [1]
+    uncheck_channel(0, 'spec')
+    check_channel(1, 'spec')
+    assert state()['selectedWaveChannels'] == [0]
+    assert state()['selectedSpectrogramChannels'] == [1]
+    assert state()['playbackChannels'] == [0, 1]
+    assert page.locator('#wavePlot').is_visible()
+    assert page.locator('#specPlot').is_hidden()
+    assert page.locator('#channel-wave-1').count() == 0
+    assert page.locator('#channel-spec-1').count() == 1
+    assert page.locator('#plotStack > .plot-resizer').count() == 1
+    align()
+    page.locator('#channel-spec-1').scroll_into_view_if_needed()
+    page.wait_for_function(
+        'AudioAnnotatorV2.inspect().secondarySpectrumChannels.includes(1)',
+        timeout=25000)
+    uncheck_channel(0, 'wave')
+    page.wait_for_function('AudioAnnotatorV2.inspect().referenceChannel === 1')
+    assert state()['playbackChannels'] == [1]
+    assert state()['selectedWaveChannels'] == []
+    assert state()['selectedSpectrogramChannels'] == [1]
+    assert page.locator('#wavePlot').is_hidden()
+    assert page.locator('#specPlot').is_visible()
+    assert page.locator('#plotStack > .channel-spec').count() == 0
+    assert page.locator('#plotStack > .plot-resizer').count() == 0
+
+    # The very last enabled view cannot be unticked: otherwise playback
+    # would have no valid physical channel to use.
     open_picker()
-    page.locator('#channelChoices input[data-channel="1"]').click()
+    picker_box(1, 'spec').click()
     assert state()['selectedChannels'] == [1]
-    assert page.locator('#channelChoices input[data-channel="1"]').is_checked()
+    assert picker_box(1, 'spec').is_checked()
 
     # Reset the selection and plots when opening a new recording.
     page.locator('#fileInput').set_input_files(str(audio))
     page.wait_for_function('AudioAnnotatorV2.inspect().meta?.channels === 8')
     assert state()['selectedChannels'] == [0]
+    assert state()['selectedWaveChannels'] == [0]
+    assert state()['selectedSpectrogramChannels'] == [0]
+    assert page.locator('#wavePlot').is_visible()
+    assert page.locator('#specPlot').is_visible()
     rows(0)
     assert not errors, errors
     result = {'passed': True, 'events': 50, 'latencyMs': metrics,
               'browser': browser.version, 'pageErrors': errors}
     (OUT / 'multi-channel-results.json').write_text(json.dumps(result, indent=2))
-    print('MULTI CHANNEL PASS: checkbox playback, multi-spectrograms, global and'
+    print('MULTI CHANNEL PASS: independent waveform/spectrogram checkboxes and playback, global and'
           ' scoped labels, source-only spectrum visibility, CSV/JSON, GUI responsiveness', metrics)
     browser.close()
