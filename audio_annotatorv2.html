@@ -128,7 +128,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 .plot.channel-wave{height:142px}
 .plot.channel-spec{height:210px}
 #channelViewInfo{flex-basis:100%}
-@media(max-width:600px){.channel-menu{max-height:270px}.plot.channel-wave{height:110px}.plot.channel-spec{height:160px}}
+@media(max-width:600px){.channel-menu{max-height:270px}.channel-choice{grid-template-columns:minmax(72px,1fr) 70px 86px;gap:4px}.plot.channel-wave{height:110px}.plot.channel-spec{height:160px}}
 </style>
 </head>
 <body>
@@ -1672,7 +1672,15 @@ self.onmessage = async ({ data: m }) => {
         app.trackHeights.set(plot.dataset.sourceId || plot.id, next);
     }
     function installPlotResizer(bar) {
-        const pair = () => [bar.previousElementSibling, bar.nextElementSibling];
+        // Hidden primary wave/spec canvases can sit between two visible
+        // tracks. Never resize a hidden plot or a different separator.
+        const neighbor = direction => {
+            let node = bar[direction];
+            while (node && (!node.classList.contains('plot') || node.hidden))
+                node = node[direction];
+            return node;
+        };
+        const pair = () => [neighbor('previousElementSibling'), neighbor('nextElementSibling')];
         const resize = (delta, firstHeight, secondHeight) => {
             const [first, second] = pair();
             const total = firstHeight + secondHeight;
