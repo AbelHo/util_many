@@ -113,14 +113,16 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 .channel-picker>summary::after{content:' ▾';font-size:11px}
 .channel-picker[open]>summary{background:#edf3f8}
 .channel-picker.is-disabled{pointer-events:none;opacity:.5}
-.channel-menu{position:absolute;top:100%;left:0;z-index:50;width:min(310px,calc(100vw - 36px));max-height:350px;overflow:auto;background:#fff;border:1px solid #aab9c9;border-radius:5px;box-shadow:0 7px 22px #0003;padding:7px}
+.channel-menu{position:absolute;top:100%;left:0;z-index:50;width:min(350px,calc(100vw - 36px));max-height:350px;overflow:auto;background:#fff;border:1px solid #aab9c9;border-radius:5px;box-shadow:0 7px 22px #0003;padding:7px}
 .channel-menu .row{margin:0 0 5px;flex-wrap:nowrap}
 .channel-menu .row button{padding:3px 7px;flex:1}
-.channel-choice{display:flex;align-items:center;gap:8px;padding:3px;border-radius:3px}
-.channel-choice:hover{background:#f0f5fa}
-.channel-choice label{flex:1;cursor:pointer;min-width:0}
-.channel-choice button{font-size:11px;padding:2px 6px}
-.channel-choice button:disabled{opacity:.65}
+.channel-choice{display:grid;grid-template-columns:minmax(110px,1fr) 85px 100px;align-items:center;gap:5px;padding:4px 5px;border-radius:3px}
+.channel-choice:not(.channel-head):hover{background:#f0f5fa}
+.channel-choice .channel-name{min-width:0}
+.channel-choice .channel-check{display:flex;align-items:center;justify-content:center;cursor:pointer;min-height:24px}
+.channel-choice input{margin:0;width:16px;height:16px}
+.channel-head{font-size:11px;font-weight:600;color:#38516b;position:sticky;top:0;background:#fff;z-index:1;border-bottom:1px solid #d5e0ea}
+#wavePlot[hidden],#specPlot[hidden]{display:none}
 .plot.channel-wave{height:142px}
 .plot.channel-spec{height:210px}
 #channelViewInfo{flex-basis:100%}
@@ -137,8 +139,8 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div id="outputInfo" class="hint">Playback output is separate from the file’s native analysis rate. Slow ultrasonic recordings down to hear them.</div>
 </section>
 <section class="panel" aria-label="View settings">
-<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><span class="row" style="margin:0"><span>Channels</span><details id="channelPicker" class="channel-picker is-disabled"><summary id="channelSummary">Channel 1</summary><div class="channel-menu"><div class="row"><button type="button" id="channelSelectAll" disabled>Select all</button><button type="button" id="channelSolo" disabled>First only</button></div><div id="channelChoices" role="group" aria-label="Displayed audio channels"></div></div></details></span><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
-<div class="row hint"><span id="channelViewInfo">Check channels to show synchronized waveforms and spectrograms; selected channels play together as an averaged mono mix.</span></div>
+<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><span class="row" style="margin:0"><span>Channels</span><details id="channelPicker" class="channel-picker is-disabled"><summary id="channelSummary">Channel 1</summary><div class="channel-menu"><div class="row"><button type="button" id="channelSelectAll" disabled>Select all</button><button type="button" id="channelSolo" disabled>First only</button></div><div id="channelChoices" role="group" aria-label="Waveform and spectrogram visibility by audio channel"></div></div></details></span><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row hint"><span id="channelViewInfo">In Channels: left checkbox shows a waveform, right checkbox shows a spectrogram. Playback mixes channels checked in either column.</span></div>
 <div class="row hint"><label><input id="rememberOverview" type="checkbox" checked> Remember overviews on this device</label><button id="clearSavedOverviews" disabled>Clear saved overviews</button></div>
 <div id="overviewInfo" class="hint" role="status">Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.</div>
 <div class="row" aria-label="Audio frequency filter controls"><strong>Audio filter</strong><label>High-pass cutoff (Hz) <input id="highPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="High-pass cutoff in Hz; blank disables high-pass" disabled></label><label>Low-pass cutoff (Hz) <input id="lowPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="Low-pass cutoff in Hz; blank disables low-pass" disabled></label><span id="audioFilterInfo" class="hint" role="status" aria-live="polite">Off · original audio</span></div>
@@ -1573,7 +1575,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), secondaryViews: new Map(), secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1708,7 +1710,7 @@ self.onmessage = async ({ data: m }) => {
     function rebuildPlotSeparators() {
         const stack = $('plotStack');
         stack.querySelectorAll('.plot-resizer').forEach(node => node.remove());
-        const plots = Array.from(stack.querySelectorAll(':scope > .plot'));
+        const plots = Array.from(stack.querySelectorAll(':scope > .plot')).filter(plot => !plot.hidden);
         for (let i = 1; i < plots.length; i++) {
             const bar = document.createElement('div');
             bar.className = 'plot-resizer';
@@ -1765,46 +1767,66 @@ self.onmessage = async ({ data: m }) => {
     function channel() { return app.viewChannel; }
     function channelName(ch) { return ch === -1 ? 'Mix (average)' : 'Channel ' + (ch + 1); }
     function orderedChannels() {
-        return Array.from(app.selectedChannels).sort((a, b) =>
-            (a < 0 ? app.meta.channels : a) - (b < 0 ? app.meta.channels : b));
+        return Array.from(app.selectedChannels).sort((a, b) => a - b);
     }
     function syncChannelPicker() {
-        $('channelSummary').textContent = app.selectedChannels.size === 1 ?
-            channelName(orderedChannels()[0]) : app.selectedChannels.size + ' channels selected';
-        for (const input of $('channelChoices').querySelectorAll('input[data-channel]'))
-            input.checked = app.selectedChannels.has(Number(input.dataset.channel));
+        const waves = app.selectedWaveChannels.size, specs = app.selectedSpecChannels.size;
+        $('channelSummary').textContent = 'Wave ' + waves + ' · Spec ' + specs;
+        for (const input of $('channelChoices').querySelectorAll('input[data-channel][data-view]')) {
+            const selected = input.dataset.view === 'wave' ? app.selectedWaveChannels : app.selectedSpecChannels;
+            input.checked = selected.has(Number(input.dataset.channel));
+        }
         if (app.meta) $('channelViewInfo').textContent =
-            app.selectedChannels.size + ' of ' + app.meta.channels +
-            ' channels shown as synchronized waveforms and spectrograms · playback: ' +
+            'Waveforms: ' + waves + ' · spectrograms: ' + specs + ' · playback: ' +
             (app.selectedChannels.size === 1 ? channelName(orderedChannels()[0]) :
-                'average of all ' + app.selectedChannels.size + ' checked channels') +
-            '. Spectral overview indexes ' + channelName(channel()) + '.';
+                'average of ' + app.selectedChannels.size + ' channels visible in either view') +
+            ' · spectral overview reference: ' + channelName(channel()) + '.';
     }
     function populateChannelPicker() {
-        const fragment = document.createDocumentFragment();
+        const fragment = document.createDocumentFragment(), head = document.createElement('div');
+        head.className = 'channel-choice channel-head';
+        for (const label of ['Channel', 'Waveform', 'Spectrogram']) {
+            const span = document.createElement('span');
+            span.textContent = label;
+            head.append(span);
+        }
+        fragment.append(head);
         for (let c = 0; c < app.meta.channels; c++) {
-            const row = document.createElement('div'), label = document.createElement('label');
-            const check = document.createElement('input');
+            const row = document.createElement('div');
             row.className = 'channel-choice';
-            check.type = 'checkbox';
-            check.dataset.channel = String(c);
-            check.setAttribute('aria-label', 'Display and play ' + channelName(c));
-            label.append(check, document.createTextNode(channelName(c)));
-            row.append(label);
+            const name = document.createElement('span');
+            name.className = 'channel-name';
+            name.textContent = channelName(c);
+            row.append(name);
+            for (const [view, labelText] of [['wave', 'waveform'], ['spec', 'spectrogram']]) {
+                const label = document.createElement('label'), check = document.createElement('input');
+                label.className = 'channel-check';
+                check.type = 'checkbox';
+                check.dataset.channel = String(c);
+                check.dataset.view = view;
+                check.setAttribute('aria-label', 'Show ' + channelName(c) + ' ' + labelText);
+                label.title = 'Show ' + channelName(c) + ' ' + labelText;
+                label.append(check);
+                row.append(label);
+            }
             fragment.append(row);
         }
         $('channelChoices').replaceChildren(fragment);
         syncChannelPicker();
     }
-    async function setSelectedChannels(channels) {
-        if (!app.meta || !channels.size ||
-            [...channels].some(ch => !Number.isInteger(ch) || ch < 0 || ch >= app.meta.channels)) return;
-        if (channels.size === app.selectedChannels.size &&
-            [...channels].every(ch => app.selectedChannels.has(ch))) return;
-        const wasPlaying = app.playing, epoch = app.loadEpoch, serial = ++app.focusSerial;
-        const referenceChanged = !channels.has(channel());
-        if (wasPlaying) pause(); // Drop old scheduled segments before selecting a new mix.
-        app.selectedChannels = channels;
+    async function setSelectedChannels(waves, specs) {
+        if (!app.meta || !(waves instanceof Set) || !(specs instanceof Set)) return;
+        const union = new Set([...waves, ...specs]);
+        if (!union.size || [...union].some(ch => !Number.isInteger(ch) || ch < 0 || ch >= app.meta.channels)) return;
+        const same = (a, b) => a.size === b.size && [...a].every(ch => b.has(ch));
+        if (same(waves, app.selectedWaveChannels) && same(specs, app.selectedSpecChannels)) return;
+        const playbackChanged = !same(union, app.selectedChannels);
+        const wasPlaying = app.playing && playbackChanged, epoch = app.loadEpoch, serial = ++app.focusSerial;
+        const referenceChanged = !union.has(channel());
+        if (wasPlaying) pause(); // Clear queued samples before a new channel mix.
+        app.selectedWaveChannels = waves;
+        app.selectedSpecChannels = specs;
+        app.selectedChannels = union;
         if (referenceChanged) app.viewChannel = orderedChannels()[0];
         syncChannelPicker();
         rebuildChannelPlots();
@@ -1814,9 +1836,9 @@ self.onmessage = async ({ data: m }) => {
             app.renderCache = [];
             app.renderCacheBytes = 0;
             updateOverviewControls({ active: false, progress: 0 });
-            requestRender();
-            await restoreOverview();
         }
+        requestRender();
+        if (referenceChanged) await restoreOverview();
         if (wasPlaying && epoch === app.loadEpoch && serial === app.focusSerial)
             await play();
     }
