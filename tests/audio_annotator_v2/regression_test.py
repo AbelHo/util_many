@@ -35,9 +35,9 @@ with sync_playwright() as p:
    # Diagnostic uses the same centered Hann kernel as the visualization.
    with sf.SoundFile(F/'ultrasonic_PCM_24.wav') as f:f.seek(round(.5*f.samplerate)-4096);a=f.read(8192,dtype='float32',always_2d=True)[:,ch]
    w=np.hanning(8192);amp=np.abs(np.fft.rfft(a*w))*2/w.sum();amp[[0,-1]]/=2;reference=20*np.log10(np.maximum(amp,1e-9));error=float(np.max(np.abs(db-reference)));maxerr=max(maxerr,error);assert error<.002,error
-  page.locator('#channelPicker').evaluate('(node) => node.open = true');page.locator('#channelChoices button[data-focus-channel="1"]').click();wait();page.locator('#channelChoices button[data-focus-channel="-1"]').click();wait();assert state()['focusChannel']==-1
+  page.locator('#channelPicker').evaluate('(node) => node.open = true');page.locator('#channelChoices input[data-channel="1"]').check();wait();assert state()['selectedChannels']==[0,1];page.locator('#channelChoices input[data-channel="0"]').uncheck();wait();assert state()['selectedChannels']==[1]
   return {'ultrasonic_peaks_hz':peaks,'max_fft_error_db':maxerr}
- record('Native ultrasonic FFT matches NumPy; channel/mix UI',fft_check)
+ record('Native ultrasonic FFT matches NumPy; multichannel checkbox UI',fft_check)
  def extensible():
   load(F/'extensible_24in32.wav');actual=page.evaluate('AudioAnnotatorV2.readNativeSamples(0,5)');assert np.array_equal(actual,(samples.astype(np.float64)/8388608).astype(np.float32));return actual
  record('Extensible PCM with valid bits and odd padded metadata',extensible)
