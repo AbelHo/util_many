@@ -88,7 +88,8 @@ with sync_playwright() as p:
 
     first = page.locator('#importSourceControls input').first
     first.uncheck()
-    assert views()['spectrogram'] == 2 and [t['count'] for t in views()['tracks']] == [0, 2]
+    # Source toggles affect spectral overlays only, never dedicated label rows.
+    assert views()['spectrogram'] == 2 and [t['count'] for t in views()['tracks']] == [2, 2]
     assert state()['markerCount'] == 4
     first.check()
     assert views()['spectrogram'] == 4
