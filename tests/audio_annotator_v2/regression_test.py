@@ -35,7 +35,7 @@ with sync_playwright() as p:
    # Diagnostic uses the same centered Hann kernel as the visualization.
    with sf.SoundFile(F/'ultrasonic_PCM_24.wav') as f:f.seek(round(.5*f.samplerate)-4096);a=f.read(8192,dtype='float32',always_2d=True)[:,ch]
    w=np.hanning(8192);amp=np.abs(np.fft.rfft(a*w))*2/w.sum();amp[[0,-1]]/=2;reference=20*np.log10(np.maximum(amp,1e-9));error=float(np.max(np.abs(db-reference)));maxerr=max(maxerr,error);assert error<.002,error
-  page.locator('#channelPicker').evaluate('(node) => node.open = true');page.locator('#channelChoices input[data-channel="1"]').check();wait();assert state()['selectedChannels']==[0,1];page.locator('#channelChoices input[data-channel="0"]').uncheck();wait();assert state()['selectedChannels']==[1]
+  page.locator('#channelPicker').evaluate('(node) => node.open = true');page.locator('#channelChoices input[data-channel="1"][data-view="wave"]').check();page.locator('#channelChoices input[data-channel="1"][data-view="spec"]').check();wait();assert state()['selectedChannels']==[0,1];page.locator('#channelChoices input[data-channel="0"][data-view="wave"]').uncheck();page.locator('#channelChoices input[data-channel="0"][data-view="spec"]').uncheck();wait();assert state()['selectedChannels']==[1]
   return {'ultrasonic_peaks_hz':peaks,'max_fft_error_db':maxerr}
  record('Native ultrasonic FFT matches NumPy; multichannel checkbox UI',fft_check)
  def extensible():
