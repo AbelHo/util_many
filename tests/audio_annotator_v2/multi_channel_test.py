@@ -100,7 +100,7 @@ with sync_playwright() as playwright:
     assert page.locator('#channelChoices input[data-view="spec"]').count() == 8
     assert picker_box(0, 'wave').is_checked() and picker_box(0, 'spec').is_checked()
     assert not picker_box(1, 'wave').is_checked() and not picker_box(1, 'spec').is_checked()
-    assert page.locator('#channelChoices .channel-head').inner_text().split() == ['Channel', 'Waveform', 'Spectrogram']
+    assert page.locator('#channelChoices .channel-head > span').all_text_contents() == ['Channel', 'Waveform', 'Spectrogram']
     assert page.locator('[data-focus-channel]').count() == 0
     assert page.locator('#otherSpectrograms').count() == 0
 
