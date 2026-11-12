@@ -1872,10 +1872,21 @@ self.onmessage = async ({ data: m }) => {
         paintOverlay(plot.querySelector('canvas.overlay'), isSpec);
     }
     function rebuildChannelPlots() {
-        const stack = $('plotStack'), desired = app.meta ? orderedChannels().filter(ch => ch !== channel()) : [];
-        const want = new Set(desired.map(String));
+        const stack = $('plotStack');
+        const reference = channel();
+        // The main analysis channel owns the static canvases, but each
+        // canvas is visible only if its column is checked. The other
+        // channels are rendered independently as secondary rows.
+        $('wavePlot').hidden = !!app.meta && !app.selectedWaveChannels.has(reference);
+        $('specPlot').hidden = !!app.meta && !app.selectedSpecChannels.has(reference);
+        const desiredWaves = app.meta ?
+            [...app.selectedWaveChannels].filter(ch => ch !== reference).sort((a, b) => a - b) : [];
+        const desiredSpecs = app.meta ?
+            [...app.selectedSpecChannels].filter(ch => ch !== reference).sort((a, b) => a - b) : [];
+        const waves = new Set(desiredWaves.map(String)), specs = new Set(desiredSpecs.map(String));
         for (const plot of stack.querySelectorAll(':scope > .channel-wave, :scope > .channel-spec')) {
-            if (!want.has(plot.dataset.channel)) {
+            const wanted = plot.dataset.kind === 'wave' ? waves : specs;
+            if (!wanted.has(plot.dataset.channel)) {
                 app.secondaryObserver?.unobserve(plot);
                 app.resizeObserver?.unobserve(plot);
                 app.visibleSecondary.delete(plot);
@@ -1884,15 +1895,15 @@ self.onmessage = async ({ data: m }) => {
                 plot.remove();
             }
         }
-        let before = stack.querySelector(':scope > .label-track') || $('specPlot');
-        for (const ch of desired) {
-            let plot = stack.querySelector('#channel-wave-' + (ch === -1 ? 'mix' : ch));
+        const before = stack.querySelector(':scope > .label-track') || $('specPlot');
+        for (const ch of desiredWaves) {
+            let plot = $('channel-wave-' + ch);
             if (!plot) plot = channelPlot(ch, 'wave');
             before.before(plot);
         }
         let after = $('specPlot');
-        for (const ch of desired) {
-            let plot = stack.querySelector('#channel-spec-' + (ch === -1 ? 'mix' : ch));
+        for (const ch of desiredSpecs) {
+            let plot = $('channel-spec-' + ch);
             if (!plot) plot = channelPlot(ch, 'spec');
             after.after(plot);
             after = plot;
@@ -1900,6 +1911,16 @@ self.onmessage = async ({ data: m }) => {
         rebuildPlotSeparators();
         paintAll();
         scheduleSecondaryRenders(80);
+    }
+    function analysisCanvas() {
+        // A checked waveform must not force a hidden spectrogram to a
+        // 20-pixel resolution. Use a visible spectrogram's geometry if
+        // one exists, falling back to a displayed waveform.
+        if (!$('specPlot').hidden) return $('specCanvas');
+        const spec = $('plotStack').querySelector(':scope > .channel-spec canvas:not(.overlay)');
+        if (spec) return spec;
+        if (!$('wavePlot').hidden) return $('waveCanvas');
+        return $('plotStack').querySelector(':scope > .channel-wave canvas:not(.overlay)') || $('specCanvas');
     }
     function secondaryWaveKey() {
         return JSON.stringify([app.loadEpoch, app.start, app.span, audioFilterKey()]);
@@ -1946,7 +1967,7 @@ self.onmessage = async ({ data: m }) => {
                 p.channel = ch;
                 p.spectrum = !!specVisible;
                 p.detail = detailed && !!specVisible;
-                if (!detailed) p.width = Math.min(320, Math.max(32, Math.round(geom($('waveCanvas')).w)));
+                if (!detailed) p.width = Math.min(320, Math.max(32, Math.round(geom(analysisCanvas()).w)));
                 const result = await worker.call('secondary', p);
                 if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
                 if (result.cancelled) {
@@ -2153,6 +2174,8 @@ self.onmessage = async ({ data: m }) => {
         app.secondaryViews.clear();
         app.visibleSecondary.clear();
         app.selectedChannels = new Set([0]);
+        app.selectedWaveChannels = new Set([0]);
+        app.selectedSpecChannels = new Set([0]);
         app.viewChannel = 0;
         app.filterSerial++;
         app.filterUpdating = false; app.filterQueued = false; app.filterResumePlayback = false;
@@ -2219,6 +2242,8 @@ self.onmessage = async ({ data: m }) => {
             app.span = Math.min(10, meta.duration);
             app.viewChannel = 0;
             app.selectedChannels = new Set([0]);
+            app.selectedWaveChannels = new Set([0]);
+            app.selectedSpecChannels = new Set([0]);
             $('editChannel').replaceChildren(new Option('All channels', ''));
             for (let c = 0; c < meta.channels; c++)
                 $('editChannel').add(new Option(channelName(c), String(c)));
@@ -2487,7 +2512,7 @@ self.onmessage = async ({ data: m }) => {
         setView(anchor - fraction * span, span, { factor, fraction: clamp(fraction, 0, 1) });
     }
     function renderViewKey() {
-        const f = getDisplayFreqRange(), g = geom($('specCanvas'));
+        const f = getDisplayFreqRange(), g = geom(analysisCanvas());
         const min = clamp(finite($('dbMin').value, -100), -180, 0);
         let max = clamp(finite($('dbMax').value, 0), -179, 20);
         if (max <= min) max = Math.min(20, min + 1);
@@ -2615,7 +2640,7 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     function renderParameters(viewStart, viewSpan, preview) {
-        const f = getDisplayFreqRange(), geometry = geom($('specCanvas')), scale = currentScale();
+        const f = getDisplayFreqRange(), geometry = geom(analysisCanvas()), scale = currentScale();
         const dbMin = clamp(finite($('dbMin').value, -100), -180, 0);
         let dbMax = clamp(finite($('dbMax').value, 0), -179, 20);
         if (dbMax <= dbMin) dbMax = Math.min(20, dbMin + 1);
@@ -2923,7 +2948,7 @@ self.onmessage = async ({ data: m }) => {
         ctx.textAlign = 'left';
         ctx.fillText((isSpec ? 'Spectrogram · ' : 'Waveform · ') +
             (app.meta ? channelName(displayChannel) : (isSpec ? 'Hz (k = 1000 Hz)' : 'full scale')) +
-            (focused && app.meta ? ' (focus)' : ''), 8, 14, Math.max(10, g.width - (focused ? 140 : 100)));
+            (focused && app.meta ? ' (reference)' : ''), 8, 14, Math.max(10, g.width - (focused ? 155 : 100)));
         ctx.textAlign = 'right';
         ctx.fillStyle = focused && app.renderPending || !r ? '#ffda86' : '#d8e3ef';
         ctx.fillText(!r && app.meta ? 'Loading…' : focused && app.renderPending ? 'Updating preview…' :
@@ -3226,8 +3251,8 @@ self.onmessage = async ({ data: m }) => {
         ctx.restore();
     }
     function paintOverlays() {
-        paintOverlay($('waveOverlay'), false);
-        paintOverlay($('specOverlay'), true);
+        if (!$('wavePlot').hidden) paintOverlay($('waveOverlay'), false);
+        if (!$('specPlot').hidden) paintOverlay($('specOverlay'), true);
         for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec'))
             if (secondaryVisible(plot))
                 paintOverlay(plot.querySelector('canvas.overlay'), plot.dataset.kind === 'spec');
@@ -3235,8 +3260,8 @@ self.onmessage = async ({ data: m }) => {
             paintOverlay(plot.querySelector('canvas.overlay'), false, plot.dataset.sourceId);
     }
     function paintAll() {
-        drawBase($('waveCanvas'), false);
-        drawBase($('specCanvas'), true);
+        if (!$('wavePlot').hidden) drawBase($('waveCanvas'), false);
+        if (!$('specPlot').hidden) drawBase($('specCanvas'), true);
         for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec'))
             if (secondaryVisible(plot))
                 drawBase(plot.querySelector('canvas:not(.overlay)'), plot.dataset.kind === 'spec', Number(plot.dataset.channel));
@@ -4210,7 +4235,7 @@ self.onmessage = async ({ data: m }) => {
             control.value = option.value;
         }
         // Gain only changes waveform geometry, not spectral data or annotations.
-        drawBase($('waveCanvas'), false);
+        if (!$('wavePlot').hidden) drawBase($('waveCanvas'), false);
         for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave'))
             if (secondaryVisible(plot))
                 drawBase(plot.querySelector('canvas:not(.overlay)'), false, Number(plot.dataset.channel));
@@ -4452,23 +4477,30 @@ self.onmessage = async ({ data: m }) => {
     });
     handle('waveformColor', 'input', paintAll);
     handle('channelChoices', 'change', e => {
-        const box = e.target.closest('input[data-channel]');
+        const box = e.target.closest('input[data-channel][data-view]');
         if (!box || !app.meta) return;
-        const ch = Number(box.dataset.channel), chosen = new Set(app.selectedChannels);
+        const ch = Number(box.dataset.channel);
+        const waves = new Set(app.selectedWaveChannels), specs = new Set(app.selectedSpecChannels);
+        const chosen = box.dataset.view === 'wave' ? waves : specs;
         if (box.checked) chosen.add(ch);
         else chosen.delete(ch);
-        if (!chosen.size) {
-            box.checked = true; // Keep at least one drawable, playable track.
-            status('Keep one channel selected. Use First only to show one channel.');
+        if (!waves.size && !specs.size) {
+            box.checked = true;
+            status('Keep at least one waveform or spectrogram selected for display and playback.');
             return;
         }
-        setSelectedChannels(chosen);
+        return setSelectedChannels(waves, specs);
     });
     handle('channelSelectAll', 'click', () => {
         if (!app.meta) return;
-        setSelectedChannels(new Set(Array.from({ length: app.meta.channels }, (_, i) => i)));
+        const all = new Set(Array.from({ length: app.meta.channels }, (_, i) => i));
+        return setSelectedChannels(all, new Set(all));
     });
-    handle('channelSolo', 'click', () => setSelectedChannels(new Set([orderedChannels()[0]])));
+    handle('channelSolo', 'click', () => {
+        if (!app.meta) return;
+        const first = orderedChannels()[0];
+        return setSelectedChannels(new Set([first]), new Set([first]));
+    });
     document.addEventListener('pointerdown', e => {
         const picker = $('channelPicker');
         if (picker.open && !picker.contains(e.target)) picker.open = false;
@@ -4692,7 +4724,8 @@ self.onmessage = async ({ data: m }) => {
         paintAll();
         // Only a spectrogram size change alters FFT pixel resolution. Avoid
         // starting a new worker render on every pixel of splitter dragging.
-        if (app.meta && entries.some(entry => entry.target === $('specPlot'))) {
+        if (app.meta && entries.some(entry =>
+            entry.target === $('specPlot') || entry.target.classList.contains('channel-spec'))) {
             clearTimeout(app.plotRenderTimer);
             app.plotRenderTimer = setTimeout(() => {
                 app.plotRenderTimer = 0;
@@ -4723,7 +4756,9 @@ self.onmessage = async ({ data: m }) => {
         tracks: Array.from(app.importSources.values()).filter(source => source.mode === 'stack')
             .map(source => ({ id: source.id, filename: source.filename,
                 count: filteredMarkerIndex('track:' + source.id).items.length })),
-    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, selectedChannels: orderedChannels(), referenceChannel: channel(), focusChannel: channel(), playbackChannels: orderedChannels(),
+    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, selectedChannels: orderedChannels(), selectedWaveChannels: [...app.selectedWaveChannels].sort((a, b) => a - b),
+        selectedSpectrogramChannels: [...app.selectedSpecChannels].sort((a, b) => a - b),
+        referenceChannel: channel(), focusChannel: channel(), playbackChannels: orderedChannels(),
         spectrumOverlayVisibility: Object.fromEntries(Array.from(app.importSources.keys(), id =>
             [id, app.spectralOverlayVisibility.get(id) !== false])), secondaryPreviewCount: app.secondaryViews.size, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) => view.result.image ? ch : null).filter(ch => ch !== null), start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
