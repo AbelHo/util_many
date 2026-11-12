@@ -250,7 +250,7 @@ with sync_playwright() as playwright:
     assert page.locator('#plotStack > .channel-wave').count() == 0
     assert page.locator('#specPlot').is_visible()
     assert page.locator('#plotStack > .channel-spec').count() == 7
-    assert page.locator('#plotStack > .plot-resizer').count() == 7
+    assert page.locator('#plotStack > .plot-resizer').count() == 8  # + stacked label row
     align()
 
     # Waveform-only mode: hide ALL spectrograms, while keeping native
@@ -266,7 +266,7 @@ with sync_playwright() as playwright:
     assert page.locator('#plotStack > .channel-spec').count() == 0
     assert page.locator('#wavePlot').is_visible()
     assert page.locator('#plotStack > .channel-wave').count() == 7
-    assert page.locator('#plotStack > .plot-resizer').count() == 7
+    assert page.locator('#plotStack > .plot-resizer').count() == 8  # + stacked label row
     align()
 
     # Mixed-kind selection: waveform on Channel 1, spectrogram on
@@ -283,8 +283,16 @@ with sync_playwright() as playwright:
     assert page.locator('#specPlot').is_hidden()
     assert page.locator('#channel-wave-1').count() == 0
     assert page.locator('#channel-spec-1').count() == 1
-    assert page.locator('#plotStack > .plot-resizer').count() == 1
+    assert page.locator('#plotStack > .plot-resizer').count() == 2  # wave + labels + spectrogram
     align()
+    # A hidden static specPlot lies between the stacked label track and
+    # the visible secondary spectrogram. Its separator must resize the
+    # VISIBLE neighbors, not the hidden static canvas.
+    label_track = page.locator('#plotStack > .label-track').first
+    label_height = label_track.evaluate('(p) => p.getBoundingClientRect().height')
+    page.locator('#plotStack > .plot-resizer').last.focus()
+    page.keyboard.press('ArrowDown')
+    assert label_track.evaluate('(p) => p.getBoundingClientRect().height') > label_height
     page.locator('#channel-spec-1').scroll_into_view_if_needed()
     page.wait_for_function(
         'AudioAnnotatorV2.inspect().secondarySpectrumChannels.includes(1)',
@@ -297,7 +305,7 @@ with sync_playwright() as playwright:
     assert page.locator('#wavePlot').is_hidden()
     assert page.locator('#specPlot').is_visible()
     assert page.locator('#plotStack > .channel-spec').count() == 0
-    assert page.locator('#plotStack > .plot-resizer').count() == 0
+    assert page.locator('#plotStack > .plot-resizer').count() == 1  # label track + spectrum
 
     # The very last enabled view cannot be unticked: otherwise playback
     # would have no valid physical channel to use.
