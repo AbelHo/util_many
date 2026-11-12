@@ -156,7 +156,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 </div>
 <div class="row hint"><span id="renderInfo" class="grow">No analysis yet.</span><output id="hoverInfo"></output></div>
 <div class="row hint"><label><input id="showAnnotations" type="checkbox" checked> Show annotations</label><label><input id="showLabelText" type="checkbox" checked> Label text</label><span id="annotationRenderInfo" class="grow">No annotations in view.</span></div>
-<div id="importSourceControls" class="row hint" aria-label="Imported label file visibility" hidden></div>
+<div id="importSourceControls" class="row hint" aria-label="Imported label file spectrogram overlays" hidden></div>
 <section class="panel" aria-label="Annotation import and export">
 <div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" multiple accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><label>Import as <select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge (overlay)</option><option value="replace">Replace existing</option><option value="stack">Stack (separate label row)</option></select></label><button id="importBtn" disabled>Import</button></div>
 <div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button><label>Jump to page <input id="pageJump" type="number" min="1" value="1" step="1" style="width:75px" aria-label="Jump to annotation page"></label></div>
@@ -166,7 +166,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 </main>
 <aside class="side">
 <section class="panel"><h2>Tags</h2><p class="hint">Case-sensitive keys. Changes apply to every marker using that tag and are undoable.</p><input id="tagFilter" type="search" placeholder="Filter tags" aria-label="Filter tags"><div id="tagsList"></div></section>
-<section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
+<section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Channel scope<select id="editChannel"><option value="">All channels</option></select></label><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
 <dialog id="importChoiceDialog" aria-labelledby="importChoiceTitle">
@@ -1617,9 +1617,17 @@ self.onmessage = async ({ data: m }) => {
     }
     function markerVisibleOn(marker, layer) {
         const id = sourceKey(marker), source = id ? app.importSources.get(id) : null;
-        if (source && !source.visible) return false;
-        if (layer === 'spec') return true;
-        if (layer === 'wave') return !source || source.mode !== 'stack';
+        const isSpec = layer === 'spec' || layer.startsWith('spec:');
+        const isWave = layer === 'wave' || layer.startsWith('wave:');
+        // Channel-less labels (Audacity TXT and ordinary JSON/CSV) apply to
+        // every shown channel. Explicit channel indices are zero-based.
+        // Imported-source checkboxes ONLY control spectrogram overlays:
+        // waveform geometry, stacked label tracks and exports are unaffected.
+        const colon = layer.indexOf(':');
+        const match = colon < 0 || marker.channel == null ||
+            marker.channel === Number(layer.slice(colon + 1));
+        if (isSpec) return match && (!source || source.visible !== false);
+        if (isWave) return match && (!source || source.mode !== 'stack');
         return layer === 'track:' + id && source?.mode === 'stack';
     }
     function invalidateSourceViews() {
@@ -1634,15 +1642,16 @@ self.onmessage = async ({ data: m }) => {
             const label = document.createElement('label'), checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = source.visible;
-            checkbox.setAttribute('aria-label', 'Show labels from ' + source.filename);
+            checkbox.setAttribute('aria-label', 'Overlay ' + source.filename + ' on spectrograms');
             checkbox.addEventListener('change', () => {
                 app.importSources = new Map(app.importSources);
                 app.importSources.set(source.id, { ...app.importSources.get(source.id), visible: checkbox.checked });
-                app.dirty = true;
+                // UI-only display preference: do not mark annotations dirty.
                 invalidateSourceViews();
                 paintOverlays();
             });
-            label.append(checkbox, document.createTextNode(source.filename + ' (' + (source.mode === 'stack' ? 'stack' : 'overlay') + ')'));
+            label.append(checkbox, document.createTextNode('Spectrogram overlay: ' + source.filename +
+                (source.mode === 'stack' ? ' (stacked track stays visible)' : '')));
             fragment.append(label);
         }
         root.replaceChildren(fragment);
@@ -2171,6 +2180,9 @@ self.onmessage = async ({ data: m }) => {
             app.span = Math.min(10, meta.duration);
             app.viewChannel = 0;
             app.selectedChannels = new Set([0]);
+            $('editChannel').replaceChildren(new Option('All channels', ''));
+            for (let c = 0; c < meta.channels; c++)
+                $('editChannel').add(new Option(channelName(c), String(c)));
             populateChannelPicker();
             rebuildChannelPlots();
             $('displayFreqMin').value = 0;
@@ -2901,6 +2913,7 @@ self.onmessage = async ({ data: m }) => {
     }
     function buildMarkerIndex(items) {
         items.sort((a, b) => a.start - b.start || a.end - b.end);
+        const hasChannelRestrictions = items.some(marker => marker.channel != null);
         const maxEnd = new Float64Array(items.length), starts = new Float64Array(items.length),
             ends = new Float64Array(items.length), blockEnds = new Float64Array(Math.ceil(items.length / 256));
         blockEnds.fill(-Infinity);
@@ -2913,7 +2926,7 @@ self.onmessage = async ({ data: m }) => {
             blockEnds[i >>> 8] = Math.max(blockEnds[i >>> 8], items[i].end);
         }
         ends.sort();
-        return { items, maxEnd, starts, ends, blockEnds };
+        return { items, maxEnd, starts, ends, blockEnds, hasChannelRestrictions };
     }
     function markerIndex() {
         if (!app.markerIndex)
@@ -2921,13 +2934,21 @@ self.onmessage = async ({ data: m }) => {
         return app.markerIndex;
     }
     function filteredMarkerIndex(layer) {
+        const all = markerIndex(), isSpec = layer === 'spec' || layer.startsWith('spec:');
+        const isWave = layer === 'wave' || layer.startsWith('wave:');
+        const allSourcesEnabled = [...app.importSources.values()].every(source => source.visible !== false);
+        const noWaveExclusions = [...app.importSources.values()].every(source => source.mode !== 'stack');
+        const restrictChannel = (isSpec || isWave) && layer.includes(':');
         if (layer === 'all' ||
-            layer === 'spec' && Array.from(app.importSources.values()).every(source => source.visible) ||
-            layer === 'wave' && Array.from(app.importSources.values()).every(source => source.visible && source.mode !== 'stack'))
-            return markerIndex();
+            isSpec && allSourcesEnabled && (!restrictChannel || !all.hasChannelRestrictions) ||
+            isWave && noWaveExclusions && (!restrictChannel || !all.hasChannelRestrictions))
+            return all;
         let index = app.filteredIndices.get(layer);
         if (!index) {
-            index = buildMarkerIndex(Array.from(app.markers.values()).filter(marker => markerVisibleOn(marker, layer)));
+            index = buildMarkerIndex(all.items.filter(marker => markerVisibleOn(marker, layer)));
+            // Large imports can contain 1M markers; cap per-channel copies.
+            if (app.filteredIndices.size >= 8)
+                app.filteredIndices.delete(app.filteredIndices.keys().next().value);
             app.filteredIndices.set(layer, index);
         }
         return index;
@@ -3231,7 +3252,14 @@ self.onmessage = async ({ data: m }) => {
         if (alpha < 0 || alpha > 1)
             throw Error('Alpha must be between zero and one.');
         return { id: raw.id ? cleanText(raw.id, 128, 'Marker id') : uid(), type: raw.type, start, end, frequency, freqMin, freqMax, tag: cleanText(raw.tag ?? '', 64, 'Tag'), label: cleanText(raw.label ?? '', 2000, 'Label'), color, alpha, createdAt: cleanText(raw.createdAt ?? new Date().toISOString(), 100, 'Creation timestamp'),
-            sourceId: raw.sourceId ? cleanText(raw.sourceId, 128, 'Label file id') : null };
+            sourceId: raw.sourceId ? cleanText(raw.sourceId, 128, 'Label file id') : null,
+            channel: (() => {
+                if (raw.channel === null || raw.channel === undefined || raw.channel === '') return null;
+                const ch = Number(raw.channel);
+                if (!Number.isInteger(ch) || ch < 0 || ch >= app.meta.channels)
+                    throw Error('Annotation channel must be a zero-based index in this recording.');
+                return ch;
+            })() };
     }
     function normalizeTag(raw) {
         const key = cleanText(raw.key, 64, 'Tag key');
@@ -3256,7 +3284,8 @@ self.onmessage = async ({ data: m }) => {
     }
     function applyTransaction(tx, forward) {
         const keepIndex = !tx.snapshot && (tx.markers || []).every(c => c.before && c.after &&
-            c.before.start === c.after.start && c.before.end === c.after.end);
+            c.before.start === c.after.start && c.before.end === c.after.end &&
+            c.before.channel === c.after.channel);
         if (tx.snapshot) {
             app.markers = forward ? tx.afterMarkers : tx.beforeMarkers;
             app.tags = forward ? tx.afterTags : tx.beforeTags;
@@ -3629,7 +3658,9 @@ self.onmessage = async ({ data: m }) => {
     function renderEditor() {
         const m = app.markers.get(app.selected);
         $('editFields').disabled = !m;
-        $('selectionInfo').textContent = m ? m.type.replaceAll('_', ' ') + ' · ' + m.id : 'Select a marker from the table, or click one in Navigate mode.';
+        $('selectionInfo').textContent = m ? m.type.replaceAll('_', ' ') + ' · ' +
+            (m.channel == null ? 'all channels' : channelName(m.channel)) + ' · ' + m.id :
+            'Select a marker from the table, or click one in Navigate mode.';
         if (!m)
             return;
         $('editStart').value = String(m.start);
@@ -3639,6 +3670,7 @@ self.onmessage = async ({ data: m }) => {
         $('editMax').value = m.freqMax === null ? '' : String(m.freqMax);
         $('editMin').disabled = m.type === 'time_range';
         $('editMax').disabled = m.type === 'time_range';
+        $('editChannel').value = m.channel == null ? '' : String(m.channel);
         $('editTag').value = m.tag;
         $('editLabel').value = m.label;
     }
