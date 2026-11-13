@@ -27,7 +27,7 @@ with sync_playwright() as p:
   with page.expect_download() as di:page.locator('#export'+('Json' if fmt=='json' else 'Csv')).click()
   path=OUT/('reg-export.'+fmt);di.value.save_as(path);return path.read_bytes().decode('utf-8')
  def imp(text,fmt='json',mode='replace'):
-  page.locator('#importMode').select_option(mode);page.locator('#importInput').set_input_files({'name':'test.'+fmt,'mimeType':'text/plain','buffer':text.encode()});page.locator('#importBtn').click();page.wait_for_timeout(200)
+  page.locator('#importInput').set_input_files({'name':'test.'+fmt,'mimeType':'text/plain','buffer':text.encode()});page.locator('#importBtn').click();page.locator('#importChoiceDialog[open]').wait_for();page.locator(f'[data-import-choice={mode}]').click();page.wait_for_timeout(200)
  def fft_check():
   load(F/'ultrasonic_PCM_24.wav');peaks=[];maxerr=0
   for ch,expected in [(0,100000),(1,150000)]:
