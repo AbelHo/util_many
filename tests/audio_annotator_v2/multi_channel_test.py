@@ -3,6 +3,7 @@
 Run: python tests/audio_annotator_v2/run.py --suite multi_channel
 Uses deterministic, local eight-channel PCM; no user audio is uploaded.
 """
+import base64
 import csv
 import io
 import json
@@ -168,6 +169,10 @@ with sync_playwright() as playwright:
             'width': geometry['right'] - geometry['x'],
             'height': geometry['bottom'] - geometry['y']}
     page.screenshot(path=str(screenshot), clip=clip, animations='disabled')
+    # A compact transfer copy allows this exact browser capture to be shared
+    # directly in the chat, independent of GitHub artifact authentication.
+    jpeg = page.screenshot(type='jpeg', quality=48, clip=clip, animations='disabled')
+    print('CHANNEL_PICKER_CAPTURE_JPEG_BASE64=' + base64.b64encode(jpeg).decode(), flush=True)
     print('CHANNEL PICKER VISUAL PASS: 8 rows, 16 visible independent checkboxes;'
           ' screenshot:', screenshot, flush=True)
 
