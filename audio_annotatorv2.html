@@ -1188,6 +1188,61 @@ function notifyOverview(o) {
     if (overviewBatch?.active && overviewBatch.currentChannel === o.channel)
         notifyOverviewBatch();
 }
+function overviewBatchState(batch = overviewBatch) {
+    if (!batch) return { channels: [], completed: [], active: false, complete: false,
+        progress: 0, currentChannel: null, bytes: 0 };
+    const current = batch.currentChannel == null ? 0 :
+        (channelOverview(batch.currentChannel, batch.fft)?.complete ? 1 :
+            channelOverview(batch.currentChannel, batch.fft)?.nextFrame /
+            Math.max(1, channelOverview(batch.currentChannel, batch.fft)?.frameCount) || 0);
+    return { channels: [...batch.channels], completed: [...batch.completed], fft: batch.fft,
+        filterKey: batch.filterKey, active: batch.active, complete: batch.complete,
+        progress: Math.min(1, (batch.completed.size + (batch.completed.has(batch.currentChannel) ? 0 : current)) /
+            Math.max(1, batch.channels.length)), currentChannel: batch.currentChannel,
+        bytes: batch.channels.reduce((n, ch) => n + overviewBytes(channelOverview(ch, batch.fft)), 0),
+        error: batch.error || null };
+}
+function notifyOverviewBatch() { postMessage({ event: 'overviewBatch', ...overviewBatchState() }); }
+async function runOverviewBatch(batch, token) {
+    try {
+        for (let i = batch.next; i < batch.channels.length; i++) {
+            if (token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
+            const ch = batch.channels[i];
+            batch.currentChannel = ch;
+            batch.next = i;
+            const selected = await selectOverview(ch, batch.fft, batch.remember);
+            if (selected.stale || token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
+            const o = overview;
+            if (!o.complete) {
+                o.active = true;
+                notifyOverviewBatch();
+                await overviewLoop(overviewToken);
+            }
+            if (token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
+            if (!o.complete) {
+                batch.active = false;
+                batch.error = 'Indexing stopped for channel ' + (ch + 1);
+                notifyOverviewBatch();
+                return;
+            }
+            batch.completed.add(ch);
+            batch.next = i + 1;
+            batch.currentChannel = null;
+            notifyOverviewBatch();
+        }
+        if (batch === overviewBatch && token === overviewBatchToken) {
+            batch.complete = true;
+            batch.active = false;
+            notifyOverviewBatch();
+        }
+    } catch (e) {
+        if (batch === overviewBatch && token === overviewBatchToken) {
+            batch.active = false;
+            batch.error = e.message || String(e);
+            notifyOverviewBatch();
+        }
+    }
+}
 async function overviewYield(o, token) {
     await sleep();
     while (o === overview && o.active && token === overviewToken && (renderBusy || secondaryBusy))
@@ -1491,6 +1546,11 @@ async function audioChunk(p) {
 self.onmessage = async ({ data: m }) => {
     try {
         if (m.type === 'init') {
+            overviewToken++;
+            overviewBatchToken++;
+            overviewBatch = null;
+            overview = null;
+            overviewsByChannel.clear();
             const bytes = new Bytes(m.file), head = await bytes.range(0, Math.min(12, m.file.size));
             source = ascii(head, 0, 4) === 'fLaC' ? await new FlacSource(m.file, bytes).init() : await new WavSource(m.file, bytes).init();
             postMessage({ id: m.id, result: { sampleRate: source.sampleRate, channels: source.channels, bits: source.bits, frames: source.frames, duration: source.frames / source.sampleRate, format: source.format } });
@@ -1579,6 +1639,45 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'stats')
             result = statistics();
+        else if (m.type === 'overviewBatch') {
+            const { channels, fft, remember, action } = m.params || {};
+            if (action === 'pause') {
+                if (overviewBatch?.active) {
+                    overviewBatch.active = false;
+                    overviewBatchToken++;
+                    overviewToken++;
+                    if (overview) overview.active = false;
+                }
+                result = overviewBatchState();
+                notifyOverviewBatch();
+            }
+            else {
+                if (!Array.isArray(channels) || !channels.length ||
+                    channels.some(ch => !Number.isInteger(ch) || ch < 0 || ch >= source.channels) ||
+                    new Set(channels).size !== channels.length ||
+                    ![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(fft))
+                    throw Error('Invalid selected-channel overview batch.');
+                const same = overviewBatch && !overviewBatch.complete &&
+                    overviewBatch.fft === fft && overviewBatch.filterKey === filterSettingsKey() &&
+                    JSON.stringify(overviewBatch.channels) === JSON.stringify(channels);
+                if (same && overviewBatch.active) result = overviewBatchState();
+                else {
+                    overviewBatchToken++;
+                    overviewToken++;
+                    if (overview) overview.active = false;
+                    const old = same ? overviewBatch : null;
+                    overviewBatch = old || { channels: [...channels], fft, filterKey: filterSettingsKey(),
+                        remember: remember === true, active: false, complete: false,
+                        completed: new Set(), currentChannel: null, next: 0, error: null };
+                    overviewBatch.remember = remember === true;
+                    overviewBatch.active = true;
+                    overviewBatch.error = null;
+                    result = overviewBatchState();
+                    runOverviewBatch(overviewBatch, overviewBatchToken);
+                }
+                notifyOverviewBatch();
+            }
+        }
         else if (m.type === 'overview') {
             const channel = m.params.channel, fft = m.params.fft || 2048;
             if (!Number.isInteger(channel) || channel < -1 || channel >= source.channels ||
@@ -1606,10 +1705,10 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'rememberOverview') {
             overviewStorageGeneration++;
-            if (overview) {
-                overview.remember = m.params.remember === true;
-                overview.storage = overview.remember ? 'Saving locally…' : 'Memory only';
-                if (overview.remember && overview.complete) saveOverview(overview);
+            for (const o of overviewsByChannel.values()) {
+                o.remember = m.params.remember === true;
+                o.storage = o.remember ? 'Saving locally…' : 'Memory only';
+                if (o.remember && o.complete) saveOverview(o);
             }
             result = overviewState();
         }
