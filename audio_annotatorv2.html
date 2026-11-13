@@ -989,6 +989,16 @@ async function render(p, token) {
     if (!(end > start))
         throw Error('Invalid display window.');
     const { wave, samples, firstSample, mode } = await envelope(start, end, width, p.channel, token, preview, overscan);
+    // Waveform-only rows must not spend CPU computing an invisible FFT image.
+    // Unlike the old secondary fast path, detailed waveform requests also use
+    // the complete on-screen pixel width and the non-preview envelope budget.
+    if (p.spectrum === false) {
+        guard(token);
+        return { start, span: end - start, fmin: p.fmin, fmax: p.fmax, scale: p.scale,
+            wave, samples, firstSample, mode, preview, width, columns: 0, height: 0,
+            pixels: null, fft: n, spectrumMode: 'none', spectrumTimeBin: null,
+            spectrumFreqBin: null, elapsedMs: performance.now() - started, stats: statistics() };
+    }
     const spanSamples = (end - start) * source.sampleRate, hop = n / 4;
     const sampledColumns = Math.min(width, preview ? 64 : Math.ceil((spanSamples / overscan > 50000000 ? 192 : 640) * overscan));
     // At intermediate zoom, include every FFT hop in each pixel instead of a
@@ -1093,7 +1103,8 @@ async function renderLoop() {
         pendingRender = null;
         try {
             const result = await render(job.p, job.token);
-            postMessage({ id: job.id, result }, [result.wave.buffer, result.pixels.buffer, ...(result.samples ? [result.samples.buffer] : [])]);
+            postMessage({ id: job.id, result }, [result.wave.buffer, ...(result.pixels ? [result.pixels.buffer] : []),
+                ...(result.samples ? [result.samples.buffer] : [])]);
         }
         catch (e) {
             postMessage({ id: job.id, ...(e.message === 'CANCELLED' ? { result: { cancelled: true } } : { error: e.message }) });
@@ -1459,6 +1470,13 @@ self.onmessage = async ({ data: m }) => {
             postMessage({ id: m.id, result: true });
             return;
         }
+        if (m.type === 'cancelSecondary') {
+            // Abort an obsolete secondary frame without interrupting the
+            // primary channel or waiting for a costly FFT to finish.
+            secondaryToken++;
+            postMessage({ id: m.id, result: true });
+            return;
+        }
         if (m.type === 'secondary') {
             const p = m.params;
             if (!Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels ||
@@ -1472,16 +1490,9 @@ self.onmessage = async ({ data: m }) => {
             }
             const token = { render: renderToken, secondary: ++secondaryToken };
             try {
-                let result;
-                if (p.spectrum) result = await render({ ...p, preview: p.detail !== true }, token);
-                else {
-                    const width = Math.min(320, Math.max(32, Math.round(p.width)));
-                    const start = clamp(p.start, 0, source.frames / source.sampleRate);
-                    const end = Math.min(source.frames / source.sampleRate, start + p.span);
-                    if (end <= start) throw Error('Invalid secondary-channel duration.');
-                    result = { ...(await envelope(start, end, width, p.channel, token, true)),
-                        start, span: end - start, width, channel: p.channel };
-                }
+                // Use the same renderer and accuracy levels for every channel.
+                // The former waveform-only branch never left 320px previews.
+                const result = await render({ ...p, preview: p.detail !== true }, token);
                 guard(token);
                 const transfers = [result.wave.buffer];
                 if (result.pixels) transfers.push(result.pixels.buffer);
