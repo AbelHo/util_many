@@ -83,6 +83,9 @@ with sync_playwright() as p:
     rule('click').locator('button[title^="Higher"]').click()
     assert page.locator('#importSelectedRules .import-rule').first.get_attribute('data-term') == 'click'
 
+    # Keyword tags may be renamed and individually colored.
+    rule('click').locator('.import-rule-settings input[type=text]').fill('ClickType')
+    color(rule('click').locator('.import-rule-settings input[type=color]'), '#cc4455')
     page.locator('#importBatchTag').check()
     page.locator('#importBatchTagName').fill('FileAll')
     color(page.locator('#importBatchTagColor'), '#123456')
@@ -96,13 +99,15 @@ with sync_playwright() as p:
     count(8)
     markers = state()['markers']
     tagged = {m['label']: m['tag'] for m in markers}
-    assert tagged['Whistle CLICK'] == 'click', tagged
+    assert tagged['Whistle CLICK'] == 'ClickType', tagged
     assert tagged['whistle'] == 'whistle'
-    assert tagged['CLICK train'] == 'click'
+    assert tagged['CLICK train'] == 'ClickType'
     assert tagged['burst pulse'] == 'burst pulse'
     assert tagged['boat noise'] == 'FileAll'
     assert tagged['clickbait'] == 'FileAll'  # Whole word, not a substring.
-    assert {t['key']: t['color'] for t in state()['tags']}['FileAll'] == '#123456'
+    colors = {t['key']: t['color'] for t in state()['tags']}
+    assert colors['FileAll'] == '#123456'
+    assert colors['ClickType'] == '#cc4455'
     assert state()['sources'][0]['mode'] == 'stack'
     assert page.locator('#plotStack > .label-track').count() == 1
 
