@@ -988,7 +988,9 @@ async function render(p, token) {
     const end = Math.min(source.frames / source.sampleRate, p.start + p.span), start = clamp(p.start, 0, end);
     if (!(end > start))
         throw Error('Invalid display window.');
-    const { wave, samples, firstSample, mode } = await envelope(start, end, width, p.channel, token, preview, overscan);
+    const { wave, samples, firstSample, mode } = p.waveform === false ?
+        { wave: new Float32Array(0), samples: null, firstSample: 0, mode: 'hidden' } :
+        await envelope(start, end, width, p.channel, token, preview, overscan);
     // Waveform-only rows must not spend CPU computing an invisible FFT image.
     // Unlike the old secondary fast path, detailed waveform requests also use
     // the complete on-screen pixel width and the non-preview envelope budget.
@@ -1938,10 +1940,10 @@ self.onmessage = async ({ data: m }) => {
         // different channel's secondary plot.
         return $('specPlot').hidden ? $('waveCanvas') : $('specCanvas');
     }
-    function secondaryWaveKey(ch, canvas) {
+    function secondaryWaveKey(ch, canvas, waveVisible = true) {
         const g = geom(canvas);
         return JSON.stringify([app.loadEpoch, ch, app.start, app.span, audioFilterKey(),
-            Math.ceil(g.w)]);
+            waveVisible, Math.ceil(g.w)]);
     }
     function secondarySpectrumKey(waveKey, canvas) {
         const g = geom(canvas), f = getDisplayFreqRange();
@@ -2016,7 +2018,7 @@ self.onmessage = async ({ data: m }) => {
             for (const track of nearbySecondaryTracks()) {
                 if (serial !== app.secondarySerial || epoch !== app.loadEpoch || !canRenderSecondaries()) return;
                 const { ch, wavePlot, specPlot, waveVisible, specVisible, canvas } = track;
-                const waveKey = secondaryWaveKey(ch, canvas);
+                const waveKey = secondaryWaveKey(ch, canvas, waveVisible);
                 const specCanvas = specVisible ? specPlot.querySelector('canvas:not(.overlay)') : null;
                 const specKey = specCanvas ? secondarySpectrumKey(waveKey, specCanvas) : null;
                 const stored = app.secondaryViews.get(ch);
@@ -2034,6 +2036,7 @@ self.onmessage = async ({ data: m }) => {
                 const p = renderParameters(app.start, app.span, !detailed, canvas);
                 p.channel = ch;
                 p.spectrum = specVisible;
+                p.waveform = waveVisible;
                 p.detail = detailed;
                 const result = await worker.call('secondary', p);
                 if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
@@ -2598,7 +2601,8 @@ self.onmessage = async ({ data: m }) => {
         if (max <= min) max = Math.min(20, min + 1);
         return JSON.stringify([app.loadEpoch, channel(), Number($('fftSize').value),
             f.min, f.max, currentScale(), min, max, $('colorMap').value,
-            Math.ceil(g.w), Math.ceil(g.h), $('specPlot').hidden, audioFilterKey(),
+            Math.ceil(g.w), Math.ceil(g.h), $('specPlot').hidden, $('wavePlot').hidden,
+            audioFilterKey(),
             !!app.overview.complete, app.overview.revision || 0]);
     }
     function sameZoom(a, b) {
@@ -2733,7 +2737,8 @@ self.onmessage = async ({ data: m }) => {
         const overscan = (end - start) / viewSpan;
         return { start, span: end - start, preview, overscan,
             width: Math.ceil(clamp(Math.ceil(geometry.w), 32, 1600) * overscan), height,
-            channel: channel(), spectrum: !$('specPlot').hidden, fft: Number($('fftSize').value),
+            channel: channel(), spectrum: !$('specPlot').hidden, waveform: !$('wavePlot').hidden,
+            fft: Number($('fftSize').value),
             fmin: f.min, fmax: f.max,
             scale, frequencyEdges, dbMin, dbMax, color: $('colorMap').value };
     }
@@ -2751,7 +2756,9 @@ self.onmessage = async ({ data: m }) => {
     }
     function renderDescription(r, prefix = 'Waveform: ') {
         const s = r.stats;
-        return prefix + (r.mode === 'samples' ? (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') : r.mode + ' connected envelope') +
+        return prefix + (r.mode === 'hidden' ? 'waveform off' : r.mode === 'samples' ?
+            (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') :
+            r.mode + ' connected envelope') +
             (r.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' +
             fmt(app.meta.sampleRate / r.fft, 2) + ' Hz · FFT hop ' + fmt(r.fft / 4 / app.meta.sampleRate, 5) +
             ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' :
