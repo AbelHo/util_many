@@ -1588,7 +1588,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondaryAnalysis: null, secondaryRunning: false, secondaryCancelPending: false, secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1933,73 +1933,118 @@ self.onmessage = async ({ data: m }) => {
         paintAll();
         scheduleSecondaryRenders(80);
     }
-    function analysisCanvas() {
-        // A checked waveform must not force a hidden spectrogram to a
-        // 20-pixel resolution. Use a visible spectrogram's geometry if
-        // one exists, falling back to a displayed waveform.
-        if (!$('specPlot').hidden) return $('specCanvas');
-        const spec = $('plotStack').querySelector(':scope > .channel-spec canvas:not(.overlay)');
-        if (spec) return spec;
-        if (!$('wavePlot').hidden) return $('waveCanvas');
-        return $('plotStack').querySelector(':scope > .channel-wave canvas:not(.overlay)') || $('specCanvas');
+    function primaryCanvas() {
+        // FFT geometry must come from the primary canvas, never from a
+        // different channel's secondary plot.
+        return $('specPlot').hidden ? $('waveCanvas') : $('specCanvas');
     }
-    function secondaryWaveKey() {
-        return JSON.stringify([app.loadEpoch, app.start, app.span, audioFilterKey()]);
+    function secondaryWaveKey(ch, canvas) {
+        const g = geom(canvas);
+        return JSON.stringify([app.loadEpoch, ch, app.start, app.span, audioFilterKey(),
+            Math.ceil(g.w)]);
     }
-    function secondarySpectrumKey(waveKey) {
-        const f = getDisplayFreqRange();
-        return JSON.stringify([waveKey, Number($('fftSize').value), f.min, f.max, currentScale(),
-            $('dbMin').value, $('dbMax').value, $('colorMap').value]);
+    function secondarySpectrumKey(waveKey, canvas) {
+        const g = geom(canvas), f = getDisplayFreqRange();
+        // Include actual secondary FFT dimensions. Previously a 10px tall
+        // resized track could reuse a 210px raster forever (and vice versa).
+        return JSON.stringify([waveKey, Math.ceil(g.h), Number($('fftSize').value),
+            f.min, f.max, currentScale(), $('dbMin').value, $('dbMax').value,
+            $('colorMap').value]);
     }
-    function scheduleSecondaryRenders(delay = 110) {
-        clearTimeout(app.secondaryTimer);
+    function canRenderSecondaries() {
+        return !!(app.meta && app.secondaryAnalysis && app.selectedChannels.size > 1 &&
+            !document.hidden && !app.filterUpdating);
+    }
+    function runSecondaryScheduler() {
         app.secondaryTimer = 0;
+        if (app.secondaryRunning || !canRenderSecondaries()) return;
+        const serial = app.secondarySerial, epoch = app.loadEpoch;
+        app.secondaryRunning = true;
+        renderSecondaryViews(serial).catch(report).finally(() => {
+            app.secondaryRunning = false;
+            // Keep a single request in flight. Any pan, zoom or newly visible
+            // plot during the previous request gets a fresh render promptly.
+            if (serial !== app.secondarySerial && epoch === app.loadEpoch &&
+                canRenderSecondaries() && !app.secondaryTimer)
+                app.secondaryTimer = setTimeout(runSecondaryScheduler, 30);
+        });
+    }
+    function scheduleSecondaryRenders(delay = 65) {
         const serial = ++app.secondarySerial;
-        if (!app.meta || !app.analysis || app.selectedChannels.size <= 1 || document.hidden) return;
-        app.secondaryTimer = setTimeout(() => {
+        if (!canRenderSecondaries()) {
+            clearTimeout(app.secondaryTimer);
             app.secondaryTimer = 0;
-            renderSecondaryViews(serial).catch(report);
-        }, delay);
+        }
+        // Cancel long FFT/envelope work for an obsolete window, but only once
+        // until the worker acknowledges cancellation. A separate worker
+        // isolates this cancellation from the primary-channel cache/render.
+        if (app.secondaryRunning && !app.secondaryCancelPending && app.secondaryAnalysis) {
+            app.secondaryCancelPending = true;
+            app.secondaryAnalysis.call('cancelSecondary').catch(() => {}).finally(() => {
+                app.secondaryCancelPending = false;
+            });
+        }
+        if (!canRenderSecondaries() || app.secondaryRunning) return;
+        // Leading-edge deadline: repeated wheel/slider input cannot postpone
+        // every secondary render indefinitely.
+        if (!app.secondaryTimer)
+            app.secondaryTimer = setTimeout(runSecondaryScheduler, Math.min(75, Math.max(0, delay)));
+    }
+    function nearbySecondaryTracks() {
+        const middle = window.innerHeight / 2;
+        return orderedChannels().filter(ch => ch !== channel()).map(ch => {
+            const wavePlot = $('channel-wave-' + ch), specPlot = $('channel-spec-' + ch);
+            const waveVisible = !!wavePlot && secondaryVisible(wavePlot);
+            const specVisible = !!specPlot && secondaryVisible(specPlot);
+            const plot = specVisible ? specPlot : waveVisible ? wavePlot : null;
+            if (!plot) return null;
+            const box = plot.getBoundingClientRect();
+            return { ch, wavePlot, specPlot, waveVisible, specVisible,
+                canvas: plot.querySelector('canvas:not(.overlay)'),
+                distance: Math.abs((box.top + box.bottom) / 2 - middle) };
+        }).filter(Boolean).sort((a, b) => a.distance - b.distance);
     }
     async function renderSecondaryViews(serial) {
-        const epoch = app.loadEpoch, worker = app.analysis, waveKey = secondaryWaveKey();
-        const specKey = secondarySpectrumKey(waveKey);
-        // Fast previews first; only when navigation is idle refine near-visible
-        // spectrograms to the same native FFT resolution as the primary track.
-        // Both passes are worker-side, cancellable and bounded in memory.
+        const epoch = app.loadEpoch, worker = app.secondaryAnalysis;
+        // Prioritize what is actually on screen. All nearby waveforms AND
+        // spectrograms get a quick pass, then full-resolution refinement,
+        // without competing with the primary analysis worker.
         for (const detailed of [false, true]) {
-            if (detailed) await new Promise(resolve => setTimeout(resolve, 250));
-            if (serial !== app.secondarySerial || epoch !== app.loadEpoch || document.hidden) return;
-            for (const ch of orderedChannels()) {
-                if (ch === channel()) continue;
-                if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
-                const wavePlot = $('channel-wave-' + ch), specPlot = $('channel-spec-' + ch);
-                const waveVisible = wavePlot && secondaryVisible(wavePlot);
-                const specVisible = specPlot && secondaryVisible(specPlot);
-                if (!waveVisible && !specVisible || detailed && !specVisible) continue;
+            if (detailed) await new Promise(resolve => setTimeout(resolve, 160));
+            if (serial !== app.secondarySerial || epoch !== app.loadEpoch || !canRenderSecondaries()) return;
+            for (const track of nearbySecondaryTracks()) {
+                if (serial !== app.secondarySerial || epoch !== app.loadEpoch || !canRenderSecondaries()) return;
+                const { ch, wavePlot, specPlot, waveVisible, specVisible, canvas } = track;
+                const waveKey = secondaryWaveKey(ch, canvas);
+                const specCanvas = specVisible ? specPlot.querySelector('canvas:not(.overlay)') : null;
+                const specKey = specCanvas ? secondarySpectrumKey(waveKey, specCanvas) : null;
                 const stored = app.secondaryViews.get(ch);
-                if (stored?.waveKey === waveKey && (!specVisible || stored.specKey === specKey) &&
+                if (stored?.waveKey === waveKey &&
+                    (!specVisible || stored.specKey === specKey) &&
                     (!detailed || stored.detailed)) {
+                    // Touch LRU so visible channels are not evicted behind
+                    // old off-screen recordings when more than eight are open.
+                    app.secondaryViews.delete(ch);
+                    app.secondaryViews.set(ch, stored);
                     if (waveVisible) paintSecondaryPlot(wavePlot);
                     if (specVisible) paintSecondaryPlot(specPlot);
                     continue;
                 }
-                const p = renderParameters(app.start, app.span, !detailed);
+                const p = renderParameters(app.start, app.span, !detailed, canvas);
                 p.channel = ch;
-                p.spectrum = !!specVisible;
-                p.detail = detailed && !!specVisible;
-                if (!detailed) p.width = Math.min(320, Math.max(32, Math.round(geom(analysisCanvas()).w)));
+                p.spectrum = specVisible;
+                p.detail = detailed;
                 const result = await worker.call('secondary', p);
                 if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
                 if (result.cancelled) {
-                    scheduleSecondaryRenders(220);
+                    // Do not spin if another view already invalidated this job.
+                    if (serial === app.secondarySerial) scheduleSecondaryRenders(70);
                     return;
                 }
                 if (p.spectrum) prepareRenderedView(result, null, app.span);
-                // Latest result only; bound the total number of live image buffers.
                 app.secondaryViews.delete(ch);
-                app.secondaryViews.set(ch, { result, waveKey, specKey: p.spectrum ? specKey : null,
-                    detailed: p.detail });
+                app.secondaryViews.set(ch, { result, waveKey, specKey,
+                    detailed, spectrum: specVisible });
                 while (app.secondaryViews.size > 8)
                     app.secondaryViews.delete(app.secondaryViews.keys().next().value);
                 if (waveVisible) paintSecondaryPlot(wavePlot);
@@ -2533,13 +2578,14 @@ self.onmessage = async ({ data: m }) => {
         setView(anchor - fraction * span, span, { factor, fraction: clamp(fraction, 0, 1) });
     }
     function renderViewKey() {
-        const f = getDisplayFreqRange(), g = geom(analysisCanvas());
+        const f = getDisplayFreqRange(), g = geom(primaryCanvas());
         const min = clamp(finite($('dbMin').value, -100), -180, 0);
         let max = clamp(finite($('dbMax').value, 0), -179, 20);
         if (max <= min) max = Math.min(20, min + 1);
         return JSON.stringify([app.loadEpoch, channel(), Number($('fftSize').value),
             f.min, f.max, currentScale(), min, max, $('colorMap').value,
-            Math.ceil(g.w), Math.ceil(g.h), audioFilterKey(), !!app.overview.complete, app.overview.revision || 0]);
+            Math.ceil(g.w), Math.ceil(g.h), $('specPlot').hidden, audioFilterKey(),
+            !!app.overview.complete, app.overview.revision || 0]);
     }
     function sameZoom(a, b) {
         return Math.abs(a - b) <= Math.max(1e-12, Math.max(a, b) * 1e-10);
@@ -2586,7 +2632,8 @@ self.onmessage = async ({ data: m }) => {
             other !== r && other.viewKey === r.viewKey && sameZoom(other.viewSpan, r.viewSpan))));
     }
     function cacheRenderedView(r) {
-        const bytes = r.image.width * r.image.height * 4 + r.wave.byteLength + (r.samples?.byteLength || 0);
+        const bytes = (r.image?.width || 0) * (r.image?.height || 0) * 4 +
+            r.wave.byteLength + (r.samples?.byteLength || 0);
         if (bytes > 16 * 1048576) return;
         if (r.speculative) {
             // Speculation may replace an unused prediction, never a visited view.
@@ -2660,8 +2707,8 @@ self.onmessage = async ({ data: m }) => {
             if (app.prefetchTarget === target) app.prefetchTarget = null;
         }
     }
-    function renderParameters(viewStart, viewSpan, preview) {
-        const f = getDisplayFreqRange(), geometry = geom(analysisCanvas()), scale = currentScale();
+    function renderParameters(viewStart, viewSpan, preview, canvas = primaryCanvas()) {
+        const f = getDisplayFreqRange(), geometry = geom(canvas), scale = currentScale();
         const dbMin = clamp(finite($('dbMin').value, -100), -180, 0);
         let dbMax = clamp(finite($('dbMax').value, 0), -179, 20);
         if (dbMax <= dbMin) dbMax = Math.min(20, dbMin + 1);
@@ -2672,14 +2719,18 @@ self.onmessage = async ({ data: m }) => {
         const overscan = (end - start) / viewSpan;
         return { start, span: end - start, preview, overscan,
             width: Math.ceil(clamp(Math.ceil(geometry.w), 32, 1600) * overscan), height,
-            channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max,
+            channel: channel(), spectrum: !$('specPlot').hidden, fft: Number($('fftSize').value),
+            fmin: f.min, fmax: f.max,
             scale, frequencyEdges, dbMin, dbMax, color: $('colorMap').value };
     }
     function prepareRenderedView(result, viewKey, viewSpan) {
-        result.image = document.createElement('canvas');
-        result.image.width = result.columns;
-        result.image.height = result.height;
-        result.image.getContext('2d').putImageData(new ImageData(result.pixels, result.columns, result.height), 0, 0);
+        if (result.pixels && result.columns && result.height) {
+            result.image = document.createElement('canvas');
+            result.image.width = result.columns;
+            result.image.height = result.height;
+            result.image.getContext('2d').putImageData(new ImageData(result.pixels, result.columns, result.height), 0, 0);
+        }
+        else result.image = null;
         result.pixels = null;
         result.viewKey = viewKey;
         result.viewSpan = viewSpan;
@@ -2689,7 +2740,8 @@ self.onmessage = async ({ data: m }) => {
         return prefix + (r.mode === 'samples' ? (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') : r.mode + ' connected envelope') +
             (r.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' +
             fmt(app.meta.sampleRate / r.fft, 2) + ' Hz · FFT hop ' + fmt(r.fft / 4 / app.meta.sampleRate, 5) +
-            ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' : r.columns + ' sampled time columns') + ' · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
+            ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' :
+                r.spectrumMode === 'none' ? 'waveform only (FFT skipped)' : r.columns + ' sampled time columns') + ' · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
             fmt((s.byteCache + s.frameCache + s.fftCache + (s.filterCache || 0) + s.overviewBytes + app.renderCacheBytes) / 1048576, 1) + ' MiB';
     }
     function requestRender() {
