@@ -176,6 +176,15 @@ with sync_playwright() as playwright:
     assert diagnostics['secondary']['filter']['high'] == 400
     print('SYNC filter across independent workers', filtered, flush=True)
 
+    # Retained secondary images and annotation overlay rasters have strict
+    # byte budgets even if many channels are selected or navigated repeatedly.
+    budget = state()
+    assert budget['secondaryImageCacheBytes'] <= 24 * 1048576, budget['secondaryImageCacheBytes']
+    assert budget['annotationRasterCacheBytes'] <= 32 * 1048576, budget['annotationRasterCacheBytes']
+    print('SYNC cache budgets (MiB)', {
+        'secondary': round(budget['secondaryImageCacheBytes'] / 1048576, 2),
+        'overlays': round(budget['annotationRasterCacheBytes'] / 1048576, 2)}, flush=True)
+
     assert not errors, errors
     result = {'passed': True, 'initial': initial, 'waveOnly': wave_only,
               'spectrumOnly': spectrum_only, 'resized': resized,
