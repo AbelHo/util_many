@@ -3031,7 +3031,11 @@ self.onmessage = async ({ data: m }) => {
         ctx.rect(g.left, g.top, g.w, g.h);
         ctx.clip();
         const focused = displayChannel === channel();
-        const r = focused ? app.lastRender : app.secondaryViews.get(displayChannel)?.result;
+        const stored = focused ? null : app.secondaryViews.get(displayChannel);
+        const r = focused ? app.lastRender : stored?.result;
+        const currentSecondary = focused || !!(stored && sameZoom(stored.viewSpan, app.span) &&
+            stored.result.start <= app.start + 1e-9 &&
+            stored.result.start + stored.result.span >= app.start + app.span - 1e-9);
         if (r && app.meta) {
             const x = tX(r.start, g), w = r.span / app.span * g.w;
             if (isSpec) {
@@ -3084,7 +3088,8 @@ self.onmessage = async ({ data: m }) => {
         ctx.textAlign = 'right';
         ctx.fillStyle = focused && app.renderPending || !r ? '#ffda86' : '#d8e3ef';
         ctx.fillText(!r && app.meta ? 'Loading…' : focused && app.renderPending ? 'Updating preview…' :
-            isSpec && !focused ? (app.secondaryViews.get(displayChannel)?.detailed ? 'Hann · dBFS' : 'Fast preview') :
+            isSpec && !focused ? (!currentSecondary ? 'Updating detail…' :
+                stored?.detailed ? 'Hann · dBFS' : 'Fast preview') :
             isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
     }
 
@@ -4934,10 +4939,12 @@ self.onmessage = async ({ data: m }) => {
         secondaryRendering: app.secondaryRunning, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) =>
             view.result.image ? ch : null).filter(ch => ch !== null),
         secondaryRenders: Object.fromEntries(Array.from(app.secondaryViews, ([ch, v]) =>
-            [ch, { frame: v.frame, start: v.result.start, span: v.result.span, width: v.result.width,
+            [ch, { frame: v.frame, start: v.result.start, span: v.result.span, viewSpan: v.viewSpan,
+                zoomMatched: sameZoom(v.viewSpan, app.span), width: v.result.width,
                 columns: v.result.columns, height: v.result.height, mode: v.result.mode,
                 spectrumMode: v.result.spectrumMode, detailed: v.detailed,
-                preview: v.result.preview, coversWindow: v.result.start <= app.start + 1e-9 &&
+                preview: v.result.preview, coversWindow: sameZoom(v.viewSpan, app.span) &&
+                    v.result.start <= app.start + 1e-9 &&
                     v.result.start + v.result.span >= app.start + app.span - 1e-9 }])), start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'),
             secondary: app.secondaryAnalysis ? await app.secondaryAnalysis.call('stats') : null,
             historyBytes: app.historyBytes }), audioRMS: () => {
