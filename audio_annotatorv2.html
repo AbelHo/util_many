@@ -4428,7 +4428,7 @@ self.onmessage = async ({ data: m }) => {
         'one two three this that than then also all some any per via each only label labels ' +
         'annotation annotations recording recordings file files').split(' '));
     function importLabelTerms(label) {
-        const words = label.normalize('NFKC').toLowerCase().match(/[\\p{L}][\\p{L}\\p{M}\\p{N}]*/gu) || [];
+        const words = label.normalize('NFKC').toLowerCase().match(/[\p{L}][\p{L}\p{M}\p{N}]*/gu) || [];
         const result = new Set();
         const useful = word => word.length >= 3 && word.length <= 30 && !IMPORT_STOPWORDS.has(word);
         for (let i = 0; i < words.length; i++) {
@@ -5334,11 +5334,13 @@ self.onmessage = async ({ data: m }) => {
         }
         else scheduleSecondaryRenders(60);
     });
+    // Only intercept OS file drags; internal keyword priority drags must not
+    // invoke the global import UI or leave the page in a file-drag state.
     for (const type of ['dragenter', 'dragover'])
         document.addEventListener(type, e => {
+            if (!e.dataTransfer?.types?.includes('Files')) return;
             e.preventDefault();
-            if (e.dataTransfer)
-                e.dataTransfer.dropEffect = 'copy';
+            e.dataTransfer.dropEffect = 'copy';
             document.body.classList.add('dragging');
         });
     document.addEventListener('dragleave', e => {
@@ -5346,6 +5348,7 @@ self.onmessage = async ({ data: m }) => {
             document.body.classList.remove('dragging');
     });
     document.addEventListener('drop', async (e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
         e.preventDefault();
         document.body.classList.remove('dragging');
         try {
