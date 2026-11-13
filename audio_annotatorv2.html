@@ -44,9 +44,21 @@ Multi-channel view: each physical channel has two independent checkbox columns:
 left selects waveform/time-series visibility; right selects spectrogram visibility.
 At least one plot must stay selected. Playback includes the union of enabled
 channels in either column (normalized mono average, without duplicates).
-The first retained checked channel supplies the main detailed spectral overview;
-other spectrograms receive fast worker previews, refined at idle to native FFT
-detail only near the viewport. No Focus controls. Per-marker 0-based channel
+The first retained checked channel supplies the primary spectral overview.
+Clicking Build waveform + spectral overview indexes ALL channels checked in
+either Waveform or Spectrogram column, not only that reference channel.
+Selected secondary channels are indexed sequentially with aggregate progress,
+pause/resume and rebuild actions; their completed summaries remain channel-
+specific and reusable during panning. All secondary channels share one
+independent, bounded analysis worker. Its requests are cancellable during navigation: a fast preview is
+followed by native-resolution refinement for waveforms AND spectrograms.
+Per-plot canvas dimensions and time/zoom coverage determine cache validity;
+small pans reuse 25% margins, and unused waveform/FFT work is skipped.
+Both image and annotation raster caches have explicit byte budgets.
+Full-recording spectral overview indexing is currently per reference channel;
+other channels use bounded (up to 640-column) time sampling at very wide
+windows where exact all-FFT-hop coverage is too costly without an overview.
+No Focus controls. Per-marker 0-based channel
 scope is optional: null means all displayed channels. Annotations created on a
 spectrogram are scoped to that channel; Audacity TXT remains all-channel.
 Imported-source checkboxes affect spectrogram overlays only: waveform overlays,
@@ -181,7 +193,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <p class="hint">Choose a mode separately for this file. Replace clears the existing annotations, labels and stacked tracks; Stack creates one synchronized row between waveform and spectrogram.</p>
 <div class="row"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
 </dialog>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Choose audio channels using the two checkbox columns: <strong>left = Waveform (time series)</strong>, <strong>right = Spectrogram</strong>. A channel can have either, both, or neither checked. Select all enables both views for every channel; First only shows both views for the first selected channel. At least one plot remains selected. Visible plots are aligned, independently resizable, and playback mixes the union of all channels checked in either column as a normalized mono average. Checking a second view of an already-playing channel does not change the audio mix. The first retained checked channel supplies the main detailed overview; other visible spectrograms first show worker previews and automatically refine after input settles. Off-screen tracks are not eagerly rendered. A marker drawn on a spectrogram is limited to that channel; choose All channels in the marker editor to apply it to every spectrogram. JSON/CSV channel metadata uses zero-based indices (0 means Channel 1); missing/null channel means all channels. Audacity TXT has no channel metadata and its labels overlay every visible spectrogram. The imported-label checkboxes below the plots control <strong>only spectrogram overlays</strong>: they do not hide labels on waveforms, dedicated stacked label rows, the table, or exports.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its spectrogram drawing, not its waveform or stacked-label drawing, table entries or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Choose audio channels using the two checkbox columns: <strong>left = Waveform (time series)</strong>, <strong>right = Spectrogram</strong>. A channel can have either, both, or neither checked. Select all enables both views for every channel; First only shows both views for the first selected channel. At least one plot remains selected. Visible plots are aligned, independently resizable, and playback mixes the union of all channels checked in either column as a normalized mono average. Checking a second view of an already-playing channel does not change the audio mix. Click <strong>Build waveform + spectral overview</strong> to index <strong>every channel selected</strong> in either checkbox column, including channels currently scrolled offscreen. The progress bar shows combined indexing progress, and the same button pauses/resumes or rebuilds all selected indexes. Building may take longer and consume more memory for multichannel recordings; enabling Remember overviews stores derived summaries locally, subject to the local cache's size limit. The first retained checked channel supplies the primary analysis worker; all other visible tracks use a dedicated background analysis worker, showing fast previews followed by full-resolution waveform/spectrogram refinement after navigation settles. Resizing a spectrogram recalculates its own frequency pixels without redoing the main image, and short pans reuse cached margins. Off-screen tracks are not eagerly rendered. Extremely wide views without a per-channel overview use bounded FFT time sampling, so isolated brief signals can still require a dedicated overview for exact peak coverage. A marker drawn on a spectrogram is limited to that channel; choose All channels in the marker editor to apply it to every spectrogram. JSON/CSV channel metadata uses zero-based indices (0 means Channel 1); missing/null channel means all channels. Audacity TXT has no channel metadata and its labels overlay every visible spectrogram. The imported-label checkboxes below the plots control <strong>only spectrogram overlays</strong>: they do not hide labels on waveforms, dedicated stacked label rows, the table, or exports.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its spectrogram drawing, not its waveform or stacked-label drawing, table entries or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -710,7 +722,24 @@ class FlacSource {
         return out;
     }
 }
-let source = null, renderBusy = false, pendingRender = null, renderToken = 0, secondaryToken = 0, overview = null, overviewToken = 0, overviewRevision = 0;
+let source = null, renderBusy = false, secondaryBusy = false, pendingRender = null,
+    renderToken = 0, secondaryToken = 0, overview = null, overviewToken = 0,
+    overviewRevision = 0, overviewBatch = null, overviewBatchToken = 0;
+const overviewsByChannel = new Map();
+function overviewKey(channel, fft, filter = filterSettingsKey()) {
+    return channel + ':' + fft + ':' + filter;
+}
+function channelOverview(channel, fft = null) {
+    if (fft !== null) return overviewsByChannel.get(overviewKey(channel, fft)) || null;
+    for (const o of overviewsByChannel.values())
+        if (o.channel === channel && o.filterKey === filterSettingsKey() && o.waveReady)
+            return o;
+    return null;
+}
+function rememberChannelOverview(o) {
+    overviewsByChannel.delete(overviewKey(o.channel, o.fft, o.filterKey));
+    overviewsByChannel.set(overviewKey(o.channel, o.fft, o.filterKey), o);
+}
 const spectra = new LRU(32 * MiB), fftPlans = new LRU(2 * MiB), resamplers = new LRU(2 * MiB);
 function fftPlan(n) {
     let plan = fftPlans.get(n);
@@ -862,8 +891,12 @@ function updateAudioFilter(settings) {
     if (pendingRender) postMessage({ id: pendingRender.id, result: { cancelled: true } });
     pendingRender = null;
     overviewToken++;
+    overviewBatchToken++;
     if (overview) overview.active = false;
+    if (overviewBatch) overviewBatch.active = false;
+    overviewBatch = null;
     overview = null;
+    overviewsByChannel.clear();
     overviewRevision++;
     audioFilter = next;
     filterKernel = kernel;
@@ -941,9 +974,9 @@ async function envelope(start, end, width, channel, token, preview = false, over
             }
         }
     }
-    else if (overview?.waveReady && overview.channel === channel) {
+    else if (channelOverview(channel)?.waveReady) {
         mode = 'indexed';
-        const level = overviewLevel(overview.waveLevels, span / width);
+        const level = overviewLevel(channelOverview(channel).waveLevels, span / width);
         for (let x = 0; x < width; x++) {
             const a = Math.floor((first + x / width * span) / level.block), b = Math.min(level.min.length - 1, Math.ceil((first + (x + 1) / width * span) / level.block) - 1);
             let lo = Infinity, hi = -Infinity;
@@ -978,7 +1011,10 @@ async function envelope(start, end, width, channel, token, preview = false, over
     guard(token);
     return { wave, mode };
 }
-function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes + (filterKernelFFT ? filterKernelFFT.re.byteLength + filterKernelFFT.im.byteLength : 0), filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
+function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes + (filterKernelFFT ? filterKernelFFT.re.byteLength + filterKernelFFT.im.byteLength : 0), filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0,
+    overviewBytes: [...overviewsByChannel.values()].reduce((n, o) => n + overviewBytes(o), 0),
+    overviewChannels: [...overviewsByChannel.values()].filter(o => o.complete).map(o => o.channel),
+    renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), preview = p.preview === true;
     const overscan = preview ? 1 : clamp(Number(p.overscan) || 1, 1, 1.5);
@@ -988,14 +1024,31 @@ async function render(p, token) {
     const end = Math.min(source.frames / source.sampleRate, p.start + p.span), start = clamp(p.start, 0, end);
     if (!(end > start))
         throw Error('Invalid display window.');
-    const { wave, samples, firstSample, mode } = await envelope(start, end, width, p.channel, token, preview, overscan);
+    const { wave, samples, firstSample, mode } = p.waveform === false ?
+        { wave: new Float32Array(0), samples: null, firstSample: 0, mode: 'hidden' } :
+        await envelope(start, end, width, p.channel, token, preview, overscan);
+    // Waveform-only rows must not spend CPU computing an invisible FFT image.
+    // Unlike the old secondary fast path, detailed waveform requests also use
+    // the complete on-screen pixel width and the non-preview envelope budget.
+    if (p.spectrum === false) {
+        guard(token);
+        return { start, span: end - start, fmin: p.fmin, fmax: p.fmax, scale: p.scale,
+            wave, samples, firstSample, mode, preview, width, columns: 0, height: 0,
+            pixels: null, fft: n, spectrumMode: 'none', spectrumTimeBin: null,
+            spectrumFreqBin: null, elapsedMs: performance.now() - started, stats: statistics() };
+    }
     const spanSamples = (end - start) * source.sampleRate, hop = n / 4;
-    const sampledColumns = Math.min(width, preview ? 64 : Math.ceil((spanSamples / overscan > 50000000 ? 192 : 640) * overscan));
+    // After idle, retain the full bounded pixel sampling budget even on wide
+    // windows. The old 192-column fallback made non-indexed channels visibly
+    // blurrier than the reference track as soon as the span grew large.
+    // Foreground previews still use at most 64 columns; final detail is
+    // bounded to 640 * overscan and runs in the secondary worker.
+    const sampledColumns = Math.min(width, preview ? 64 : Math.ceil(640 * overscan));
     // At intermediate zoom, include every FFT hop in each pixel instead of a
     // single center frame. Bound foreground work by both frame count and FFT size.
     const localPeaks = !preview && spanSamples / hop > sampledColumns &&
         Math.ceil(spanSamples / hop) + 2 <= Math.floor(Math.min(8192, 16777216 / n) * overscan);
-    const spectralOverview = overview;
+    const spectralOverview = channelOverview(p.channel, n);
     const canPool = spectralOverview?.complete && spectralOverview.channel === p.channel && spectralOverview.fft === n &&
         !localPeaks && spanSamples >= spectralOverview.specLevels[0].block * 2;
     const columns = canPool && !preview ? Math.max(1, Math.min(width, Math.floor(spanSamples / spectralOverview.specLevels[0].block))) : sampledColumns;
@@ -1093,7 +1146,8 @@ async function renderLoop() {
         pendingRender = null;
         try {
             const result = await render(job.p, job.token);
-            postMessage({ id: job.id, result }, [result.wave.buffer, result.pixels.buffer, ...(result.samples ? [result.samples.buffer] : [])]);
+            postMessage({ id: job.id, result }, [result.wave.buffer, ...(result.pixels ? [result.pixels.buffer] : []),
+                ...(result.samples ? [result.samples.buffer] : [])]);
         }
         catch (e) {
             postMessage({ id: job.id, ...(e.message === 'CANCELLED' ? { result: { cancelled: true } } : { error: e.message }) });
@@ -1133,10 +1187,69 @@ function overviewState(o = overview) {
         bytes: overviewBytes(o), timeBin: o.group * o.hop / source.sampleRate, frequencyBin: o.freqGroup * source.sampleRate / o.fft }
         : { active: false, progress: 0, complete: false, revision: overviewRevision };
 }
-function notifyOverview(o) { postMessage({ event: 'overview', ...overviewState(o) }); }
+function notifyOverview(o) {
+    postMessage({ event: 'overview', ...overviewState(o) });
+    if (overviewBatch?.active && overviewBatch.currentChannel === o.channel)
+        notifyOverviewBatch();
+}
+function overviewBatchState(batch = overviewBatch) {
+    if (!batch) return { channels: [], completed: [], active: false, complete: false,
+        progress: 0, currentChannel: null, bytes: 0 };
+    const current = batch.currentChannel == null ? 0 :
+        (channelOverview(batch.currentChannel, batch.fft)?.complete ? 1 :
+            channelOverview(batch.currentChannel, batch.fft)?.nextFrame /
+            Math.max(1, channelOverview(batch.currentChannel, batch.fft)?.frameCount) || 0);
+    return { channels: [...batch.channels], completed: [...batch.completed], fft: batch.fft,
+        filterKey: batch.filterKey, active: batch.active, complete: batch.complete,
+        progress: Math.min(1, (batch.completed.size + (batch.completed.has(batch.currentChannel) ? 0 : current)) /
+            Math.max(1, batch.channels.length)), currentChannel: batch.currentChannel,
+        bytes: batch.channels.reduce((n, ch) => n + overviewBytes(channelOverview(ch, batch.fft)), 0),
+        error: batch.error || null };
+}
+function notifyOverviewBatch() { postMessage({ event: 'overviewBatch', ...overviewBatchState() }); }
+async function runOverviewBatch(batch, token) {
+    try {
+        for (let i = batch.next; i < batch.channels.length; i++) {
+            if (token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
+            const ch = batch.channels[i];
+            batch.currentChannel = ch;
+            batch.next = i;
+            const selected = await selectOverview(ch, batch.fft, batch.remember, batch.rebuild);
+            if (selected.stale || token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
+            const o = overview;
+            if (!o.complete) {
+                o.active = true;
+                notifyOverviewBatch();
+                await overviewLoop(overviewToken);
+            }
+            if (token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
+            if (!o.complete) {
+                batch.active = false;
+                batch.error = 'Indexing stopped for channel ' + (ch + 1);
+                notifyOverviewBatch();
+                return;
+            }
+            batch.completed.add(ch);
+            batch.next = i + 1;
+            batch.currentChannel = null;
+            notifyOverviewBatch();
+        }
+        if (batch === overviewBatch && token === overviewBatchToken) {
+            batch.complete = true;
+            batch.active = false;
+            notifyOverviewBatch();
+        }
+    } catch (e) {
+        if (batch === overviewBatch && token === overviewBatchToken) {
+            batch.active = false;
+            batch.error = e.message || String(e);
+            notifyOverviewBatch();
+        }
+    }
+}
 async function overviewYield(o, token) {
     await sleep();
-    while (o === overview && o.active && token === overviewToken && renderBusy)
+    while (o === overview && o.active && token === overviewToken && (renderBusy || secondaryBusy))
         await new Promise(r => setTimeout(r, 25));
     if (o !== overview || !o.active || token !== overviewToken) throw Error('OVERVIEW_CANCELLED');
 }
@@ -1214,8 +1327,9 @@ async function overviewLoop(token) {
         o.complete = true;
         o.active = false;
         o.revision = ++overviewRevision;
+        rememberChannelOverview(o);
         notifyOverview(o);
-        if (o.remember) saveOverview(o);
+        if (o.remember) await saveOverview(o);
     }
     catch (e) {
         if (e.message === 'OVERVIEW_CANCELLED' || o !== overview || token !== overviewToken) return;
@@ -1342,22 +1456,26 @@ async function saveOverview(o) {
     const generation = overviewStorageGeneration;
     try {
         const key = await overviewStorageKey(o.channel, o.fft, o.filterKey);
-        if (o !== overview || !o.remember || generation !== overviewStorageGeneration) return;
+        if (!o.complete || !o.remember ||
+            overviewsByChannel.get(overviewKey(o.channel, o.fft, o.filterKey)) !== o ||
+            generation !== overviewStorageGeneration) return;
         const { channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels } = o;
         await overviewStorage('put', key, { key, version: OVERVIEW_VERSION, frames: source.frames, sampleRate: source.sampleRate,
             channel, fft, filterKey: o.filterKey, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
-        if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
+        if (o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
     } catch (e) {
-        if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
+        if (o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
     }
 }
-async function selectOverview(channel, fft, remember) {
+async function selectOverview(channel, fft, remember, rebuild = false) {
     const token = ++overviewToken, previous = overview;
     if (previous) previous.active = false;
-    const o = createOverview(channel, fft, previous);
+    const cached = rebuild ? null : channelOverview(channel, fft);
+    const o = cached || createOverview(channel, fft, rebuild ? null : previous);
     o.remember = remember;
     overview = o;
-    if (remember) {
+    rememberChannelOverview(o);
+    if (remember && !cached && !rebuild) {
         try {
             const key = await overviewStorageKey(channel, fft, o.filterKey);
             const record = await overviewStorage('get', key);
@@ -1365,6 +1483,7 @@ async function selectOverview(channel, fft, remember) {
             if (validOverviewRecord(record, channel, fft)) {
                 Object.assign(o, record, { active: false, complete: true, waveReady: true, nextFrame: record.frameCount,
                     wavePosition: source.frames, storage: 'Restored from local cache', revision: ++overviewRevision });
+                rememberChannelOverview(o);
             } else o.storage = record ? 'Saved overview incompatible; rebuild required' : 'Not cached yet';
         } catch (e) {
             if (token === overviewToken && overview === o) o.storage = 'Memory only: ' + e.message;
@@ -1432,6 +1551,11 @@ async function audioChunk(p) {
 self.onmessage = async ({ data: m }) => {
     try {
         if (m.type === 'init') {
+            overviewToken++;
+            overviewBatchToken++;
+            overviewBatch = null;
+            overview = null;
+            overviewsByChannel.clear();
             const bytes = new Bytes(m.file), head = await bytes.range(0, Math.min(12, m.file.size));
             source = ascii(head, 0, 4) === 'fLaC' ? await new FlacSource(m.file, bytes).init() : await new WavSource(m.file, bytes).init();
             postMessage({ id: m.id, result: { sampleRate: source.sampleRate, channels: source.channels, bits: source.bits, frames: source.frames, duration: source.frames / source.sampleRate, format: source.format } });
@@ -1459,6 +1583,13 @@ self.onmessage = async ({ data: m }) => {
             postMessage({ id: m.id, result: true });
             return;
         }
+        if (m.type === 'cancelSecondary') {
+            // Abort an obsolete secondary frame without interrupting the
+            // primary channel or waiting for a costly FFT to finish.
+            secondaryToken++;
+            postMessage({ id: m.id, result: true });
+            return;
+        }
         if (m.type === 'secondary') {
             const p = m.params;
             if (!Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels ||
@@ -1471,17 +1602,11 @@ self.onmessage = async ({ data: m }) => {
                 return;
             }
             const token = { render: renderToken, secondary: ++secondaryToken };
+            secondaryBusy = true;
             try {
-                let result;
-                if (p.spectrum) result = await render({ ...p, preview: p.detail !== true }, token);
-                else {
-                    const width = Math.min(320, Math.max(32, Math.round(p.width)));
-                    const start = clamp(p.start, 0, source.frames / source.sampleRate);
-                    const end = Math.min(source.frames / source.sampleRate, start + p.span);
-                    if (end <= start) throw Error('Invalid secondary-channel duration.');
-                    result = { ...(await envelope(start, end, width, p.channel, token, true)),
-                        start, span: end - start, width, channel: p.channel };
-                }
+                // Use the same renderer and accuracy levels for every channel.
+                // The former waveform-only branch never left 320px previews.
+                const result = await render({ ...p, preview: p.detail !== true }, token);
                 guard(token);
                 const transfers = [result.wave.buffer];
                 if (result.pixels) transfers.push(result.pixels.buffer);
@@ -1492,6 +1617,7 @@ self.onmessage = async ({ data: m }) => {
                 postMessage({ id: m.id, ...(e.message === 'CANCELLED' ?
                     { result: { cancelled: true } } : { error: e.message }) });
             }
+            finally { secondaryBusy = false; }
             return;
         }
         let result;
@@ -1518,6 +1644,45 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'stats')
             result = statistics();
+        else if (m.type === 'overviewBatch') {
+            const { channels, fft, remember, action } = m.params || {};
+            if (action === 'pause') {
+                if (overviewBatch?.active) {
+                    overviewBatch.active = false;
+                    overviewBatchToken++;
+                    overviewToken++;
+                    if (overview) overview.active = false;
+                }
+                result = overviewBatchState();
+                notifyOverviewBatch();
+            }
+            else {
+                if (!Array.isArray(channels) || !channels.length ||
+                    channels.some(ch => !Number.isInteger(ch) || ch < 0 || ch >= source.channels) ||
+                    new Set(channels).size !== channels.length ||
+                    ![32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].includes(fft))
+                    throw Error('Invalid selected-channel overview batch.');
+                const same = overviewBatch && !overviewBatch.complete &&
+                    overviewBatch.fft === fft && overviewBatch.filterKey === filterSettingsKey() &&
+                    JSON.stringify(overviewBatch.channels) === JSON.stringify(channels);
+                if (same && overviewBatch.active) result = overviewBatchState();
+                else {
+                    overviewBatchToken++;
+                    overviewToken++;
+                    if (overview) overview.active = false;
+                    const old = same && action !== 'rebuild' ? overviewBatch : null;
+                    overviewBatch = old || { channels: [...channels], fft, filterKey: filterSettingsKey(),
+                        remember: remember === true, rebuild: action === 'rebuild', active: false, complete: false,
+                        completed: new Set(), currentChannel: null, next: 0, error: null };
+                    overviewBatch.remember = remember === true;
+                    overviewBatch.active = true;
+                    overviewBatch.error = null;
+                    result = overviewBatchState();
+                    runOverviewBatch(overviewBatch, overviewBatchToken);
+                }
+                notifyOverviewBatch();
+            }
+        }
         else if (m.type === 'overview') {
             const channel = m.params.channel, fft = m.params.fft || 2048;
             if (!Number.isInteger(channel) || channel < -1 || channel >= source.channels ||
@@ -1530,6 +1695,7 @@ self.onmessage = async ({ data: m }) => {
                 // waveform extrema restored from disk. FFT-only reuse happens
                 // when selectOverview prepares an incomplete overview instead.
                 overview = createOverview(channel, fft);
+                rememberChannelOverview(overview);
                 overview.active = true;
             }
             overview.remember = m.params.remember === true;
@@ -1544,10 +1710,10 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'rememberOverview') {
             overviewStorageGeneration++;
-            if (overview) {
-                overview.remember = m.params.remember === true;
-                overview.storage = overview.remember ? 'Saving locally…' : 'Memory only';
-                if (overview.remember && overview.complete) saveOverview(overview);
+            for (const o of overviewsByChannel.values()) {
+                o.remember = m.params.remember === true;
+                o.storage = o.remember ? 'Saving locally…' : 'Memory only';
+                if (o.remember && o.complete) saveOverview(o);
             }
             result = overviewState();
         }
@@ -1559,7 +1725,11 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'clearOverview') {
             overviewToken++;
+            overviewBatchToken++;
+            if (overviewBatch) overviewBatch.active = false;
+            overviewBatch = null;
             overview = null;
+            overviewsByChannel.clear();
             overviewRevision++;
             result = true;
         }
@@ -1577,7 +1747,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, overviewBatch: null, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondaryFrameCounter: 0, secondaryAnalysis: null, secondaryRunning: false, secondaryCancelPending: false, secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1587,7 +1757,7 @@ self.onmessage = async ({ data: m }) => {
             this.closed = false;
             this.worker.onmessage = ({ data: m }) => {
                 if (m.event) {
-                    onWorkerEvent(m);
+                    onWorkerEvent(m, this);
                     return;
                 }
                 const p = this.pending.get(m.id);
@@ -1764,6 +1934,7 @@ self.onmessage = async ({ data: m }) => {
             spec.before(plot);
         }
         rebuildPlotSeparators();
+        pruneInactiveOverlayLayers();
         paintAll();
     }
     function status(text, error = false) { $('status').textContent = text; $('status').className = error ? 'error' : 'ok'; }
@@ -1839,6 +2010,7 @@ self.onmessage = async ({ data: m }) => {
         app.selectedChannels = union;
         if (referenceChanged) app.viewChannel = orderedChannels()[0];
         syncChannelPicker();
+        updateOverviewControls(app.overview);
         rebuildChannelPlots();
         if (referenceChanged) {
             cancelZoomPrefetch();
@@ -1881,6 +2053,20 @@ self.onmessage = async ({ data: m }) => {
         drawBase(plot.querySelector('canvas:not(.overlay)'), isSpec, ch);
         paintOverlay(plot.querySelector('canvas.overlay'), isSpec);
     }
+    function pruneInactiveOverlayLayers() {
+        // Raster overlays can be large; hiding/removing a channel must release
+        // its old offscreen canvas, including former reference-channel layers.
+        const live = new Set();
+        if (!$('wavePlot').hidden) live.add('wave:' + channel() + ':waveOverlay');
+        if (!$('specPlot').hidden) live.add('spec:' + channel() + ':specOverlay');
+        for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec, :scope > .label-track')) {
+            const key = plot.classList.contains('label-track') ? 'track:' + plot.dataset.sourceId :
+                plot.dataset.kind + ':' + plot.dataset.channel;
+            live.add(key + ':' + plot.querySelector('canvas.overlay').id);
+        }
+        for (const key of Object.keys(app.overlayLayers))
+            if (!live.has(key)) delete app.overlayLayers[key];
+    }
     function rebuildChannelPlots() {
         const stack = $('plotStack');
         const reference = channel();
@@ -1900,8 +2086,8 @@ self.onmessage = async ({ data: m }) => {
                 app.secondaryObserver?.unobserve(plot);
                 app.resizeObserver?.unobserve(plot);
                 app.visibleSecondary.delete(plot);
-                delete app.overlayLayers['wave:' + plot.querySelector('canvas.overlay').id];
-                delete app.overlayLayers['spec:' + plot.querySelector('canvas.overlay').id];
+                delete app.overlayLayers[plot.dataset.kind + ':' + plot.dataset.channel + ':' +
+                    plot.querySelector('canvas.overlay').id];
                 plot.remove();
             }
         }
@@ -1919,78 +2105,142 @@ self.onmessage = async ({ data: m }) => {
             after = plot;
         }
         rebuildPlotSeparators();
+        pruneInactiveOverlayLayers();
+        for (const ch of app.secondaryViews.keys())
+            if (!app.selectedChannels.has(ch) || ch === reference) app.secondaryViews.delete(ch);
         paintAll();
         scheduleSecondaryRenders(80);
     }
-    function analysisCanvas() {
-        // A checked waveform must not force a hidden spectrogram to a
-        // 20-pixel resolution. Use a visible spectrogram's geometry if
-        // one exists, falling back to a displayed waveform.
-        if (!$('specPlot').hidden) return $('specCanvas');
-        const spec = $('plotStack').querySelector(':scope > .channel-spec canvas:not(.overlay)');
-        if (spec) return spec;
-        if (!$('wavePlot').hidden) return $('waveCanvas');
-        return $('plotStack').querySelector(':scope > .channel-wave canvas:not(.overlay)') || $('specCanvas');
+    function primaryCanvas() {
+        // FFT geometry must come from the primary canvas, never from a
+        // different channel's secondary plot.
+        return $('specPlot').hidden ? $('waveCanvas') : $('specCanvas');
     }
-    function secondaryWaveKey() {
-        return JSON.stringify([app.loadEpoch, app.start, app.span, audioFilterKey()]);
+    function secondaryWaveKey(ch, canvas, waveVisible = true) {
+        const g = geom(canvas);
+        return JSON.stringify([app.loadEpoch, ch, app.span, audioFilterKey(),
+            waveVisible, Math.ceil(g.w)]);
     }
-    function secondarySpectrumKey(waveKey) {
-        const f = getDisplayFreqRange();
-        return JSON.stringify([waveKey, Number($('fftSize').value), f.min, f.max, currentScale(),
-            $('dbMin').value, $('dbMax').value, $('colorMap').value]);
+    function secondarySpectrumKey(waveKey, canvas) {
+        const g = geom(canvas), f = getDisplayFreqRange();
+        // Include actual secondary FFT dimensions. Previously a 10px tall
+        // resized track could reuse a 210px raster forever (and vice versa).
+        return JSON.stringify([waveKey, Math.ceil(g.h), Number($('fftSize').value),
+            f.min, f.max, currentScale(), $('dbMin').value, $('dbMax').value,
+            $('colorMap').value]);
     }
-    function scheduleSecondaryRenders(delay = 110) {
-        clearTimeout(app.secondaryTimer);
+    function canRenderSecondaries() {
+        return !!(app.meta && app.secondaryAnalysis && app.selectedChannels.size > 1 &&
+            !document.hidden && !app.filterUpdating);
+    }
+    function runSecondaryScheduler() {
         app.secondaryTimer = 0;
+        if (app.secondaryRunning || !canRenderSecondaries()) return;
+        const serial = app.secondarySerial, epoch = app.loadEpoch;
+        app.secondaryRunning = true;
+        renderSecondaryViews(serial).catch(report).finally(() => {
+            if (epoch !== app.loadEpoch) return;
+            app.secondaryRunning = false;
+            // Keep a single request in flight. Any pan, zoom or newly visible
+            // plot during the previous request gets a fresh render promptly.
+            if (serial !== app.secondarySerial && epoch === app.loadEpoch &&
+                canRenderSecondaries() && !app.secondaryTimer)
+                app.secondaryTimer = setTimeout(runSecondaryScheduler, 30);
+        });
+    }
+    function scheduleSecondaryRenders(delay = 65) {
         const serial = ++app.secondarySerial;
-        if (!app.meta || !app.analysis || app.selectedChannels.size <= 1 || document.hidden) return;
-        app.secondaryTimer = setTimeout(() => {
+        if (!canRenderSecondaries()) {
+            clearTimeout(app.secondaryTimer);
             app.secondaryTimer = 0;
-            renderSecondaryViews(serial).catch(report);
-        }, delay);
+        }
+        // Cancel long FFT/envelope work for an obsolete window, but only once
+        // until the worker acknowledges cancellation. A separate worker
+        // isolates this cancellation from the primary-channel cache/render.
+        if (app.secondaryRunning && !app.secondaryCancelPending && app.secondaryAnalysis) {
+            app.secondaryCancelPending = true;
+            app.secondaryAnalysis.call('cancelSecondary').catch(() => {}).finally(() => {
+                app.secondaryCancelPending = false;
+            });
+        }
+        if (!canRenderSecondaries() || app.secondaryRunning) return;
+        // Leading-edge deadline: repeated wheel/slider input cannot postpone
+        // every secondary render indefinitely.
+        if (!app.secondaryTimer)
+            app.secondaryTimer = setTimeout(runSecondaryScheduler, Math.min(75, Math.max(0, delay)));
+    }
+    function nearbySecondaryTracks() {
+        const middle = window.innerHeight / 2;
+        return orderedChannels().filter(ch => ch !== channel()).map(ch => {
+            const wavePlot = $('channel-wave-' + ch), specPlot = $('channel-spec-' + ch);
+            const waveVisible = !!wavePlot && secondaryVisible(wavePlot);
+            const specVisible = !!specPlot && secondaryVisible(specPlot);
+            const plot = specVisible ? specPlot : waveVisible ? wavePlot : null;
+            if (!plot) return null;
+            const box = plot.getBoundingClientRect();
+            return { ch, wavePlot, specPlot, waveVisible, specVisible,
+                canvas: plot.querySelector('canvas:not(.overlay)'),
+                distance: Math.abs((box.top + box.bottom) / 2 - middle) };
+        }).filter(Boolean).sort((a, b) => a.distance - b.distance);
     }
     async function renderSecondaryViews(serial) {
-        const epoch = app.loadEpoch, worker = app.analysis, waveKey = secondaryWaveKey();
-        const specKey = secondarySpectrumKey(waveKey);
-        // Fast previews first; only when navigation is idle refine near-visible
-        // spectrograms to the same native FFT resolution as the primary track.
-        // Both passes are worker-side, cancellable and bounded in memory.
+        const epoch = app.loadEpoch, worker = app.secondaryAnalysis;
+        // Prioritize what is actually on screen. All nearby waveforms AND
+        // spectrograms get a quick pass, then full-resolution refinement,
+        // without competing with the primary analysis worker.
         for (const detailed of [false, true]) {
-            if (detailed) await new Promise(resolve => setTimeout(resolve, 250));
-            if (serial !== app.secondarySerial || epoch !== app.loadEpoch || document.hidden) return;
-            for (const ch of orderedChannels()) {
-                if (ch === channel()) continue;
-                if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
-                const wavePlot = $('channel-wave-' + ch), specPlot = $('channel-spec-' + ch);
-                const waveVisible = wavePlot && secondaryVisible(wavePlot);
-                const specVisible = specPlot && secondaryVisible(specPlot);
-                if (!waveVisible && !specVisible || detailed && !specVisible) continue;
+            if (detailed) await new Promise(resolve => setTimeout(resolve, 160));
+            if (serial !== app.secondarySerial || epoch !== app.loadEpoch || !canRenderSecondaries()) return;
+            for (const track of nearbySecondaryTracks()) {
+                if (serial !== app.secondarySerial || epoch !== app.loadEpoch || !canRenderSecondaries()) return;
+                const { ch, wavePlot, specPlot, waveVisible, specVisible, canvas } = track;
+                const waveKey = secondaryWaveKey(ch, canvas, waveVisible);
+                const specCanvas = specVisible ? specPlot.querySelector('canvas:not(.overlay)') : null;
+                const specKey = specCanvas ? secondarySpectrumKey(waveKey, specCanvas) : null;
                 const stored = app.secondaryViews.get(ch);
-                if (stored?.waveKey === waveKey && (!specVisible || stored.specKey === specKey) &&
+                const covers = stored && sameZoom(stored.viewSpan, app.span) &&
+                    stored.result.start <= app.start + 1e-9 &&
+                    stored.result.start + stored.result.span >= app.start + app.span - 1e-9;
+                if (covers && stored.waveKey === waveKey &&
+                    (!specVisible || stored.specKey === specKey) &&
                     (!detailed || stored.detailed)) {
+                    // Touch LRU so visible channels are not evicted behind
+                    // old off-screen recordings when more than eight are open.
+                    app.secondaryViews.delete(ch);
+                    app.secondaryViews.set(ch, stored);
                     if (waveVisible) paintSecondaryPlot(wavePlot);
                     if (specVisible) paintSecondaryPlot(specPlot);
                     continue;
                 }
-                const p = renderParameters(app.start, app.span, !detailed);
+                const p = renderParameters(app.start, app.span, !detailed, canvas);
                 p.channel = ch;
-                p.spectrum = !!specVisible;
-                p.detail = detailed && !!specVisible;
-                if (!detailed) p.width = Math.min(320, Math.max(32, Math.round(geom(analysisCanvas()).w)));
+                p.spectrum = specVisible;
+                p.waveform = waveVisible;
+                p.detail = detailed;
                 const result = await worker.call('secondary', p);
                 if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
                 if (result.cancelled) {
-                    scheduleSecondaryRenders(220);
+                    // Do not spin if another view already invalidated this job.
+                    if (serial === app.secondarySerial) scheduleSecondaryRenders(70);
                     return;
                 }
                 if (p.spectrum) prepareRenderedView(result, null, app.span);
-                // Latest result only; bound the total number of live image buffers.
                 app.secondaryViews.delete(ch);
-                app.secondaryViews.set(ch, { result, waveKey, specKey: p.spectrum ? specKey : null,
-                    detailed: p.detail });
-                while (app.secondaryViews.size > 8)
-                    app.secondaryViews.delete(app.secondaryViews.keys().next().value);
+                app.secondaryViews.set(ch, { result, waveKey, specKey, viewSpan: app.span,
+                    frame: ++app.secondaryFrameCounter, detailed, spectrum: specVisible,
+                    bytes: (result.image?.width || 0) * (result.image?.height || 0) * 4 +
+                        result.wave.byteLength + (result.samples?.byteLength || 0) });
+                // Eight tiny 10px channels cost much less than eight 512px
+                // spectrograms. Evict by allocated pixels/bytes rather than
+                // an arbitrary eight-channel count; cap memory at 24 MiB.
+                let cachedBytes = 0;
+                for (const view of app.secondaryViews.values()) cachedBytes += view.bytes;
+                while ((cachedBytes > 24 * 1048576 || app.secondaryViews.size > 64) &&
+                    app.secondaryViews.size > 1) {
+                    const [victim, entry] = app.secondaryViews.entries().next().value;
+                    cachedBytes -= entry.bytes;
+                    app.secondaryViews.delete(victim);
+                }
                 if (waveVisible) paintSecondaryPlot(wavePlot);
                 if (specVisible) paintSecondaryPlot(specPlot);
             }
@@ -2060,10 +2310,12 @@ self.onmessage = async ({ data: m }) => {
         paintAll();
         try {
             const [analysis] = await Promise.all([
-                app.analysis.call('setFilter', next), app.playback.call('setFilter', next)
+                app.analysis.call('setFilter', next), app.playback.call('setFilter', next),
+                ...(app.secondaryAnalysis ? [app.secondaryAnalysis.call('setFilter', next)] : [])
             ]);
             if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
             app.audioFilter = next;
+            app.overviewBatch = null;
             app.filterTaps = analysis.taps;
             $('audioFilterInfo').textContent = audioFilterLabel(next, analysis.taps);
             updateOverviewControls({ active: false, progress: 0 });
@@ -2075,7 +2327,8 @@ self.onmessage = async ({ data: m }) => {
         catch (e) {
             if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
             try {
-                await Promise.all([app.analysis.call('setFilter', previous), app.playback.call('setFilter', previous)]);
+                await Promise.all([app.analysis.call('setFilter', previous), app.playback.call('setFilter', previous),
+                    ...(app.secondaryAnalysis ? [app.secondaryAnalysis.call('setFilter', previous)] : [])]);
             } catch { /* Preserve original error. */ }
             app.audioFilter = previous;
             $('audioFilterInfo').textContent = e.message + ' · previous filter retained';
@@ -2182,7 +2435,10 @@ self.onmessage = async ({ data: m }) => {
         clearTimeout(app.secondaryTimer);
         app.secondarySerial++;
         app.secondaryViews.clear();
+        app.secondaryFrameCounter = 0;
         app.visibleSecondary.clear();
+        app.secondaryRunning = false;
+        app.secondaryCancelPending = false;
         app.selectedChannels = new Set([0]);
         app.selectedWaveChannels = new Set([0]);
         app.selectedSpecChannels = new Set([0]);
@@ -2198,7 +2454,8 @@ self.onmessage = async ({ data: m }) => {
         pause();
         app.analysis?.close();
         app.playback?.close();
-        app.analysis = app.playback = null;
+        app.secondaryAnalysis?.close();
+        app.analysis = app.playback = app.secondaryAnalysis = null;
         app.file = null;
         app.meta = null;
         app.cursor = 0;
@@ -2233,6 +2490,7 @@ self.onmessage = async ({ data: m }) => {
         app.dirty = false;
         app.held = null;
         app.overview = { active: false, progress: 0 };
+        app.overviewBatch = null;
         $('overviewProgress').value = 0;
         updateOverviewControls({ active: false, progress: 0 });
         refreshAnnotations();
@@ -2242,7 +2500,14 @@ self.onmessage = async ({ data: m }) => {
         app.playback = playback;
         try {
             const meta = await analysis.call('init', file);
-            await playback.call('init', file);
+            if (epoch !== app.loadEpoch) return false;
+            // One dedicated secondary worker for the entire multichannel
+            // recording. Its bounded caches are shared by all additional
+            // channels; mono files do not allocate a third worker.
+            const secondary = meta.channels > 1 ? new RPC() : null;
+            if (secondary) app.secondaryAnalysis = secondary;
+            await Promise.all([playback.call('init', file),
+                ...(secondary ? [secondary.call('init', file)] : [])]);
             if (epoch !== app.loadEpoch)
                 return false;
             app.file = file;
@@ -2279,7 +2544,8 @@ self.onmessage = async ({ data: m }) => {
             if (epoch === app.loadEpoch) {
                 analysis.close();
                 playback.close();
-                app.analysis = app.playback = null;
+                app.secondaryAnalysis?.close();
+                app.analysis = app.playback = app.secondaryAnalysis = null;
                 app.file = null;
                 app.meta = null;
                 ready(false);
@@ -2522,13 +2788,15 @@ self.onmessage = async ({ data: m }) => {
         setView(anchor - fraction * span, span, { factor, fraction: clamp(fraction, 0, 1) });
     }
     function renderViewKey() {
-        const f = getDisplayFreqRange(), g = geom(analysisCanvas());
+        const f = getDisplayFreqRange(), g = geom(primaryCanvas());
         const min = clamp(finite($('dbMin').value, -100), -180, 0);
         let max = clamp(finite($('dbMax').value, 0), -179, 20);
         if (max <= min) max = Math.min(20, min + 1);
         return JSON.stringify([app.loadEpoch, channel(), Number($('fftSize').value),
             f.min, f.max, currentScale(), min, max, $('colorMap').value,
-            Math.ceil(g.w), Math.ceil(g.h), audioFilterKey(), !!app.overview.complete, app.overview.revision || 0]);
+            Math.ceil(g.w), Math.ceil(g.h), $('specPlot').hidden, $('wavePlot').hidden,
+            audioFilterKey(),
+            !!app.overview.complete, app.overview.revision || 0]);
     }
     function sameZoom(a, b) {
         return Math.abs(a - b) <= Math.max(1e-12, Math.max(a, b) * 1e-10);
@@ -2575,7 +2843,8 @@ self.onmessage = async ({ data: m }) => {
             other !== r && other.viewKey === r.viewKey && sameZoom(other.viewSpan, r.viewSpan))));
     }
     function cacheRenderedView(r) {
-        const bytes = r.image.width * r.image.height * 4 + r.wave.byteLength + (r.samples?.byteLength || 0);
+        const bytes = (r.image?.width || 0) * (r.image?.height || 0) * 4 +
+            r.wave.byteLength + (r.samples?.byteLength || 0);
         if (bytes > 16 * 1048576) return;
         if (r.speculative) {
             // Speculation may replace an unused prediction, never a visited view.
@@ -2649,8 +2918,8 @@ self.onmessage = async ({ data: m }) => {
             if (app.prefetchTarget === target) app.prefetchTarget = null;
         }
     }
-    function renderParameters(viewStart, viewSpan, preview) {
-        const f = getDisplayFreqRange(), geometry = geom(analysisCanvas()), scale = currentScale();
+    function renderParameters(viewStart, viewSpan, preview, canvas = primaryCanvas()) {
+        const f = getDisplayFreqRange(), geometry = geom(canvas), scale = currentScale();
         const dbMin = clamp(finite($('dbMin').value, -100), -180, 0);
         let dbMax = clamp(finite($('dbMax').value, 0), -179, 20);
         if (dbMax <= dbMin) dbMax = Math.min(20, dbMin + 1);
@@ -2661,24 +2930,32 @@ self.onmessage = async ({ data: m }) => {
         const overscan = (end - start) / viewSpan;
         return { start, span: end - start, preview, overscan,
             width: Math.ceil(clamp(Math.ceil(geometry.w), 32, 1600) * overscan), height,
-            channel: channel(), fft: Number($('fftSize').value), fmin: f.min, fmax: f.max,
+            channel: channel(), spectrum: !$('specPlot').hidden, waveform: !$('wavePlot').hidden,
+            fft: Number($('fftSize').value),
+            fmin: f.min, fmax: f.max,
             scale, frequencyEdges, dbMin, dbMax, color: $('colorMap').value };
     }
     function prepareRenderedView(result, viewKey, viewSpan) {
-        result.image = document.createElement('canvas');
-        result.image.width = result.columns;
-        result.image.height = result.height;
-        result.image.getContext('2d').putImageData(new ImageData(result.pixels, result.columns, result.height), 0, 0);
+        if (result.pixels && result.columns && result.height) {
+            result.image = document.createElement('canvas');
+            result.image.width = result.columns;
+            result.image.height = result.height;
+            result.image.getContext('2d').putImageData(new ImageData(result.pixels, result.columns, result.height), 0, 0);
+        }
+        else result.image = null;
         result.pixels = null;
         result.viewKey = viewKey;
         result.viewSpan = viewSpan;
     }
     function renderDescription(r, prefix = 'Waveform: ') {
         const s = r.stats;
-        return prefix + (r.mode === 'samples' ? (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') : r.mode + ' connected envelope') +
+        return prefix + (r.mode === 'hidden' ? 'waveform off' : r.mode === 'samples' ?
+            (app.audioFilter ? 'connected filtered native-rate samples' : 'connected native samples') :
+            r.mode + ' connected envelope') +
             (r.mode === 'sampled' ? ' preview — zoom or build overview' : '') + ' · Δf ' +
             fmt(app.meta.sampleRate / r.fft, 2) + ' Hz · FFT hop ' + fmt(r.fft / 4 / app.meta.sampleRate, 5) +
-            ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' : r.columns + ' sampled time columns') + ' · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
+            ' s · ' + (r.spectrumMode === 'pooled' ? 'spectral peak overview (time bins ' + fmt(r.spectrumTimeBin, 4) + ' s, frequency groups ' + fmt(r.spectrumFreqBin, 2) + ' Hz)' : r.spectrumMode === 'local-peaks' ? 'spectral peaks across every visible FFT hop' :
+                r.spectrumMode === 'none' ? 'waveform only (FFT skipped)' : r.columns + ' sampled time columns') + ' · ' + Math.round(r.elapsedMs) + ' ms · caches ' +
             fmt((s.byteCache + s.frameCache + s.fftCache + (s.filterCache || 0) + s.overviewBytes + app.renderCacheBytes) / 1048576, 1) + ' MiB';
     }
     function requestRender() {
@@ -2767,13 +3044,40 @@ self.onmessage = async ({ data: m }) => {
             if (app.renderTarget?.serial === serial) app.renderTarget = null;
         }
     }
+    function selectedOverviewBatch() {
+        const rest = orderedChannels().filter(ch => ch !== channel());
+        const batch = app.overviewBatch;
+        return { rest, batch: batch && batch.fft === Number($('fftSize').value) &&
+            batch.filterKey === audioFilterKey() &&
+            JSON.stringify(batch.channels) === JSON.stringify(rest) ? batch : null };
+    }
     function updateOverviewControls(m) {
         app.overview = m;
-        $('overviewProgress').value = m.progress || 0;
-        $('overviewBtn').textContent = m.complete ? 'Rebuild overview' : m.active ? 'Pause overview' : m.progress ? 'Resume overview' : 'Build waveform + spectral overview';
-        $('overviewInfo').textContent = m.complete ? 'Overview ready · all samples and FFT hops covered · ' + fmt(m.bytes / 1048576, 1) + ' MiB · ' + m.storage
-            : m.active || m.progress ? (m.active ? 'Building' : 'Paused') + ' waveform + spectral overview · ' + fmt((m.progress || 0) * 100, 1) + '% · navigation takes priority'
-            : (m.waveReady ? 'Waveform overview ready. Build spectral overview for the current FFT.' : 'Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.') + (m.storage?.startsWith('Memory only:') ? ' · ' + m.storage : '');
+        const { rest, batch } = selectedOverviewBatch();
+        const count = rest.length + 1;
+        const primary = m.complete ? 1 : m.progress || 0;
+        const batchProgress = batch?.progress || 0;
+        const progress = Math.min(1, (primary + rest.length * batchProgress) / count);
+        const complete = !!m.complete && (!rest.length || !!batch?.complete);
+        const active = !!m.active || !!batch?.active;
+        const done = (m.complete ? 1 : 0) + (batch?.completed?.length || 0);
+        const bytes = (m.bytes || 0) + (batch?.bytes || 0);
+        $('overviewProgress').value = progress;
+        $('overviewBtn').textContent = complete ? 'Rebuild selected overviews' :
+            active ? 'Pause selected overviews' :
+            progress ? 'Resume selected overviews' : 'Build waveform + spectral overview';
+        if (active || progress || complete) {
+            $('overviewInfo').textContent = (complete ? 'Ready' : active ? 'Building' : 'Paused') +
+                ' · ' + done + '/' + count + ' selected channels indexed · ' +
+                fmt(progress * 100, 1) + '% · ' + fmt(bytes / 1048576, 1) +
+                ' MiB · navigation takes priority' +
+                (batch?.error ? ' · ' + batch.error : '') +
+                (m.storage ? ' · reference: ' + m.storage : '');
+        }
+        else $('overviewInfo').textContent =
+            'Build waveform extrema and all FFT-hop spectral peaks for all ' +
+            count + ' selected channel' + (count === 1 ? '' : 's') +
+            '. Wide views then use each channel’s own exact overview.';
     }
     async function restoreOverview() {
         if (!app.analysis || !app.meta) return;
@@ -2792,8 +3096,20 @@ self.onmessage = async ({ data: m }) => {
             if (epoch === app.loadEpoch && request === app.overviewRequest) $('overviewBtn').disabled = !app.meta;
         }
     }
-    function onWorkerEvent(m) {
+    function onWorkerEvent(m, worker) {
+        if (m.event === 'overviewBatch') {
+            if (worker !== app.secondaryAnalysis) return;
+            if (m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
+            const previous = new Set(app.overviewBatch?.completed || []);
+            app.overviewBatch = m;
+            const newChannels = (m.completed || []).filter(ch => !previous.has(ch));
+            for (const ch of newChannels) app.secondaryViews.delete(ch);
+            updateOverviewControls(app.overview);
+            if (newChannels.length) scheduleSecondaryRenders(35);
+            return;
+        }
         if (m.event === 'overview') {
+            if (worker !== app.analysis) return;
             if (m.channel !== channel() || m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
             const changed = app.overview.revision !== m.revision;
             updateOverviewControls(m);
@@ -2909,7 +3225,11 @@ self.onmessage = async ({ data: m }) => {
         ctx.rect(g.left, g.top, g.w, g.h);
         ctx.clip();
         const focused = displayChannel === channel();
-        const r = focused ? app.lastRender : app.secondaryViews.get(displayChannel)?.result;
+        const stored = focused ? null : app.secondaryViews.get(displayChannel);
+        const r = focused ? app.lastRender : stored?.result;
+        const currentSecondary = focused || !!(stored && sameZoom(stored.viewSpan, app.span) &&
+            stored.result.start <= app.start + 1e-9 &&
+            stored.result.start + stored.result.span >= app.start + app.span - 1e-9);
         if (r && app.meta) {
             const x = tX(r.start, g), w = r.span / app.span * g.w;
             if (isSpec) {
@@ -2961,8 +3281,10 @@ self.onmessage = async ({ data: m }) => {
             (focused && app.meta ? ' (reference)' : ''), 8, 14, Math.max(10, g.width - (focused ? 155 : 100)));
         ctx.textAlign = 'right';
         ctx.fillStyle = focused && app.renderPending || !r ? '#ffda86' : '#d8e3ef';
-        ctx.fillText(!r && app.meta ? 'Loading…' : focused && app.renderPending ? 'Updating preview…' :
-            isSpec && !focused ? (app.secondaryViews.get(displayChannel)?.detailed ? 'Hann · dBFS' : 'Fast preview') :
+        ctx.fillText(!r && app.meta ? 'Loading…' :
+            !focused && !currentSecondary ? 'Updating detail…' :
+            focused && app.renderPending ? 'Updating preview…' :
+            isSpec && !focused ? (stored?.detailed ? 'Hann · dBFS' : 'Fast preview') :
             isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
     }
 
@@ -3136,6 +3458,27 @@ self.onmessage = async ({ data: m }) => {
         const ch = plot ? Number(plot.dataset.channel) : channel();
         return (isSpec ? 'spec:' : 'wave:') + ch;
     }
+    function cacheOverlayRaster(key, layer) {
+        // Multichannel navigation used to retain a full canvas for every
+        // visited spectrogram/label row, even after scrolling it offscreen.
+        // Bound those retained raster bytes across all channel overlays.
+        const budget = 32 * 1048576;
+        const layers = app.overlayLayers;
+        const bytes = layer.canvas.width * layer.canvas.height * 4;
+        if (bytes > budget) return;
+        delete layers[key];
+        layers[key] = layer;
+        let total = 0;
+        for (const value of Object.values(layers))
+            total += value.canvas.width * value.canvas.height * 4;
+        for (const victim of Object.keys(layers)) {
+            if (total <= budget) break;
+            if (victim === key) continue;
+            const old = layers[victim];
+            total -= old.canvas.width * old.canvas.height * 4;
+            delete layers[victim];
+        }
+    }
     function paintOverlay(canvas, isSpec, trackId = null) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
@@ -3204,7 +3547,7 @@ self.onmessage = async ({ data: m }) => {
             }
             pen.restore();
             layer = { signature, canvas: offscreen, textHits };
-            app.overlayLayers[rasterKey] = layer;
+            cacheOverlayRaster(rasterKey, layer);
         }
         // Marker raster is stable while only the playback cursor moves.
         ctx.save();
@@ -4473,6 +4816,10 @@ self.onmessage = async ({ data: m }) => {
     for (const id of ['displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
         handle(id, 'change', requestRender);
     handle('fftSize', 'change', () => {
+        if (app.overviewBatch?.active)
+            app.secondaryAnalysis?.call('overviewBatch', { action: 'pause' }).catch(report);
+        app.overviewBatch = null;
+        updateOverviewControls(app.overview);
         requestRender();
         return restoreOverview();
     });
@@ -4516,16 +4863,57 @@ self.onmessage = async ({ data: m }) => {
         if (picker.open && !picker.contains(e.target)) picker.open = false;
     });
     handle('overviewBtn', 'click', async () => {
+        if (!app.analysis || !app.meta) return;
         cancelZoomPrefetch();
-        const result = await app.analysis.call('overview', { channel: channel(), fft: Number($('fftSize').value), remember: $('rememberOverview').checked });
-        if (result.channel === channel() && result.fft === Number($('fftSize').value)) updateOverviewControls(result);
+        const epoch = app.loadEpoch, ch = channel(), fft = Number($('fftSize').value);
+        const remember = $('rememberOverview').checked;
+        const { rest, batch } = selectedOverviewBatch();
+        const allComplete = app.overview.complete && (!rest.length || batch?.complete);
+        const anyActive = app.overview.active || batch?.active;
+        // One button pauses/resumes the entire selected-channel operation.
+        if (anyActive) {
+            const jobs = [];
+            if (app.overview.active)
+                jobs.push(app.analysis.call('overview', { channel: ch, fft, remember }).then(result => {
+                    if (epoch === app.loadEpoch && ch === channel()) updateOverviewControls(result);
+                }));
+            if (batch?.active && app.secondaryAnalysis)
+                jobs.push(app.secondaryAnalysis.call('overviewBatch', { action: 'pause' }).then(result => {
+                    if (epoch === app.loadEpoch) {
+                        app.overviewBatch = result;
+                        updateOverviewControls(app.overview);
+                    }
+                }));
+            await Promise.all(jobs);
+            return;
+        }
+        const jobs = [];
+        if (!app.overview.complete || allComplete)
+            jobs.push(app.analysis.call('overview', { channel: ch, fft, remember }).then(result => {
+                if (epoch === app.loadEpoch && ch === channel() && fft === Number($('fftSize').value))
+                    updateOverviewControls(result);
+            }));
+        if (rest.length && app.secondaryAnalysis)
+            jobs.push(app.secondaryAnalysis.call('overviewBatch', {
+                action: allComplete ? 'rebuild' : 'start', channels: rest, fft, remember
+            }).then(result => {
+                if (epoch === app.loadEpoch && fft === Number($('fftSize').value)) {
+                    app.overviewBatch = result;
+                    updateOverviewControls(app.overview);
+                }
+            }));
+        await Promise.all(jobs);
     });
     handle('rememberOverview', 'change', async () => {
         if (!app.analysis) return;
         // Invalidate pending restores before changing the persistence preference.
         if ($('overviewBtn').disabled) return restoreOverview();
         const epoch = app.loadEpoch;
-        const result = await app.analysis.call('rememberOverview', { remember: $('rememberOverview').checked });
+        const remember = $('rememberOverview').checked;
+        const [result] = await Promise.all([
+            app.analysis.call('rememberOverview', { remember }),
+            ...(app.secondaryAnalysis ? [app.secondaryAnalysis.call('rememberOverview', { remember })] : [])
+        ]);
         if (epoch === app.loadEpoch && result.channel === channel() && result.fft === Number($('fftSize').value)) updateOverviewControls(result);
     });
     handle('clearSavedOverviews', 'click', async () => {
@@ -4718,7 +5106,7 @@ self.onmessage = async ({ data: m }) => {
         }
     });
     window.addEventListener('pagehide', e => { cancelZoomPrefetch(); clearTimeout(app.secondaryTimer); app.secondarySerial++; app.secondaryObserver?.disconnect(); pause(); if (e.persisted)
-        return; app.analysis?.close(); app.playback?.close(); app.context?.close(); URL.revokeObjectURL(workerURL); });
+        return; app.analysis?.close(); app.playback?.close(); app.secondaryAnalysis?.close(); app.context?.close(); URL.revokeObjectURL(workerURL); });
     app.secondaryObserver = typeof IntersectionObserver === 'function' ?
         new IntersectionObserver(entries => {
             for (const entry of entries) {
@@ -4734,13 +5122,26 @@ self.onmessage = async ({ data: m }) => {
         paintAll();
         // Only a spectrogram size change alters FFT pixel resolution. Avoid
         // starting a new worker render on every pixel of splitter dragging.
-        if (app.meta && entries.some(entry =>
-            entry.target === $('specPlot') || entry.target.classList.contains('channel-spec'))) {
+        if (!app.meta) return;
+        const primaryChanged = entries.some(entry =>
+            entry.target === $('specPlot') || $('specPlot').hidden && entry.target === $('wavePlot'));
+        const secondaryChanged = entries.some(entry =>
+            entry.target.classList.contains('channel-spec') ||
+            entry.target.classList.contains('channel-wave'));
+        if (primaryChanged || secondaryChanged) {
+            // Resizing only a secondary track must not invalidate or recompute
+            // the expensive primary FFT. The per-channel key includes its own
+            // size and will refine at the new geometry.
+            app.plotResizePrimary = (app.plotResizePrimary || false) || primaryChanged;
             clearTimeout(app.plotRenderTimer);
             app.plotRenderTimer = setTimeout(() => {
                 app.plotRenderTimer = 0;
-                if (app.meta) requestRender();
-            }, 180);
+                const redrawPrimary = app.plotResizePrimary;
+                app.plotResizePrimary = false;
+                if (!app.meta) return;
+                if (redrawPrimary) requestRender();
+                else scheduleSecondaryRenders(30);
+            }, 175);
         }
     });
     for (const plot of $('plotStack').querySelectorAll(':scope > .plot'))
@@ -4770,7 +5171,25 @@ self.onmessage = async ({ data: m }) => {
         selectedSpectrogramChannels: [...app.selectedSpecChannels].sort((a, b) => a - b),
         referenceChannel: channel(), focusChannel: channel(), playbackChannels: orderedChannels(),
         spectrumOverlayVisibility: Object.fromEntries(Array.from(app.importSources.keys(), id =>
-            [id, app.spectralOverlayVisibility.get(id) !== false])), secondaryPreviewCount: app.secondaryViews.size, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) => view.result.image ? ch : null).filter(ch => ch !== null), start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+            [id, app.spectralOverlayVisibility.get(id) !== false])), secondaryPreviewCount: app.secondaryViews.size,
+        secondaryImageCacheBytes: Array.from(app.secondaryViews.values()).reduce((total, v) => total + v.bytes, 0),
+        annotationRasterCacheBytes: Object.values(app.overlayLayers).reduce((total, v) =>
+            total + v.canvas.width * v.canvas.height * 4, 0),
+        secondaryWorkerActive: !!app.secondaryAnalysis,
+        secondaryRendering: app.secondaryRunning, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) =>
+            view.result.image ? ch : null).filter(ch => ch !== null),
+        secondaryRenders: Object.fromEntries(Array.from(app.secondaryViews, ([ch, v]) =>
+            [ch, { frame: v.frame, start: v.result.start, span: v.result.span, viewSpan: v.viewSpan,
+                zoomMatched: sameZoom(v.viewSpan, app.span), width: v.result.width,
+                columns: v.result.columns, height: v.result.height, mode: v.result.mode,
+                spectrumMode: v.result.spectrumMode, detailed: v.detailed,
+                preview: v.result.preview, coversWindow: sameZoom(v.viewSpan, app.span) &&
+                    v.result.start <= app.start + 1e-9 &&
+                    v.result.start + v.result.span >= app.start + app.span - 1e-9 }])), start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, overviewBatch: app.overviewBatch ?
+            { ...app.overviewBatch, channels: [...app.overviewBatch.channels],
+                completed: [...app.overviewBatch.completed] } : null, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'),
+            secondary: app.secondaryAnalysis ? await app.secondaryAnalysis.call('stats') : null,
+            historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
                 return 0;
             const a = new Float32Array(app.analyser.fftSize);

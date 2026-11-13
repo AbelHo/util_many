@@ -8,6 +8,7 @@ on:
       - feature/audio-tracks-10px-enter-edit-20261029
       - feat/audio-annotator-multi-channel-tracks
       - feat/audio-multi-spectrogram-channel-playback-label-overlays
+      - fix/audio-multichannel-synchronized-rendering-20261113
     paths:
       - audio_annotatorv2.html
       - tests/audio_annotator_v2/*.py
