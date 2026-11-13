@@ -1210,7 +1210,7 @@ async function runOverviewBatch(batch, token) {
             const ch = batch.channels[i];
             batch.currentChannel = ch;
             batch.next = i;
-            const selected = await selectOverview(ch, batch.fft, batch.remember);
+            const selected = await selectOverview(ch, batch.fft, batch.remember, batch.rebuild);
             if (selected.stale || token !== overviewBatchToken || !batch.active || batch !== overviewBatch) return;
             const o = overview;
             if (!o.complete) {
@@ -1462,15 +1462,15 @@ async function saveOverview(o) {
         if (o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
     }
 }
-async function selectOverview(channel, fft, remember) {
+async function selectOverview(channel, fft, remember, rebuild = false) {
     const token = ++overviewToken, previous = overview;
     if (previous) previous.active = false;
-    const cached = channelOverview(channel, fft);
-    const o = cached || createOverview(channel, fft, previous);
+    const cached = rebuild ? null : channelOverview(channel, fft);
+    const o = cached || createOverview(channel, fft, rebuild ? null : previous);
     o.remember = remember;
     overview = o;
     rememberChannelOverview(o);
-    if (remember && !cached) {
+    if (remember && !cached && !rebuild) {
         try {
             const key = await overviewStorageKey(channel, fft, o.filterKey);
             const record = await overviewStorage('get', key);
@@ -1665,9 +1665,9 @@ self.onmessage = async ({ data: m }) => {
                     overviewBatchToken++;
                     overviewToken++;
                     if (overview) overview.active = false;
-                    const old = same ? overviewBatch : null;
+                    const old = same && action !== 'rebuild' ? overviewBatch : null;
                     overviewBatch = old || { channels: [...channels], fft, filterKey: filterSettingsKey(),
-                        remember: remember === true, active: false, complete: false,
+                        remember: remember === true, rebuild: action === 'rebuild', active: false, complete: false,
                         completed: new Set(), currentChannel: null, next: 0, error: null };
                     overviewBatch.remember = remember === true;
                     overviewBatch.active = true;
@@ -2310,6 +2310,7 @@ self.onmessage = async ({ data: m }) => {
             ]);
             if (epoch !== app.loadEpoch || serial !== app.filterSerial) return;
             app.audioFilter = next;
+            app.overviewBatch = null;
             app.filterTaps = analysis.taps;
             $('audioFilterInfo').textContent = audioFilterLabel(next, analysis.taps);
             updateOverviewControls({ active: false, progress: 0 });
@@ -4808,6 +4809,8 @@ self.onmessage = async ({ data: m }) => {
     for (const id of ['displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
         handle(id, 'change', requestRender);
     handle('fftSize', 'change', () => {
+        app.overviewBatch = null;
+        updateOverviewControls(app.overview);
         requestRender();
         return restoreOverview();
     });
@@ -4862,9 +4865,16 @@ self.onmessage = async ({ data: m }) => {
         if (anyActive) {
             const jobs = [];
             if (app.overview.active)
-                jobs.push(app.analysis.call('overview', { channel: ch, fft, remember }));
+                jobs.push(app.analysis.call('overview', { channel: ch, fft, remember }).then(result => {
+                    if (epoch === app.loadEpoch && ch === channel()) updateOverviewControls(result);
+                }));
             if (batch?.active && app.secondaryAnalysis)
-                jobs.push(app.secondaryAnalysis.call('overviewBatch', { action: 'pause' }));
+                jobs.push(app.secondaryAnalysis.call('overviewBatch', { action: 'pause' }).then(result => {
+                    if (epoch === app.loadEpoch) {
+                        app.overviewBatch = result;
+                        updateOverviewControls(app.overview);
+                    }
+                }));
             await Promise.all(jobs);
             return;
         }
