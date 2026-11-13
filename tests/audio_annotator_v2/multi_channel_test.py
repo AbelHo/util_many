@@ -131,6 +131,46 @@ with sync_playwright() as playwright:
     assert page.locator('#channel-spec-3').count() == 0
     assert page.locator('#plotStack > .plot-resizer').count() == 5
     align()
+
+    # Verify the real rendered dropdown in Chromium, not just DOM counts.
+    # This screenshot deliberately uses both/wave-only/spec-only/none rows.
+    page.locator('#channelPicker').scroll_into_view_if_needed()
+    open_picker()
+    geometry = page.evaluate('''() => {
+        const picker = document.querySelector('#channelPicker');
+        const menu = picker.querySelector('.channel-menu').getBoundingClientRect();
+        const summary = picker.querySelector('summary').getBoundingClientRect();
+        const rows = [...picker.querySelectorAll('.channel-choice:not(.channel-head)')];
+        const checks = rows.map(row => {
+            const wave = row.querySelector('[data-view="wave"]');
+            const spec = row.querySelector('[data-view="spec"]');
+            const w = wave.getBoundingClientRect(), s = spec.getBoundingClientRect();
+            return { wave: wave.checked, spec: spec.checked,
+                waveX: w.x + w.width / 2, specX: s.x + s.width / 2,
+                waveVisible: w.width >= 14 && w.height >= 14 && w.x >= menu.left &&
+                    w.right <= menu.right && w.top >= menu.top && w.bottom <= menu.bottom,
+                specVisible: s.width >= 14 && s.height >= 14 && s.x >= menu.left &&
+                    s.right <= menu.right && s.top >= menu.top && s.bottom <= menu.bottom };
+        });
+        return { x: Math.max(0, menu.left - 68), y: Math.max(0, summary.top - 7),
+            right: Math.min(innerWidth, menu.right + 12), bottom: Math.min(innerHeight, menu.bottom + 10),
+            rows: checks, menu: {width: menu.width, height: menu.height} };
+    }''')
+    assert len(geometry['rows']) == 8, geometry
+    assert all(r['waveVisible'] and r['specVisible'] and r['specX'] > r['waveX'] + 35
+               for r in geometry['rows']), geometry
+    assert [(r['wave'], r['spec']) for r in geometry['rows'][:4]] == [
+        (True, True), (True, True), (False, True), (True, False)], geometry
+    assert not any(r['wave'] or r['spec'] for r in geometry['rows'][4:])
+    assert geometry['bottom'] - geometry['y'] >= geometry['menu']['height']
+    screenshot = OUT / 'channel-picker-dual-checkboxes.png'
+    clip = {'x': geometry['x'], 'y': geometry['y'],
+            'width': geometry['right'] - geometry['x'],
+            'height': geometry['bottom'] - geometry['y']}
+    page.screenshot(path=str(screenshot), clip=clip, animations='disabled')
+    print('CHANNEL PICKER VISUAL PASS: 8 rows, 16 visible independent checkboxes;'
+          ' screenshot:', screenshot, flush=True)
+
     # Re-enable both views before testing global imported label overlays.
     check_channel(2, 'wave')
     check_channel(3, 'spec')
