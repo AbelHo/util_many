@@ -1456,7 +1456,8 @@ async function saveOverview(o) {
     const generation = overviewStorageGeneration;
     try {
         const key = await overviewStorageKey(o.channel, o.fft, o.filterKey);
-        if (!o.complete || !o.remember || !overviewsByChannel.has(overviewKey(o.channel, o.fft, o.filterKey)) ||
+        if (!o.complete || !o.remember ||
+            overviewsByChannel.get(overviewKey(o.channel, o.fft, o.filterKey)) !== o ||
             generation !== overviewStorageGeneration) return;
         const { channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels } = o;
         await overviewStorage('put', key, { key, version: OVERVIEW_VERSION, frames: source.frames, sampleRate: source.sampleRate,
@@ -1756,7 +1757,7 @@ self.onmessage = async ({ data: m }) => {
             this.closed = false;
             this.worker.onmessage = ({ data: m }) => {
                 if (m.event) {
-                    onWorkerEvent(m);
+                    onWorkerEvent(m, this);
                     return;
                 }
                 const p = this.pending.get(m.id);
@@ -3095,8 +3096,9 @@ self.onmessage = async ({ data: m }) => {
             if (epoch === app.loadEpoch && request === app.overviewRequest) $('overviewBtn').disabled = !app.meta;
         }
     }
-    function onWorkerEvent(m) {
+    function onWorkerEvent(m, worker) {
         if (m.event === 'overviewBatch') {
+            if (worker !== app.secondaryAnalysis) return;
             if (m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
             const previous = new Set(app.overviewBatch?.completed || []);
             app.overviewBatch = m;
@@ -3107,6 +3109,7 @@ self.onmessage = async ({ data: m }) => {
             return;
         }
         if (m.event === 'overview') {
+            if (worker !== app.analysis) return;
             if (m.channel !== channel() || m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
             const changed = app.overview.revision !== m.revision;
             updateOverviewControls(m);
@@ -4813,6 +4816,8 @@ self.onmessage = async ({ data: m }) => {
     for (const id of ['displayFreqMin', 'displayFreqMax', 'dbMin', 'dbMax', 'colorMap'])
         handle(id, 'change', requestRender);
     handle('fftSize', 'change', () => {
+        if (app.overviewBatch?.active)
+            app.secondaryAnalysis?.call('overviewBatch', { action: 'pause' }).catch(report);
         app.overviewBatch = null;
         updateOverviewControls(app.overview);
         requestRender();
