@@ -127,8 +127,10 @@ with sync_playwright() as playwright:
     page.locator('#channel-spec-2').scroll_into_view_if_needed()
     zoomed = refined(2, spectrum=True, waveform=False, min_height=before_height + 100)
     assert zoomed['span'] < after_pan['span']
-    page.locator('#scrubSlider').fill('2.55')
-    page.locator('#scrubSlider').dispatch_event('input')
+    page.locator('#scrubSlider').evaluate('''slider => {
+        slider.value = '2.55';
+        slider.dispatchEvent(new Event('input', {bubbles: true}));
+    }''')
     page.wait_for_function('AudioAnnotatorV2.inspect().cursor >= 2.5')
     page.locator('#channel-spec-2').scroll_into_view_if_needed()
     scrubbed = refined(2, spectrum=True, waveform=False, min_height=before_height + 100)
