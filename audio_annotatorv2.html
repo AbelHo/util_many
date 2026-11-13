@@ -1777,6 +1777,7 @@ self.onmessage = async ({ data: m }) => {
             spec.before(plot);
         }
         rebuildPlotSeparators();
+        pruneInactiveOverlayLayers();
         paintAll();
     }
     function status(text, error = false) { $('status').textContent = text; $('status').className = error ? 'error' : 'ok'; }
@@ -1894,6 +1895,20 @@ self.onmessage = async ({ data: m }) => {
         drawBase(plot.querySelector('canvas:not(.overlay)'), isSpec, ch);
         paintOverlay(plot.querySelector('canvas.overlay'), isSpec);
     }
+    function pruneInactiveOverlayLayers() {
+        // Raster overlays can be large; hiding/removing a channel must release
+        // its old offscreen canvas, including former reference-channel layers.
+        const live = new Set();
+        if (!$('wavePlot').hidden) live.add('wave:' + channel() + ':waveOverlay');
+        if (!$('specPlot').hidden) live.add('spec:' + channel() + ':specOverlay');
+        for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec, :scope > .label-track')) {
+            const key = plot.classList.contains('label-track') ? 'track:' + plot.dataset.sourceId :
+                plot.dataset.kind + ':' + plot.dataset.channel;
+            live.add(key + ':' + plot.querySelector('canvas.overlay').id);
+        }
+        for (const key of Object.keys(app.overlayLayers))
+            if (!live.has(key)) delete app.overlayLayers[key];
+    }
     function rebuildChannelPlots() {
         const stack = $('plotStack');
         const reference = channel();
@@ -1913,8 +1928,8 @@ self.onmessage = async ({ data: m }) => {
                 app.secondaryObserver?.unobserve(plot);
                 app.resizeObserver?.unobserve(plot);
                 app.visibleSecondary.delete(plot);
-                delete app.overlayLayers['wave:' + plot.querySelector('canvas.overlay').id];
-                delete app.overlayLayers['spec:' + plot.querySelector('canvas.overlay').id];
+                delete app.overlayLayers[plot.dataset.kind + ':' + plot.dataset.channel + ':' +
+                    plot.querySelector('canvas.overlay').id];
                 plot.remove();
             }
         }
@@ -1932,6 +1947,9 @@ self.onmessage = async ({ data: m }) => {
             after = plot;
         }
         rebuildPlotSeparators();
+        pruneInactiveOverlayLayers();
+        for (const ch of app.secondaryViews.keys())
+            if (!app.selectedChannels.has(ch) || ch === reference) app.secondaryViews.delete(ch);
         paintAll();
         scheduleSecondaryRenders(80);
     }
