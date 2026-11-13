@@ -117,9 +117,33 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 #importSourceControls{gap:10px;max-height:145px;overflow:auto}
 #importSourceControls[hidden]{display:none}
 #importSourceControls label{padding:3px 7px;background:#eef4fa;border:1px solid #d5e0ea;border-radius:4px;overflow-wrap:anywhere}
-#importChoiceDialog{border:1px solid #9eb4c7;border-radius:7px;max-width:min(92vw,540px);padding:18px;box-shadow:0 8px 35px #0004}
+#importChoiceDialog{border:1px solid #9eb4c7;border-radius:7px;width:min(94vw,760px);max-width:760px;max-height:88vh;overflow:auto;padding:18px;box-shadow:0 8px 35px #0004}
 #importChoiceDialog::backdrop{background:#07182999}
-#importChoiceDialog .row button{flex:1;min-width:105px}
+#importChoiceDialog .import-actions{position:sticky;bottom:-18px;background:#fff;padding:12px 0 1px;border-top:1px solid #d5e0ea;z-index:2}
+#importChoiceDialog .import-actions button{flex:1;min-width:90px}
+#importChoiceDialog fieldset{margin:12px 0;border:1px solid #d5e0ea;border-radius:6px;padding:10px;min-width:0}
+#importChoiceDialog legend{font-weight:600}
+#importChoiceDialog .import-warning{background:#fff5df;border-left:3px solid #b9781b;padding:7px 10px;white-space:pre-line}
+#importChoiceDialog .import-error{color:#ac2631;font-weight:600}
+#importChoiceDialog .import-base-row{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin-top:8px}
+#importChoiceDialog .import-base-row label{display:flex;flex-direction:column;gap:3px;min-width:0}
+#importChoiceDialog .import-base-row input[type=text]{width:min(280px,55vw)}
+#importChoiceDialog input[type=color]{width:42px;height:29px;padding:2px;cursor:pointer}
+#importChoiceDialog .import-rule-list{display:flex;flex-direction:column;gap:5px;max-height:240px;overflow:auto;padding:3px}
+#importChoiceDialog .import-rule{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px;border:1px solid #d6e0e9;border-radius:5px;background:#fff;min-width:0}
+#importChoiceDialog .import-rule.is-selected{background:#f0f7ff;border-color:#9fc3e4;cursor:grab}
+#importChoiceDialog .import-rule.is-dragging{opacity:.5}
+#importChoiceDialog .import-rule-main{display:flex;align-items:center;gap:6px;flex:1 1 210px;min-width:0}
+#importChoiceDialog .import-rule-main span{overflow-wrap:anywhere}
+#importChoiceDialog .import-rule-settings{display:flex;align-items:center;gap:5px}
+#importChoiceDialog .import-rule-settings input[type=text]{width:112px;max-width:27vw}
+#importChoiceDialog .import-rule:not(.is-selected) .import-rule-settings,#importChoiceDialog .import-rule:not(.is-selected) .import-rule-order{display:none}
+#importChoiceDialog .import-rule-order button{min-width:28px;padding:2px 6px}
+#importChoiceDialog .import-rule-rank{font-variant-numeric:tabular-nums;color:#415e7a;font-size:12px}
+#importChoiceDialog .import-rule-count{color:#526578;font-size:12px;white-space:nowrap}
+#importChoiceDialog .import-rule-subhead{font-size:12px;font-weight:600;margin:9px 0 5px}
+#importChoiceDialog .import-rule-list:empty::after{content:'None selected (no keyword tags will be added).';font-size:12px;color:#677787;padding:7px}
+#importKeywordSection[hidden],#importChoiceWarning[hidden]{display:none}
 /* The channel picker stays compact, even for 64-channel recordings. */
 .channel-picker{position:relative;display:inline-block}
 .channel-picker>summary{cursor:pointer;list-style:none;border:1px solid #b8c2cc;border-radius:4px;padding:6px 10px;background:white;min-width:155px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -177,7 +201,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="row hint"><label><input id="showAnnotations" type="checkbox" checked> Show annotations</label><label><input id="showLabelText" type="checkbox" checked> Label text</label><span id="annotationRenderInfo" class="grow">No annotations in view.</span></div>
 <div id="importSourceControls" class="row hint" aria-label="Imported label file spectrogram overlays" hidden></div>
 <section class="panel" aria-label="Annotation import and export">
-<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" multiple accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><label>Import as <select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge (overlay)</option><option value="replace">Replace existing</option><option value="stack">Stack (separate label row)</option></select></label><button id="importBtn" disabled>Import</button></div>
+<div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" multiple accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><button id="importBtn" disabled>Import</button></div>
 <div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button><label>Jump to page <input id="pageJump" type="number" min="1" value="1" step="1" style="width:75px" aria-label="Jump to annotation page"></label></div>
 <div class="row hint"><progress id="importProgress" max="1" value="0" hidden aria-label="Annotation import progress"></progress><button id="cancelImport" disabled>Cancel import</button><span id="tableStatus" role="status"></span></div>
 <div class="tableWrap"><table><thead><tr><th>Type</th><th>Time (s)</th><th>Frequency (Hz)</th><th>Tag / label</th><th>Actions</th></tr></thead><tbody id="markerRows"></tbody></table></div>
@@ -190,10 +214,24 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 </div>
 <dialog id="importChoiceDialog" aria-labelledby="importChoiceTitle">
 <strong id="importChoiceTitle">Choose how to import labels</strong>
-<p class="hint">Choose a mode separately for this file. Replace clears the existing annotations, labels and stacked tracks; Stack creates one synchronized row between waveform and spectrogram.</p>
-<div class="row"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
+<p id="importChoiceSummary" class="hint"></p>
+<p class="hint">Merge overlays labels; Replace removes existing labels, tags and tracks (undoable); Stack adds a synchronized label row. Tagging below is optional, and nothing is tagged automatically.</p>
+<p id="importChoiceWarning" class="import-warning" role="note" hidden></p>
+<fieldset><legend>Optional tag for the entire imported file</legend>
+<label><input id="importBatchTag" type="checkbox"> Assign one tag and color to every imported label</label>
+<div class="import-base-row"><label>Tag key<input id="importBatchTagName" type="text" maxlength="64" disabled></label><label>Tag color<input id="importBatchTagColor" type="color" disabled></label></div>
+<p class="hint">When enabled, this replaces tags on imported labels. Selected keyword rules have higher priority and override this file-wide tag when they match. Tags and their colors are shared across all annotations with the same tag key.</p>
+</fieldset>
+<fieldset id="importKeywordSection" hidden><legend>Suggested keyword tags (optional)</legend>
+<p id="importKeywordSummary" class="hint"></p>
+<p class="hint">Suggestions use distinct-label frequency, not repeated words within one label. Whole words and adjacent two-word phrases match case-insensitively. Select keywords to add tags. <strong>Top selected row wins</strong> when multiple rules match; drag selected rows or use ↑/↓ to change priority. Edit the resulting tag key and color if desired.</p>
+<div class="import-rule-subhead">Selected rules — highest priority first</div><div id="importSelectedRules" class="import-rule-list" aria-label="Selected keyword rules, highest priority first"></div>
+<div class="import-rule-subhead">Suggested keywords — unchecked by default</div><div id="importSuggestedRules" class="import-rule-list" aria-label="Suggested keyword rules"></div>
+</fieldset>
+<p id="importChoiceError" class="import-error" role="alert" hidden></p>
+<div class="row import-actions"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
 </dialog>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Choose audio channels using the two checkbox columns: <strong>left = Waveform (time series)</strong>, <strong>right = Spectrogram</strong>. A channel can have either, both, or neither checked. Select all enables both views for every channel; First only shows both views for the first selected channel. At least one plot remains selected. Visible plots are aligned, independently resizable, and playback mixes the union of all channels checked in either column as a normalized mono average. Checking a second view of an already-playing channel does not change the audio mix. Click <strong>Build waveform + spectral overview</strong> to index <strong>every channel selected</strong> in either checkbox column, including channels currently scrolled offscreen. The progress bar shows combined indexing progress, and the same button pauses/resumes or rebuilds all selected indexes. Building may take longer and consume more memory for multichannel recordings; enabling Remember overviews stores derived summaries locally, subject to the local cache's size limit. The first retained checked channel supplies the primary analysis worker; all other visible tracks use a dedicated background analysis worker, showing fast previews followed by full-resolution waveform/spectrogram refinement after navigation settles. Resizing a spectrogram recalculates its own frequency pixels without redoing the main image, and short pans reuse cached margins. Off-screen tracks are not eagerly rendered. Extremely wide views without a per-channel overview use bounded FFT time sampling, so isolated brief signals can still require a dedicated overview for exact peak coverage. A marker drawn on a spectrogram is limited to that channel; choose All channels in the marker editor to apply it to every spectrogram. JSON/CSV channel metadata uses zero-based indices (0 means Channel 1); missing/null channel means all channels. Audacity TXT has no channel metadata and its labels overlay every visible spectrogram. The imported-label checkboxes below the plots control <strong>only spectrogram overlays</strong>: they do not hide labels on waveforms, dedicated stacked label rows, the table, or exports.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its spectrogram drawing, not its waveform or stacked-label drawing, table entries or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Choose audio channels using the two checkbox columns: <strong>left = Waveform (time series)</strong>, <strong>right = Spectrogram</strong>. A channel can have either, both, or neither checked. Select all enables both views for every channel; First only shows both views for the first selected channel. At least one plot remains selected. Visible plots are aligned, independently resizable, and playback mixes the union of all channels checked in either column as a normalized mono average. Checking a second view of an already-playing channel does not change the audio mix. Click <strong>Build waveform + spectral overview</strong> to index <strong>every channel selected</strong> in either checkbox column, including channels currently scrolled offscreen. The progress bar shows combined indexing progress, and the same button pauses/resumes or rebuilds all selected indexes. Building may take longer and consume more memory for multichannel recordings; enabling Remember overviews stores derived summaries locally, subject to the local cache's size limit. The first retained checked channel supplies the primary analysis worker; all other visible tracks use a dedicated background analysis worker, showing fast previews followed by full-resolution waveform/spectrogram refinement after navigation settles. Resizing a spectrogram recalculates its own frequency pixels without redoing the main image, and short pans reuse cached margins. Off-screen tracks are not eagerly rendered. Extremely wide views without a per-channel overview use bounded FFT time sampling, so isolated brief signals can still require a dedicated overview for exact peak coverage. A marker drawn on a spectrogram is limited to that channel; choose All channels in the marker editor to apply it to every spectrogram. JSON/CSV channel metadata uses zero-based indices (0 means Channel 1); missing/null channel means all channels. Audacity TXT has no channel metadata and its labels overlay every visible spectrogram. The imported-label checkboxes below the plots control <strong>only spectrogram overlays</strong>: they do not hide labels on waveforms, dedicated stacked label rows, the table, or exports.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. Every imported file, whether chosen or dropped, opens one Merge / Replace / Stack dialog with optional whole-file tag/color and (for files without tags) frequency-based keyword suggestions. Keyword tags are opt-in and can be reordered by drag or arrow buttons; top-priority matches win. Without selected options, original tags and labels stay unchanged. Each file is parsed once before its dialog, and the import is one undoable operation. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its spectrogram drawing, not its waveform or stacked-label drawing, table entries or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -4381,26 +4419,81 @@ self.onmessage = async ({ data: m }) => {
                 tags.set(m.tag, { name: m.tag, color: m.color, alpha: m.alpha });
         return { meta: data.meta, markers, tags };
     }
-    async function importText(text, format, mode, ask = true, epoch = app.loadEpoch, serial = app.importSerial, filename = 'Imported annotations') {
+
+    // Import keyword suggestions use label-document frequency, never raw token counts.
+    // Two-pass, bounded candidate discovery keeps million-label imports responsive.
+    const IMPORT_STOPWORDS = new Set(('a an and are as at be been but by can could did do does ' +
+        'for from had has have in into is it its of on or our out over the their them there these ' +
+        'this those to was were what when where which while who with would you your not no yes ' +
+        'one two three this that than then also all some any per via each only label labels ' +
+        'annotation annotations recording recordings file files').split(' '));
+    function importLabelTerms(label) {
+        const words = label.normalize('NFKC').toLowerCase().match(/[\\p{L}][\\p{L}\\p{M}\\p{N}]*/gu) || [];
+        const result = new Set();
+        const useful = word => word.length >= 3 && word.length <= 30 && !IMPORT_STOPWORDS.has(word);
+        for (let i = 0; i < words.length; i++) {
+            if (!useful(words[i])) continue;
+            result.add(words[i]);
+            if (i && useful(words[i - 1])) result.add(words[i - 1] + ' ' + words[i]);
+        }
+        return result;
+    }
+    async function suggestImportKeywords(markers, epoch, serial) {
+        const candidateCounts = new Map(), sampleStep = Math.max(1, Math.ceil(markers.length / 2500));
+        // Uniform samples discover frequent terms; the second pass counts candidates
+        // over *all* labels and produces exact, distinct-label coverage.
+        for (let i = 0; i < markers.length; i += sampleStep) {
+            for (const term of importLabelTerms(markers[i].label)) {
+                if (candidateCounts.has(term))
+                    candidateCounts.set(term, candidateCounts.get(term) + 1);
+                else if (candidateCounts.size < 30000)
+                    candidateCounts.set(term, 1);
+            }
+            if (i % (sampleStep * 1024) === 0) { checkImport(epoch, serial); await yieldUI(); }
+        }
+        const candidates = [...candidateCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .slice(0, 250).map(([term]) => term);
+        const coverage = new Map(candidates.map(term => [term, 0]));
+        let nonempty = 0;
+        for (let i = 0; i < markers.length; i++) {
+            if (markers[i].label.trim()) nonempty++;
+            for (const term of importLabelTerms(markers[i].label))
+                if (coverage.has(term)) coverage.set(term, coverage.get(term) + 1);
+            if ((i & 4095) === 0) {
+                checkImport(epoch, serial);
+                if (markers.length >= 8192) {
+                    status('Analyzing label keywords… ' + i.toLocaleString() + ' / ' + markers.length.toLocaleString());
+                    await yieldUI();
+                }
+            }
+        }
+        const minCoverage = Math.max(2, Math.ceil(nonempty * .005));
+        const suggestions = [...coverage].filter(([term, count]) => count >= minCoverage)
+            .sort((a, b) => (b[1] * (b[0].includes(' ') ? 1.12 : 1)) -
+                (a[1] * (a[0].includes(' ') ? 1.12 : 1)) || a[0].localeCompare(b[0]))
+            .slice(0, 24).map(([term, count]) => ({ term, count }));
+        checkImport(epoch, serial);
+        return { suggestions, nonempty };
+    }
+    function importTagPlan(data, plan) {
+        const definitions = new Map();
+        for (const rule of [plan.baseTag, ...plan.rules].filter(Boolean)) {
+            const key = rule.key.trim(), color = rule.color;
+            if (!key || key.length > 64) throw Error('Tag keys must contain 1–64 characters.');
+            if (!/^#[0-9a-f]{6}$/i.test(color)) throw Error('Invalid tag color.');
+            if (definitions.has(key) && definitions.get(key) !== color)
+                throw Error('The same tag key has conflicting colors. Give each key one color.');
+            definitions.set(key, color);
+        }
+        const rules = plan.rules.map(rule => ({ ...rule, key: rule.key.trim() }));
+        return { baseTag: plan.baseTag ? { ...plan.baseTag, key: plan.baseTag.key.trim() } : null, rules, definitions };
+    }
+    async function applyImportedAnnotations(data, format, choice, epoch, serial, filename) {
+        const mode = choice.mode;
         if (!['merge', 'replace', 'stack'].includes(mode))
             throw Error('Choose Merge, Replace or Stack for this file.');
-        if (!app.meta)
-            throw Error('Load the matching audio before importing annotations.');
-        const data = format === 'txt'
-            ? { markers: await parseAudacityLabels(text, epoch, serial), tags: new Map() }
-            : await parseImport(text, format);
-        checkImport(epoch, serial);
-        const meta = data.meta, mismatch = format !== 'txt' && (meta.filename !== app.file.name || Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate || Number(meta.frames) !== app.meta.frames);
-        if (mismatch && ask && !confirm('The annotation metadata does not match this audio file. Coordinates are valid here. Import anyway?'))
-            return false;
-        const replace = mode === 'replace';
-        if (replace && (app.markers.size || app.importSources.size) && ask &&
-            !confirm('Replace all current annotations, tags and stacked label rows? This is undoable.'))
-            return false;
-        const conflicts = Array.from(data.tags).filter(([k, v]) => app.tags.has(k) && JSON.stringify(app.tags.get(k)) !== JSON.stringify(v)).length;
-        if (!replace && conflicts && ask && !confirm('Update ' + conflicts + ' existing tag definitions? Their colors/names also change on existing markers.'))
-            return false;
-        if (!replace && app.markers.size + data.markers.length > MAX_MARKERS && format === 'txt')
+        const plan = importTagPlan(data, choice.tagPlan), replace = mode === 'replace';
+        if (!replace && app.markers.size + data.markers.length > MAX_MARKERS)
             throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
         const markers = new Map(replace ? [] : app.markers), tags = new Map(replace ? [] : app.tags);
         const sources = new Map(replace ? [] : app.importSources);
@@ -4409,9 +4502,16 @@ self.onmessage = async ({ data: m }) => {
             mode: mode === 'stack' ? 'stack' : 'merge', visible: true });
         for (let i = 0; i < data.markers.length; i++) {
             const item = data.markers[i];
-            // Treat each import as one independently controllable set; remap IDs
-            // even if imported JSON/CSV originated from a different set.
-            const m = { ...item, id: markers.has(item.id) ? uid() : item.id, sourceId };
+            // Whole-file tag is a fallback. First matching (top-priority) keyword
+            // overrides it; a no-options import preserves every original tag.
+            let tag = plan.baseTag ? plan.baseTag.key : item.tag;
+            if (plan.rules.length) {
+                const terms = importLabelTerms(item.label);
+                for (const rule of plan.rules) {
+                    if (terms.has(rule.term)) { tag = rule.key; break; }
+                }
+            }
+            const m = { ...item, id: markers.has(item.id) ? uid() : item.id, sourceId, tag };
             markers.set(m.id, m);
             if (markers.size > MAX_MARKERS)
                 throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
@@ -4421,20 +4521,24 @@ self.onmessage = async ({ data: m }) => {
                 checkImport(epoch, serial);
             }
         }
-        for (const [k, v] of data.tags) tags.set(k, v);
-        if (tags.size > 2000)
-            throw Error('The tag limit is 2,000.');
+        for (const [key, definition] of data.tags) tags.set(key, definition);
+        // Explicit colors win, including where a chosen key exists already.
+        // Styles are global by tag key: this is explained in the same dialog.
+        for (const [key, color] of plan.definitions) {
+            const existing = tags.get(key);
+            tags.set(key, { name: existing?.name || key, color, alpha: existing?.alpha ?? .8 });
+        }
+        if (tags.size > 2000) throw Error('The tag limit is 2,000.');
         checkImport(epoch, serial);
-        // One atomic, reversible Map swap; no huge difference array or JSON.stringify.
         transactSnapshot(markers, tags, null, true, sources);
         status((replace ? 'Replaced with ' : mode === 'stack' ? 'Stacked ' : 'Merged ') +
-            data.markers.length.toLocaleString() + ' annotations from ' + filename + '. Undo is available.');
+            data.markers.length.toLocaleString() + ' annotations from ' + filename +
+            (plan.definitions.size ? ' using ' + plan.definitions.size + ' selected tag(s).' : '.') + ' Undo is available.');
         return true;
     }
-    async function importFile(file, mode = $('importMode').value) {
+    async function importFile(file) {
         if (!app.meta) throw Error('Load the matching audio before importing annotations.');
-        if (app.importBusy)
-            throw Error('An annotation import is already in progress.');
+        if (app.importBusy) throw Error('An annotation import is already in progress.');
         if (file.size > MAX_IMPORT_BYTES)
             throw Error('Annotation file exceeds ' + (MAX_IMPORT_BYTES / 1048576) + ' MiB.');
         const ext = file.name.split('.').pop().toLowerCase();
@@ -4449,10 +4553,26 @@ self.onmessage = async ({ data: m }) => {
         $('importProgress').value = 0;
         status('Reading annotation file…');
         try {
-            // TXT is streamed; JSON/CSV retain their existing compatible parsers.
             const text = ext === 'txt' ? file : await file.text();
             checkImport(epoch, serial);
-            return await importText(text, ext, mode, true, epoch, serial, file.name);
+            const data = ext === 'txt'
+                ? { markers: await parseAudacityLabels(text, epoch, serial), tags: new Map() }
+                : await parseImport(text, ext);
+            checkImport(epoch, serial);
+            const meta = data.meta;
+            const mismatch = ext !== 'txt' && (meta.filename !== app.file.name ||
+                Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate ||
+                Number(meta.frames) !== app.meta.frames);
+            const keywords = data.tags.size ? null : await suggestImportKeywords(data.markers, epoch, serial);
+            checkImport(epoch, serial);
+            $('importProgress').hidden = true;
+            $('cancelImport').disabled = true; // Modal has Cancel / Escape.
+            const choice = await chooseImportMode(file, data, keywords, mismatch);
+            checkImport(epoch, serial);
+            if (!choice) { status('Cancelled import of ' + file.name + '.'); return false; }
+            $('importProgress').hidden = false;
+            $('cancelImport').disabled = false;
+            return await applyImportedAnnotations(data, ext, choice, epoch, serial, file.name);
         }
         finally {
             app.importBusy = false;
@@ -4934,20 +5054,167 @@ self.onmessage = async ({ data: m }) => {
     handle('exportJson', 'click', () => downloadAnnotations('json'));
     handle('exportCsv', 'click', () => downloadAnnotations('csv'));
     handle('exportTxt', 'click', () => downloadAnnotations('txt'));
-    function chooseImportMode(file) {
+    function chooseImportMode(file, data, keywords, mismatch) {
         const dialog = $('importChoiceDialog');
+        const selected = $('importSelectedRules'), suggested = $('importSuggestedRules');
+        selected.replaceChildren();
+        suggested.replaceChildren();
         $('importChoiceTitle').textContent = 'Import ' + file.name;
+        $('importChoiceSummary').textContent = data.markers.length.toLocaleString() + ' labels · ' +
+            data.tags.size.toLocaleString() + ' existing tag definitions';
+        const conflicts = [...data.tags].filter(([key, value]) =>
+            app.tags.has(key) && JSON.stringify(app.tags.get(key)) !== JSON.stringify(value)).length;
+        const warnings = [];
+        if (mismatch) warnings.push('Recording metadata differs from the currently loaded audio. Check time and frequency coordinates before importing.');
+        if (app.markers.size || app.importSources.size)
+            warnings.push('Replace will clear all existing annotations, tags and label tracks. Undo is available.');
+        if (conflicts)
+            warnings.push(conflicts + ' existing tag definition(s) will change on Merge/Stack, including colors of previously imported labels.');
+        $('importChoiceWarning').textContent = warnings.join('\n');
+        $('importChoiceWarning').hidden = !warnings.length;
+        $('importChoiceError').hidden = true;
+        $('importChoiceError').textContent = '';
+        const batch = $('importBatchTag'), batchName = $('importBatchTagName'), batchColor = $('importBatchTagColor');
+        const suggestedName = file.name.replace(/\.(json|csv|txt)$/i, '').slice(0, 64) || 'Imported';
+        batch.checked = false;
+        batchName.value = suggestedName;
+        batchColor.value = app.tags.get(suggestedName)?.color || data.tags.get(suggestedName)?.color || tagColor(suggestedName);
+        batchName.disabled = batchColor.disabled = true;
+        const toggleBatch = () => { batchName.disabled = batchColor.disabled = !batch.checked; };
+        batch.addEventListener('change', toggleBatch);
+        const section = $('importKeywordSection');
+        section.hidden = !keywords;
+        if (keywords) {
+            $('importKeywordSummary').textContent = keywords.nonempty.toLocaleString() +
+                ' non-empty labels · ' + keywords.suggestions.length + ' frequent candidate(s)' +
+                (keywords.suggestions.length ? ', coverage measured across every label.' :
+                    '. No repeated informative words found.');
+        }
+        let dragging = null;
+        const updateRanks = () => {
+            [...selected.children].forEach((row, index) => {
+                row.querySelector('.import-rule-rank').textContent = '#' + (index + 1);
+            });
+        };
+        function moveRule(row, direction) {
+            if (direction < 0 && row.previousElementSibling)
+                selected.insertBefore(row, row.previousElementSibling);
+            if (direction > 0 && row.nextElementSibling)
+                selected.insertBefore(row.nextElementSibling, row);
+            updateRanks();
+        }
+        for (const entry of keywords?.suggestions || []) {
+            const rule = document.createElement('div');
+            rule.className = 'import-rule';
+            rule.dataset.term = entry.term;
+            const main = document.createElement('label');
+            main.className = 'import-rule-main';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.setAttribute('aria-label', 'Tag labels containing ' + entry.term);
+            const term = document.createElement('span');
+            term.textContent = entry.term;
+            const count = document.createElement('span');
+            count.className = 'import-rule-count';
+            count.textContent = entry.count.toLocaleString() + ' (' +
+                (100 * entry.count / Math.max(1, keywords.nonempty)).toFixed(1) + '%)';
+            main.append(checkbox, term, count);
+            const settings = document.createElement('div');
+            settings.className = 'import-rule-settings';
+            const tagName = document.createElement('input');
+            tagName.type = 'text';
+            tagName.maxLength = 64;
+            tagName.value = entry.term;
+            tagName.title = 'Tag key assigned to matching labels';
+            tagName.setAttribute('aria-label', 'Tag key for ' + entry.term);
+            const color = document.createElement('input');
+            color.type = 'color';
+            color.value = app.tags.get(entry.term)?.color || tagColor(entry.term);
+            color.title = 'Tag color for ' + entry.term;
+            color.setAttribute('aria-label', 'Tag color for ' + entry.term);
+            settings.append(tagName, color);
+            const order = document.createElement('div');
+            order.className = 'import-rule-order';
+            const rank = document.createElement('span');
+            rank.className = 'import-rule-rank';
+            const up = document.createElement('button'), down = document.createElement('button');
+            for (const [button, direction, caption] of [[up, -1, 'Higher'], [down, 1, 'Lower']]) {
+                button.type = 'button';
+                button.textContent = direction < 0 ? '↑' : '↓';
+                button.title = caption + ' priority: ' + entry.term;
+                button.setAttribute('aria-label', caption + ' priority for ' + entry.term);
+                button.addEventListener('click', () => moveRule(rule, direction));
+            }
+            order.append(rank, up, down);
+            rule.append(main, settings, order);
+            checkbox.addEventListener('change', () => {
+                rule.classList.toggle('is-selected', checkbox.checked);
+                rule.draggable = checkbox.checked;
+                (checkbox.checked ? selected : suggested).append(rule);
+                updateRanks();
+            });
+            rule.addEventListener('dragstart', event => {
+                if (!checkbox.checked) { event.preventDefault(); return; }
+                dragging = rule;
+                rule.classList.add('is-dragging');
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', entry.term);
+            });
+            rule.addEventListener('dragend', () => { dragging = null; rule.classList.remove('is-dragging'); });
+            suggested.append(rule);
+        }
+        const dragover = event => {
+            if (!dragging) return;
+            event.preventDefault();
+            event.stopPropagation(); // Do not trigger the global file-drop handler.
+            event.dataTransfer.dropEffect = 'move';
+            const row = event.target.closest('.import-rule');
+            if (!row || row.parentElement !== selected || row === dragging) return;
+            const before = event.clientY < row.getBoundingClientRect().top + row.offsetHeight / 2;
+            selected.insertBefore(dragging, before ? row : row.nextSibling);
+            updateRanks();
+        };
+        const stopDrag = event => {
+            if (!dragging) return;
+            event.preventDefault();
+            event.stopPropagation();
+            dragging.classList.remove('is-dragging');
+            dragging = null;
+            updateRanks();
+        };
+        selected.addEventListener('dragover', dragover);
+        selected.addEventListener('drop', stopDrag);
         return new Promise(resolve => {
-            const complete = choice => {
+            const cleanup = () => {
                 dialog.removeEventListener('click', click);
                 dialog.removeEventListener('cancel', cancel);
+                selected.removeEventListener('dragover', dragover);
+                selected.removeEventListener('drop', stopDrag);
+                batch.removeEventListener('change', toggleBatch);
                 if (dialog.open) dialog.close();
-                resolve(choice);
             };
+            const complete = choice => { cleanup(); resolve(choice); };
             const click = event => {
                 const button = event.target.closest('[data-import-choice]');
-                if (button && dialog.contains(button))
-                    complete(button.dataset.importChoice === 'cancel' ? null : button.dataset.importChoice);
+                if (!button || !dialog.contains(button)) return;
+                const mode = button.dataset.importChoice;
+                if (mode === 'cancel') { complete(null); return; }
+                try {
+                    const plan = {
+                        baseTag: batch.checked ? { key: batchName.value, color: batchColor.value } : null,
+                        rules: [...selected.children].map(row => ({
+                            term: row.dataset.term,
+                            key: row.querySelector('.import-rule-settings input[type=text]').value,
+                            color: row.querySelector('.import-rule-settings input[type=color]').value
+                        }))
+                    };
+                    importTagPlan(data, plan); // Validate before closing; keep modal for correction.
+                    complete({ mode, tagPlan: plan });
+                }
+                catch (error) {
+                    $('importChoiceError').textContent = error.message;
+                    $('importChoiceError').hidden = false;
+                }
             };
             const cancel = event => { event.preventDefault(); complete(null); };
             dialog.addEventListener('click', click);
@@ -4955,20 +5222,15 @@ self.onmessage = async ({ data: m }) => {
             dialog.showModal();
         });
     }
-    async function importFiles(files, promptEach = false) {
-        for (const file of files) {
-            const mode = promptEach ? await chooseImportMode(file) : $('importMode').value;
-            if (!mode) break;
-            await importFile(file, mode);
-        }
+    async function importFiles(files) {
+        for (const file of files)
+            if (!await importFile(file)) break;
     }
     handle('importBtn', 'click', () => {
         const files = Array.from($('importInput').files);
         if (!files.length) throw Error('Choose annotation files first.');
         $('importInput').value = '';
-        // Multiple selections and dropped files get an independent mode chooser
-        // for every file; a single picker selection uses the visible mode select.
-        return importFiles(files, files.length > 1);
+        return importFiles(files);
     });
     handle('cancelImport', 'click', () => {
         app.importSerial++;
@@ -5093,7 +5355,7 @@ self.onmessage = async ({ data: m }) => {
             if (audio.length && !await loadAudio(audio[0]))
                 return;
             if (annotations.length)
-                await importFiles(annotations, true);
+                await importFiles(annotations);
         }
         catch (error) {
             report(error);
