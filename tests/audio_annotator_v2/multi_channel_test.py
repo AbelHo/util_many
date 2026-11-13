@@ -80,10 +80,11 @@ with sync_playwright() as playwright:
         assert max(p[1] for p in positions) - min(p[1] for p in positions) < 1.2, positions
 
     def audacity(name, text, mode='merge'):
-        page.locator('#importMode').select_option(mode)
         page.locator('#importInput').set_input_files({
             'name': name, 'mimeType': 'text/plain', 'buffer': text.encode()})
         page.locator('#importBtn').click()
+        page.locator('#importChoiceDialog[open]').wait_for()
+        page.locator(f'#importChoiceDialog [data-import-choice={mode}]').click()
 
     def source_count(n):
         page.wait_for_function('(n) => AudioAnnotatorV2.inspect().sources.length === n', arg=n)
@@ -217,11 +218,12 @@ with sync_playwright() as playwright:
                     channel=2, label='Only channel 3')
     source_doc['markers'] = [specific]
     source_doc['tags'] = []
-    page.locator('#importMode').select_option('merge')
     page.locator('#importInput').set_input_files({
         'name': 'scoped.json', 'mimeType': 'application/json',
         'buffer': json.dumps(source_doc).encode()})
     page.locator('#importBtn').click()
+    page.locator('#importChoiceDialog[open]').wait_for()
+    page.locator('[data-import-choice=merge]').click()
     source_count(3)
     marker_count(3)
     assert [views()['spectrogramsByChannel'][str(ch)] for ch in range(4)] == [1, 1, 2, 1]
