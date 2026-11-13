@@ -1590,7 +1590,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondaryAnalysis: null, secondaryRunning: false, secondaryCancelPending: false, secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondaryFrameCounter: 0, secondaryAnalysis: null, secondaryRunning: false, secondaryCancelPending: false, secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1960,7 +1960,7 @@ self.onmessage = async ({ data: m }) => {
     }
     function secondaryWaveKey(ch, canvas, waveVisible = true) {
         const g = geom(canvas);
-        return JSON.stringify([app.loadEpoch, ch, app.start, app.span, audioFilterKey(),
+        return JSON.stringify([app.loadEpoch, ch, app.span, audioFilterKey(),
             waveVisible, Math.ceil(g.w)]);
     }
     function secondarySpectrumKey(waveKey, canvas) {
@@ -2040,7 +2040,10 @@ self.onmessage = async ({ data: m }) => {
                 const specCanvas = specVisible ? specPlot.querySelector('canvas:not(.overlay)') : null;
                 const specKey = specCanvas ? secondarySpectrumKey(waveKey, specCanvas) : null;
                 const stored = app.secondaryViews.get(ch);
-                if (stored?.waveKey === waveKey &&
+                const covers = stored && sameZoom(stored.viewSpan, app.span) &&
+                    stored.result.start <= app.start + 1e-9 &&
+                    stored.result.start + stored.result.span >= app.start + app.span - 1e-9;
+                if (covers && stored.waveKey === waveKey &&
                     (!specVisible || stored.specKey === specKey) &&
                     (!detailed || stored.detailed)) {
                     // Touch LRU so visible channels are not evicted behind
@@ -2065,8 +2068,8 @@ self.onmessage = async ({ data: m }) => {
                 }
                 if (p.spectrum) prepareRenderedView(result, null, app.span);
                 app.secondaryViews.delete(ch);
-                app.secondaryViews.set(ch, { result, waveKey, specKey,
-                    detailed, spectrum: specVisible });
+                app.secondaryViews.set(ch, { result, waveKey, specKey, viewSpan: app.span,
+                    frame: ++app.secondaryFrameCounter, detailed, spectrum: specVisible });
                 while (app.secondaryViews.size > 8)
                     app.secondaryViews.delete(app.secondaryViews.keys().next().value);
                 if (waveVisible) paintSecondaryPlot(wavePlot);
@@ -2262,6 +2265,7 @@ self.onmessage = async ({ data: m }) => {
         clearTimeout(app.secondaryTimer);
         app.secondarySerial++;
         app.secondaryViews.clear();
+        app.secondaryFrameCounter = 0;
         app.visibleSecondary.clear();
         app.secondaryRunning = false;
         app.secondaryCancelPending = false;
@@ -4889,7 +4893,7 @@ self.onmessage = async ({ data: m }) => {
         secondaryRendering: app.secondaryRunning, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) =>
             view.result.image ? ch : null).filter(ch => ch !== null),
         secondaryRenders: Object.fromEntries(Array.from(app.secondaryViews, ([ch, v]) =>
-            [ch, { start: v.result.start, span: v.result.span, width: v.result.width,
+            [ch, { frame: v.frame, start: v.result.start, span: v.result.span, width: v.result.width,
                 columns: v.result.columns, height: v.result.height, mode: v.result.mode,
                 spectrumMode: v.result.spectrumMode, detailed: v.detailed,
                 preview: v.result.preview, coversWindow: v.result.start <= app.start + 1e-9 &&
