@@ -2074,9 +2074,20 @@ self.onmessage = async ({ data: m }) => {
                 if (p.spectrum) prepareRenderedView(result, null, app.span);
                 app.secondaryViews.delete(ch);
                 app.secondaryViews.set(ch, { result, waveKey, specKey, viewSpan: app.span,
-                    frame: ++app.secondaryFrameCounter, detailed, spectrum: specVisible });
-                while (app.secondaryViews.size > 8)
-                    app.secondaryViews.delete(app.secondaryViews.keys().next().value);
+                    frame: ++app.secondaryFrameCounter, detailed, spectrum: specVisible,
+                    bytes: (result.image?.width || 0) * (result.image?.height || 0) * 4 +
+                        result.wave.byteLength + (result.samples?.byteLength || 0) });
+                // Eight tiny 10px channels cost much less than eight 512px
+                // spectrograms. Evict by allocated pixels/bytes rather than
+                // an arbitrary eight-channel count; cap memory at 24 MiB.
+                let cachedBytes = 0;
+                for (const view of app.secondaryViews.values()) cachedBytes += view.bytes;
+                while ((cachedBytes > 24 * 1048576 || app.secondaryViews.size > 64) &&
+                    app.secondaryViews.size > 1) {
+                    const [victim, entry] = app.secondaryViews.entries().next().value;
+                    cachedBytes -= entry.bytes;
+                    app.secondaryViews.delete(victim);
+                }
                 if (waveVisible) paintSecondaryPlot(wavePlot);
                 if (specVisible) paintSecondaryPlot(specPlot);
             }
@@ -3247,6 +3258,27 @@ self.onmessage = async ({ data: m }) => {
         const ch = plot ? Number(plot.dataset.channel) : channel();
         return (isSpec ? 'spec:' : 'wave:') + ch;
     }
+    function cacheOverlayRaster(key, layer) {
+        // Multichannel navigation used to retain a full canvas for every
+        // visited spectrogram/label row, even after scrolling it offscreen.
+        // Bound those retained raster bytes across all channel overlays.
+        const budget = 32 * 1048576;
+        const layers = app.overlayLayers;
+        const bytes = layer.canvas.width * layer.canvas.height * 4;
+        if (bytes > budget) return;
+        delete layers[key];
+        layers[key] = layer;
+        let total = 0;
+        for (const value of Object.values(layers))
+            total += value.canvas.width * value.canvas.height * 4;
+        for (const victim of Object.keys(layers)) {
+            if (total <= budget) break;
+            if (victim === key) continue;
+            const old = layers[victim];
+            total -= old.canvas.width * old.canvas.height * 4;
+            delete layers[victim];
+        }
+    }
     function paintOverlay(canvas, isSpec, trackId = null) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
@@ -3315,7 +3347,7 @@ self.onmessage = async ({ data: m }) => {
             }
             pen.restore();
             layer = { signature, canvas: offscreen, textHits };
-            app.overlayLayers[rasterKey] = layer;
+            cacheOverlayRaster(rasterKey, layer);
         }
         // Marker raster is stable while only the playback cursor moves.
         ctx.save();
@@ -4894,7 +4926,11 @@ self.onmessage = async ({ data: m }) => {
         selectedSpectrogramChannels: [...app.selectedSpecChannels].sort((a, b) => a - b),
         referenceChannel: channel(), focusChannel: channel(), playbackChannels: orderedChannels(),
         spectrumOverlayVisibility: Object.fromEntries(Array.from(app.importSources.keys(), id =>
-            [id, app.spectralOverlayVisibility.get(id) !== false])), secondaryPreviewCount: app.secondaryViews.size, secondaryWorkerActive: !!app.secondaryAnalysis,
+            [id, app.spectralOverlayVisibility.get(id) !== false])), secondaryPreviewCount: app.secondaryViews.size,
+        secondaryImageCacheBytes: Array.from(app.secondaryViews.values()).reduce((total, v) => total + v.bytes, 0),
+        annotationRasterCacheBytes: Object.values(app.overlayLayers).reduce((total, v) =>
+            total + v.canvas.width * v.canvas.height * 4, 0),
+        secondaryWorkerActive: !!app.secondaryAnalysis,
         secondaryRendering: app.secondaryRunning, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) =>
             view.result.image ? ch : null).filter(ch => ch !== null),
         secondaryRenders: Object.fromEntries(Array.from(app.secondaryViews, ([ch, v]) =>
