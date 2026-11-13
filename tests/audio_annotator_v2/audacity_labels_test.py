@@ -24,13 +24,14 @@ with sync_playwright() as p:
 
     def upload(text, name='annotations.labels.txt', mode='replace', expect_failure=False):
         before_undo = state()['undo']
-        page.locator('#importMode').select_option(mode)
         page.locator('#importInput').set_input_files({
             'name': name, 'mimeType': 'text/plain',
             'buffer': text.encode('utf-8') if isinstance(text, str) else text
         })
         page.locator('#importBtn').click()
         if not expect_failure:
+            page.locator('#importChoiceDialog[open]').wait_for()
+            page.locator(f'#importChoiceDialog [data-import-choice={mode}]').click()
             page.wait_for_function('(n) => AudioAnnotatorV2.inspect().undo > n', arg=before_undo)
 
     def export(style='extended'):
@@ -139,8 +140,7 @@ with sync_playwright() as p:
     results.append('CR-only line endings import and undo cleanly')
 
     # Drop a TXT annotation alongside previously loaded audio.
-    # Every dropped file prompts explicitly; the picker mode is for picker imports.
-    page.locator('#importMode').select_option('merge')
+    # Every imported file (including drops) prompts explicitly.
     page.evaluate("""(txt) => {
         const transfer = new DataTransfer();
         transfer.items.add(new File([txt], 'dropped.TXT', {type: 'text/plain'}));
