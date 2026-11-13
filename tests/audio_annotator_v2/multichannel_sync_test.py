@@ -8,7 +8,7 @@ import math
 import struct
 import wave
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from common import F, OUT, launch, mount
 
 F.mkdir(parents=True, exist_ok=True)
@@ -45,19 +45,30 @@ with sync_playwright() as playwright:
     def view(ch):
         return state()['secondaryRenders'].get(str(ch))
 
-    def refined(ch, *, spectrum=True, waveform=True, min_height=0):
-        page.wait_for_function('''({ch, spectrum, waveform, height}) => {
+    def refined(ch, *, spectrum=True, waveform=None, min_height=0):
+        try:
+            page.wait_for_function('''({ch, spectrum, waveform, height}) => {
             const s = AudioAnnotatorV2.inspect(), v = s.secondaryRenders[String(ch)];
             if (!v || !v.detailed || v.preview || !v.coversWindow || v.width < 500)
                 return false;
             if (spectrum && (v.columns < 100 || v.height < Math.max(64, height)))
                 return false;
             if (!spectrum && v.columns !== 0) return false;
-            if (waveform && v.mode === 'hidden') return false;
-            if (!waveform && v.mode !== 'hidden') return false;
+            if (waveform === true && v.mode === 'hidden') return false;
+            if (waveform === false && v.mode !== 'hidden') return false;
             return !s.renderPending;
-        }''', arg={'ch': ch, 'spectrum': spectrum, 'waveform': waveform,
-                   'height': min_height}, timeout=35000)
+            }''', arg={'ch': ch, 'spectrum': spectrum, 'waveform': waveform,
+                       'height': min_height}, timeout=35000)
+        except PlaywrightTimeout:
+            debug = page.evaluate('''() => ({
+                inspect: AudioAnnotatorV2.inspect(), status: document.getElementById('status').textContent,
+                renderInfo: document.getElementById('renderInfo').textContent,
+                plots: [...document.querySelectorAll('#plotStack > .channel-wave, #plotStack > .channel-spec')]
+                    .map(p => ({ id: p.id, top: p.getBoundingClientRect().top,
+                        height: p.getBoundingClientRect().height }))
+            })''')
+            print('SYNC TIMEOUT DEBUG', json.dumps(debug, default=str)[:22000], flush=True)
+            raise
         return view(ch)
 
     page.locator('#fileInput').set_input_files(str(audio))
@@ -68,7 +79,9 @@ with sync_playwright() as playwright:
     page.locator('#channel-spec-2').scroll_into_view_if_needed()
     initial = refined(2)
     assert initial['width'] > 500, initial
-    assert initial['mode'] != 'hidden' and initial['columns'] > 100, initial
+    assert initial['columns'] > 100, initial
+    # Its waveform row may be offscreen: avoid demanding samples for
+    # a nonvisible view when only the spectrogram is on screen.
     assert state()['playbackChannels'] == list(range(8))
     print('SYNC all-selected full-resolution spectrum', initial, flush=True)
 
