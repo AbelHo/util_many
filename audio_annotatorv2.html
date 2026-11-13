@@ -1742,7 +1742,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondaryFrameCounter: 0, secondaryAnalysis: null, secondaryRunning: false, secondaryCancelPending: false, secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, overviewBatch: null, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondaryFrameCounter: 0, secondaryAnalysis: null, secondaryRunning: false, secondaryCancelPending: false, secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -2005,6 +2005,7 @@ self.onmessage = async ({ data: m }) => {
         app.selectedChannels = union;
         if (referenceChanged) app.viewChannel = orderedChannels()[0];
         syncChannelPicker();
+        updateOverviewControls(app.overview);
         rebuildChannelPlots();
         if (referenceChanged) {
             cancelZoomPrefetch();
@@ -2483,6 +2484,7 @@ self.onmessage = async ({ data: m }) => {
         app.dirty = false;
         app.held = null;
         app.overview = { active: false, progress: 0 };
+        app.overviewBatch = null;
         $('overviewProgress').value = 0;
         updateOverviewControls({ active: false, progress: 0 });
         refreshAnnotations();
@@ -3036,13 +3038,40 @@ self.onmessage = async ({ data: m }) => {
             if (app.renderTarget?.serial === serial) app.renderTarget = null;
         }
     }
+    function selectedOverviewBatch() {
+        const rest = orderedChannels().filter(ch => ch !== channel());
+        const batch = app.overviewBatch;
+        return { rest, batch: batch && batch.fft === Number($('fftSize').value) &&
+            batch.filterKey === audioFilterKey() &&
+            JSON.stringify(batch.channels) === JSON.stringify(rest) ? batch : null };
+    }
     function updateOverviewControls(m) {
         app.overview = m;
-        $('overviewProgress').value = m.progress || 0;
-        $('overviewBtn').textContent = m.complete ? 'Rebuild overview' : m.active ? 'Pause overview' : m.progress ? 'Resume overview' : 'Build waveform + spectral overview';
-        $('overviewInfo').textContent = m.complete ? 'Overview ready · all samples and FFT hops covered · ' + fmt(m.bytes / 1048576, 1) + ' MiB · ' + m.storage
-            : m.active || m.progress ? (m.active ? 'Building' : 'Paused') + ' waveform + spectral overview · ' + fmt((m.progress || 0) * 100, 1) + '% · navigation takes priority'
-            : (m.waveReady ? 'Waveform overview ready. Build spectral overview for the current FFT.' : 'Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.') + (m.storage?.startsWith('Memory only:') ? ' · ' + m.storage : '');
+        const { rest, batch } = selectedOverviewBatch();
+        const count = rest.length + 1;
+        const primary = m.complete ? 1 : m.progress || 0;
+        const batchProgress = batch?.progress || 0;
+        const progress = Math.min(1, (primary + rest.length * batchProgress) / count);
+        const complete = !!m.complete && (!rest.length || !!batch?.complete);
+        const active = !!m.active || !!batch?.active;
+        const done = (m.complete ? 1 : 0) + (batch?.completed?.length || 0);
+        const bytes = (m.bytes || 0) + (batch?.bytes || 0);
+        $('overviewProgress').value = progress;
+        $('overviewBtn').textContent = complete ? 'Rebuild selected overviews' :
+            active ? 'Pause selected overviews' :
+            progress ? 'Resume selected overviews' : 'Build waveform + spectral overview';
+        if (active || progress || complete) {
+            $('overviewInfo').textContent = (complete ? 'Ready' : active ? 'Building' : 'Paused') +
+                ' · ' + done + '/' + count + ' selected channels indexed · ' +
+                fmt(progress * 100, 1) + '% · ' + fmt(bytes / 1048576, 1) +
+                ' MiB · navigation takes priority' +
+                (batch?.error ? ' · ' + batch.error : '') +
+                (m.storage ? ' · reference: ' + m.storage : '');
+        }
+        else $('overviewInfo').textContent =
+            'Build waveform extrema and all FFT-hop spectral peaks for all ' +
+            count + ' selected channel' + (count === 1 ? '' : 's') +
+            '. Wide views then use each channel’s own exact overview.';
     }
     async function restoreOverview() {
         if (!app.analysis || !app.meta) return;
@@ -3062,6 +3091,16 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     function onWorkerEvent(m) {
+        if (m.event === 'overviewBatch') {
+            if (m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
+            const previous = new Set(app.overviewBatch?.completed || []);
+            app.overviewBatch = m;
+            const newChannels = (m.completed || []).filter(ch => !previous.has(ch));
+            for (const ch of newChannels) app.secondaryViews.delete(ch);
+            updateOverviewControls(app.overview);
+            if (newChannels.length) scheduleSecondaryRenders(35);
+            return;
+        }
         if (m.event === 'overview') {
             if (m.channel !== channel() || m.fft !== Number($('fftSize').value) || m.filterKey !== audioFilterKey()) return;
             const changed = app.overview.revision !== m.revision;
@@ -4812,16 +4851,50 @@ self.onmessage = async ({ data: m }) => {
         if (picker.open && !picker.contains(e.target)) picker.open = false;
     });
     handle('overviewBtn', 'click', async () => {
+        if (!app.analysis || !app.meta) return;
         cancelZoomPrefetch();
-        const result = await app.analysis.call('overview', { channel: channel(), fft: Number($('fftSize').value), remember: $('rememberOverview').checked });
-        if (result.channel === channel() && result.fft === Number($('fftSize').value)) updateOverviewControls(result);
+        const epoch = app.loadEpoch, ch = channel(), fft = Number($('fftSize').value);
+        const remember = $('rememberOverview').checked;
+        const { rest, batch } = selectedOverviewBatch();
+        const allComplete = app.overview.complete && (!rest.length || batch?.complete);
+        const anyActive = app.overview.active || batch?.active;
+        // One button pauses/resumes the entire selected-channel operation.
+        if (anyActive) {
+            const jobs = [];
+            if (app.overview.active)
+                jobs.push(app.analysis.call('overview', { channel: ch, fft, remember }));
+            if (batch?.active && app.secondaryAnalysis)
+                jobs.push(app.secondaryAnalysis.call('overviewBatch', { action: 'pause' }));
+            await Promise.all(jobs);
+            return;
+        }
+        const jobs = [];
+        if (!app.overview.complete || allComplete)
+            jobs.push(app.analysis.call('overview', { channel: ch, fft, remember }).then(result => {
+                if (epoch === app.loadEpoch && ch === channel() && fft === Number($('fftSize').value))
+                    updateOverviewControls(result);
+            }));
+        if (rest.length && app.secondaryAnalysis)
+            jobs.push(app.secondaryAnalysis.call('overviewBatch', {
+                action: allComplete ? 'rebuild' : 'start', channels: rest, fft, remember
+            }).then(result => {
+                if (epoch === app.loadEpoch && fft === Number($('fftSize').value)) {
+                    app.overviewBatch = result;
+                    updateOverviewControls(app.overview);
+                }
+            }));
+        await Promise.all(jobs);
     });
     handle('rememberOverview', 'change', async () => {
         if (!app.analysis) return;
         // Invalidate pending restores before changing the persistence preference.
         if ($('overviewBtn').disabled) return restoreOverview();
         const epoch = app.loadEpoch;
-        const result = await app.analysis.call('rememberOverview', { remember: $('rememberOverview').checked });
+        const remember = $('rememberOverview').checked;
+        const [result] = await Promise.all([
+            app.analysis.call('rememberOverview', { remember }),
+            ...(app.secondaryAnalysis ? [app.secondaryAnalysis.call('rememberOverview', { remember })] : [])
+        ]);
         if (epoch === app.loadEpoch && result.channel === channel() && result.fft === Number($('fftSize').value)) updateOverviewControls(result);
     });
     handle('clearSavedOverviews', 'click', async () => {
