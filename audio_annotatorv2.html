@@ -40,12 +40,17 @@ frequency/time boxes. Shift+click removes a nearby marker; Delete removes select
 Hold an alphanumeric key when drawing for case-sensitive tags, like the video tool.
 JSON/CSV and Audacity TXT import is atomic (up to 1M markers / 256 MiB files) tags, metadata and all marker
 types.
-Multi-channel view: the Channel selector is a checkbox dropdown. Selected channels
-get synchronized resizable waveform rows; one focused channel supplies full-detail
-spectrogram, overview and playback. Optional additional spectrogram rows use fast,
-lower-resolution worker previews; focus a row for full detail. Background waveform
-and spectrogram previews are worker-only, coalesced/cancelled on navigation and
-computed only for near-viewport rows. At least one track remains selected.
+Multi-channel view: each physical channel has two independent checkbox columns:
+left selects waveform/time-series visibility; right selects spectrogram visibility.
+At least one plot must stay selected. Playback includes the union of enabled
+channels in either column (normalized mono average, without duplicates).
+The first retained checked channel supplies the main detailed spectral overview;
+other spectrograms receive fast worker previews, refined at idle to native FFT
+detail only near the viewport. No Focus controls. Per-marker 0-based channel
+scope is optional: null means all displayed channels. Annotations created on a
+spectrogram are scoped to that channel; Audacity TXT remains all-channel.
+Imported-source checkboxes affect spectrogram overlays only: waveform overlays,
+stacked label rows, marker table, undo and exports remain unchanged.
 Per-file modes: [Merge] adds an overlaid label set; [Replace] clears existing labels,
 tags and stacked tracks; [Stack] adds one time-aligned label row between waveform
 and spectrogram, overlaid on spectrogram only (not waveform). Multiple files/drop
@@ -110,19 +115,20 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 .channel-picker>summary::after{content:' ▾';font-size:11px}
 .channel-picker[open]>summary{background:#edf3f8}
 .channel-picker.is-disabled{pointer-events:none;opacity:.5}
-.channel-menu{position:absolute;top:100%;left:0;z-index:50;width:min(310px,calc(100vw - 36px));max-height:350px;overflow:auto;background:#fff;border:1px solid #aab9c9;border-radius:5px;box-shadow:0 7px 22px #0003;padding:7px}
+.channel-menu{position:absolute;top:100%;left:0;z-index:50;width:min(350px,calc(100vw - 36px));max-height:350px;overflow:auto;background:#fff;border:1px solid #aab9c9;border-radius:5px;box-shadow:0 7px 22px #0003;padding:7px}
 .channel-menu .row{margin:0 0 5px;flex-wrap:nowrap}
 .channel-menu .row button{padding:3px 7px;flex:1}
-.channel-choice{display:flex;align-items:center;gap:8px;padding:3px;border-radius:3px}
-.channel-choice:hover{background:#f0f5fa}
-.channel-choice label{flex:1;cursor:pointer;min-width:0}
-.channel-choice button{font-size:11px;padding:2px 6px}
-.channel-choice button:disabled{opacity:.65}
+.channel-choice{display:grid;grid-template-columns:minmax(110px,1fr) 85px 100px;align-items:center;gap:5px;padding:4px 5px;border-radius:3px}
+.channel-choice:not(.channel-head):hover{background:#f0f5fa}
+.channel-choice .channel-name{min-width:0}
+.channel-choice .channel-check{display:flex;align-items:center;justify-content:center;cursor:pointer;min-height:24px}
+.channel-choice input{margin:0;width:16px;height:16px}
+.channel-head{font-size:11px;font-weight:600;color:#38516b;position:sticky;top:0;background:#fff;z-index:1;border-bottom:1px solid #d5e0ea}
+#wavePlot[hidden],#specPlot[hidden]{display:none}
 .plot.channel-wave{height:142px}
 .plot.channel-spec{height:210px}
-.plot .channel-focus{position:absolute;z-index:3;top:2px;right:7px;font-size:11px;padding:1px 6px;opacity:.88}
 #channelViewInfo{flex-basis:100%}
-@media(max-width:600px){.channel-menu{max-height:270px}.plot.channel-wave{height:110px}.plot.channel-spec{height:160px}}
+@media(max-width:600px){.channel-menu{max-height:270px}.channel-choice{grid-template-columns:minmax(72px,1fr) 70px 86px;gap:4px}.plot.channel-wave{height:110px}.plot.channel-spec{height:160px}}
 </style>
 </head>
 <body>
@@ -135,8 +141,8 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div id="outputInfo" class="hint">Playback output is separate from the file’s native analysis rate. Slow ultrasonic recordings down to hear them.</div>
 </section>
 <section class="panel" aria-label="View settings">
-<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><span class="row" style="margin:0"><span>Channels</span><details id="channelPicker" class="channel-picker is-disabled"><summary id="channelSummary">Channel 1</summary><div class="channel-menu"><div class="row"><button type="button" id="channelSelectAll" disabled>Select all</button><button type="button" id="channelSolo" disabled>Only focused</button></div><div id="channelChoices" role="group" aria-label="Displayed audio channels"></div></div></details></span><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
-<div class="row hint"><label><input id="otherSpectrograms" type="checkbox" disabled> Spectrograms for all displayed channels (fast previews)</label><span id="channelViewInfo">Check channels to add waveform rows. Focus selects detailed spectrogram and mono playback.</span></div>
+<div class="row"><button id="zoomIn" disabled>Zoom +</button><button id="zoomOut" disabled>Zoom −</button><button id="fitBtn" disabled>Fit recording</button><label>Window (s) <input id="windowSeconds" type="number" min="0.000001" step="any" value="10"></label><span class="row" style="margin:0"><span>Channels</span><details id="channelPicker" class="channel-picker is-disabled"><summary id="channelSummary">Channel 1</summary><div class="channel-menu"><div class="row"><button type="button" id="channelSelectAll" disabled>Select all</button><button type="button" id="channelSolo" disabled>First only</button></div><div id="channelChoices" role="group" aria-label="Waveform and spectrogram visibility by audio channel"></div></div></details></span><label>Wave amplitude <select id="amplitude"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option><option>512</option></select>×</label><label>Waveform color <input id="waveformColor" type="color" value="#3b82f6" aria-label="Waveform signal color"></label><button id="overviewBtn" disabled>Build waveform + spectral overview</button><progress id="overviewProgress" max="1" value="0" aria-label="Overview indexing progress"></progress></div>
+<div class="row hint"><span id="channelViewInfo">In Channels: left checkbox shows a waveform, right checkbox shows a spectrogram. Playback mixes channels checked in either column.</span></div>
 <div class="row hint"><label><input id="rememberOverview" type="checkbox" checked> Remember overviews on this device</label><button id="clearSavedOverviews" disabled>Clear saved overviews</button></div>
 <div id="overviewInfo" class="hint" role="status">Build once for peak-preserving wide views. Detailed zooms still use native samples and FFTs.</div>
 <div class="row" aria-label="Audio frequency filter controls"><strong>Audio filter</strong><label>High-pass cutoff (Hz) <input id="highPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="High-pass cutoff in Hz; blank disables high-pass" disabled></label><label>Low-pass cutoff (Hz) <input id="lowPassHz" type="number" min="0" step="any" placeholder="Off" aria-label="Low-pass cutoff in Hz; blank disables low-pass" disabled></label><span id="audioFilterInfo" class="hint" role="status" aria-live="polite">Off · original audio</span></div>
@@ -157,7 +163,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 </div>
 <div class="row hint"><span id="renderInfo" class="grow">No analysis yet.</span><output id="hoverInfo"></output></div>
 <div class="row hint"><label><input id="showAnnotations" type="checkbox" checked> Show annotations</label><label><input id="showLabelText" type="checkbox" checked> Label text</label><span id="annotationRenderInfo" class="grow">No annotations in view.</span></div>
-<div id="importSourceControls" class="row hint" aria-label="Imported label file visibility" hidden></div>
+<div id="importSourceControls" class="row hint" aria-label="Imported label file spectrogram overlays" hidden></div>
 <section class="panel" aria-label="Annotation import and export">
 <div class="row"><strong>Annotations</strong><button id="exportJson" disabled>Export JSON</button><button id="exportCsv" disabled>Export CSV</button><button id="exportTxt" disabled>Export Audacity TXT</button><label>Audacity style <select id="audacityLabelStyle" aria-label="Audacity TXT export style"><option value="extended" selected>Extended (frequencies)</option><option value="standard">Standard (time only)</option></select></label><label>Import <input id="importInput" type="file" multiple accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label><label>Import as <select id="importMode" aria-label="Annotation import mode"><option value="merge">Merge (overlay)</option><option value="replace">Replace existing</option><option value="stack">Stack (separate label row)</option></select></label><button id="importBtn" disabled>Import</button></div>
 <div class="row"><label>Filter <input id="markerFilter" type="search" placeholder="Tag, label or type"></label><label><input id="visibleOnly" type="checkbox"> Visible window only</label><span id="markerCount" class="grow">0 markers</span><button id="pagePrev">◀</button><span id="pageLabel">1 / 1</span><button id="pageNext">▶</button><label>Jump to page <input id="pageJump" type="number" min="1" value="1" step="1" style="width:75px" aria-label="Jump to annotation page"></label></div>
@@ -167,7 +173,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 </main>
 <aside class="side">
 <section class="panel"><h2>Tags</h2><p class="hint">Case-sensitive keys. Changes apply to every marker using that tag and are undoable.</p><input id="tagFilter" type="search" placeholder="Filter tags" aria-label="Filter tags"><div id="tagsList"></div></section>
-<section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
+<section id="editor" class="panel"><h2>Selected marker</h2><p id="selectionInfo" class="hint">Select a marker from the table, or click one in Navigate mode.</p><fieldset id="editFields" disabled style="border:0;padding:0;margin:0"><div class="row"><label class="stack">Start (s)<input id="editStart" type="number" step="any"></label><label class="stack">End (s)<input id="editEnd" type="number" step="any"></label></div><div class="row"><label class="stack">Frequency min / point (Hz)<input id="editMin" type="number" step="any"></label><label class="stack">Frequency max (Hz)<input id="editMax" type="number" step="any"></label></div><div class="row"><label class="stack">Channel scope<select id="editChannel"><option value="">All channels</option></select></label><label class="stack">Tag<input id="editTag" maxlength="64"></label></div><div class="row"><label class="stack">Label<textarea id="editLabel" rows="2" maxlength="2000"></textarea></label></div><div class="row"><button id="saveMarker">Save</button><button id="deleteMarker">Delete</button></div></fieldset></section>
 </aside>
 </div>
 <dialog id="importChoiceDialog" aria-labelledby="importChoiceTitle">
@@ -175,7 +181,7 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <p class="hint">Choose a mode separately for this file. Replace clears the existing annotations, labels and stacked tracks; Stack creates one synchronized row between waveform and spectrogram.</p>
 <div class="row"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
 </dialog>
-<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Use Channels to check multiple tracks, Select all, or Only focused. Every checked channel gets its own aligned, resizable waveform. The Focus button next to any channel or waveform chooses the detailed spectrogram, overview, and mono playback source; choosing multiple tracks does not mix them in playback. Select Mix (average) and focus it to listen to the mean of all input channels. Enable Spectrograms for all displayed channels to show lower-resolution FFT previews for the other selected channels, which become full detail on focus. Off-screen channels are processed on demand to keep scroll, zoom and annotation controls responsive.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its drawing, not its records in the table or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
+<details class="panel"><summary>Help, accuracy and large-file behavior</summary><p>Navigate: click to seek, drag to pan. Point: click either view (a spectrogram point also stores frequency). Time range: drag horizontally in either view. Frequency range: drag a time/frequency box in the spectrogram. Reversed drags are normalized; coordinates are clamped to the recording and Nyquist band.</p><p><kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Home</kbd>/<kbd>End</kbd> seek · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl/Cmd+Z</kbd> undo · <kbd>Ctrl/Cmd+Shift+Z</kbd> redo · <kbd>Delete</kbd> remove selected · <kbd>Escape</kbd> cancel drawing.</p><p>The optional high-pass and low-pass cutoff controls are independent. Blank means disabled; with both blank, original samples are shown and played (default). With both set, the app uses one band-pass FIR instead of cascading high- and low-pass filters. All filters work at the source sample rate and are applied consistently to waveform, spectrogram, overview and slowed playback. A symmetric zero-phase FIR preserves annotation timing. Cutoffs must be greater than zero and below Nyquist, and high-pass must be below low-pass. Hamming-window FIR cutoffs have a finite transition band (not brick-wall frequency limits); filtering incurs additional bounded per-block computation and does not change the source or annotations.</p><p>File sample rate and playback output rate are distinct. Analysis retains the file’s native samples, including ultrasound. Playback attempts a native-rate AudioContext and reports any fallback. Changing speed changes pitch; slowing down makes ultrasonic content audible. Output is anti-aliased, and your speakers still have their own frequency limits.</p><p>Spectrogram Y-axis scale: Linear (uniform Hz, good for ultrasound/harmonics), Logarithmic (equal spacing by octave), Mel, Bark, ERB (perceptual mappings), or Period (1/f; mostly useful with pitch/EAC views in Audacity). These are <strong>display-only</strong> coordinate transforms on the native FFT, not Mel/Bark/ERB filterbanks or an EAC calculation. Logarithmic and Period displays clamp the minimum frequency to 1 Hz because 0 is singular; annotations remain in Hz and exports include the chosen viewing scale.</p><p>At four or fewer samples per display pixel, the waveform joins every native sample in chronological order. Wider windows join peak-preserving min/max envelope columns (not an exact sample-by-sample trace). Wide previews sample short intervals per screen column and can miss isolated events. Build waveform + spectral overview reads bounded blocks once and builds multiple detail levels: waveform minima/maxima from every sample and spectral maxima from every FFT hop. The summaries use less than 20 MiB regardless of duration; building can be paused and navigation takes priority. Indexed overview bins preserve peaks but may extend slightly beyond a pixel’s time interval. Spectrograms use hop-aligned Hann windows and peak-bin dBFS, not a calibrated power-spectral-density scale. Completed spectral overviews pool the strongest values across time and frequency bins, quantized to 0.25 dB. They preserve brief analyzed peaks but broaden their time/frequency footprint; they are not average power or individual event counts. The status reports the overview bin resolution. Remember overviews on this device stores only completed summaries, with an eight-entry/128 MiB limit. Reopening the same recording and settings restores them; storage failure leaves the in-memory overview usable. Identification combines file metadata and a SHA-256 fingerprint of bounded content samples, not a full-file hash. If audio is changed externally while retaining its metadata, use Rebuild overview. Clear saved overviews removes these derived caches without changing annotations or the current in-memory view. Intermediate time views refine by pooling every visible FFT hop, within a fixed work budget; closer views use native FFT columns. Larger views retain the peak overview, with its bin resolution shown, so zooming does not silently lose events between sampled columns. Without an overview, views outside that budget remain time-sampled and can miss brief events.</p><p>Choose audio channels using the two checkbox columns: <strong>left = Waveform (time series)</strong>, <strong>right = Spectrogram</strong>. A channel can have either, both, or neither checked. Select all enables both views for every channel; First only shows both views for the first selected channel. At least one plot remains selected. Visible plots are aligned, independently resizable, and playback mixes the union of all channels checked in either column as a normalized mono average. Checking a second view of an already-playing channel does not change the audio mix. The first retained checked channel supplies the main detailed overview; other visible spectrograms first show worker previews and automatically refine after input settles. Off-screen tracks are not eagerly rendered. A marker drawn on a spectrogram is limited to that channel; choose All channels in the marker editor to apply it to every spectrogram. JSON/CSV channel metadata uses zero-based indices (0 means Channel 1); missing/null channel means all channels. Audacity TXT has no channel metadata and its labels overlay every visible spectrogram. The imported-label checkboxes below the plots control <strong>only spectrogram overlays</strong>: they do not hide labels on waveforms, dedicated stacked label rows, the table, or exports.</p><p>Zoom and pan show a quick, sampled preview, then refine after input settles. Repeated input is coalesced per display frame. Refined views include nearby audio on both sides, so small pans use an immediate cached view while the margin refreshes. The rendered-view cache is limited to six views and 16 MiB, with room kept for recent zoom levels. Returning to a cached level reuses its detail. Other nearby levels can provide a marked zoom preview while new detail is calculated; an enlarged coarse preview is never treated as newly resolved audio detail. When idle, the next zoom in the last-used direction may be prepared in the same cache. Only one prediction is retained; navigation cancels it, and it never evicts a visited view. Playback, imports, overview indexing and hidden tabs suppress this work. Channel and analysis settings must match before a cached view can be reused. Audio bytes, decoded FLAC frames, FFTs and playback lookahead have fixed budgets. Closing/replacing a file terminates its workers and drops caches. A cancelled or superseded render cannot overwrite a newer view. WAV PCM/float and native FLAC are supported; other formats must first be converted to WAV/FLAC. Corrupt, truncated or unsupported files produce an error rather than silently resampling or allocating a whole-file buffer.</p><p>JSON is the preferred lossless interchange. CSV has an explicit metadata row and quoted fields, including multiline labels; user text has a reversible apostrophe prefix for spreadsheet safety. Audacity TXT has tab-delimited time and text records with optional spectral continuation lines (backslash, low Hz, high Hz; -1 for undefined). Extended export preserves spectral bounds; Standard export omits them. TXT cannot retain tags, colors, IDs or multiline/tab-containing text; if necessary, you will be asked before replacing tabs or newlines with spaces in the exported copy. Audacity TXT has no recording identity, so load the matching audio first. Each imported annotation file has a separate visibility checkbox underneath Show annotations / Label text. Merge overlays its labels on the waveform and spectrogram; Replace atomically clears previous labels, tags and stacked rows; Stack adds one independently resizable, time-synchronized label row between the waveform and spectrogram and keeps the labels on the spectrogram, but not the waveform. The file picker shows the mode directly; importing multiple files or dropping annotations opens a separate Merge / Replace / Stack chooser for each file. Drag the separators between any two rows to resize them (or focus one and press Up/Down). Disabling an imported set hides only its spectrogram drawing, not its waveform or stacked-label drawing, table entries or exports. JSON/CSV exports include source metadata and source IDs; importing any file assigns a new source set matching the chosen mode. Import validates all records before applying changes and supports merge, replace or stack; JSON/CSV imports also detect file mismatches. Large imports support up to 1,000,000 markers and 256 MiB annotation files. Audacity TXT is decoded in bounded slices with progress and cancellation; a failed or cancelled import leaves existing annotations intact. Filters run in cancellable batches. Undo stores bulk snapshots. The marker table shows 100 rows per page: use Jump to page, filters, and the Visible window only option to navigate large collections. Every annotation is represented: dense views show a time-density strip along the bottom of each plot, with height indicating the number of overlapping annotations per time bin (logarithmic scale). This strip summarizes time occupancy, not frequency geometry. Double-click the strip in Navigate mode to zoom, or use the table to select any marker. Sparse views draw individual geometry and collision-limited text; selected markers always draw on top. Table filters affect only the table. Show annotations and Label text control plot clutter without changing or discarding data. Export regularly: annotations are not automatically saved to disk.</p></details>
 <script id="audio-worker" type="text/plain">
 'use strict';
 const MiB = 1048576, PAGE = 65536;
@@ -1387,10 +1393,28 @@ async function audioChunk(p) {
     const ratio = source.sampleRate * p.speed / p.outputRate;
     if (!Number.isFinite(ratio) || ratio <= 0 || p.position < 0 || p.position > source.frames)
         throw Error('Invalid playback request.');
+    // The UI plays every checked physical channel together. A single-channel
+    // request and legacy diagnostic channel=-1 requests remain supported.
+    const channels = p.channels === undefined ? [p.channel] : p.channels;
+    if (!Array.isArray(channels) || !channels.length || channels.length > source.channels ||
+        channels.some(ch => !Number.isInteger(ch) || (p.channels === undefined ? ch < -1 : ch < 0) || ch >= source.channels) ||
+        new Set(channels).size !== channels.length)
+        throw Error('Invalid playback channel selection.');
     const frames = Math.max(0, Math.min(Math.floor(p.frames), Math.ceil((source.frames - p.position) / ratio), Math.floor(262144 / ratio)));
     if (!frames)
         return { data: new Float32Array(), next: source.frames };
-    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33, a = await filteredRead(first, count, p.channel), out = new Float32Array(frames);
+    const first = Math.floor(p.position) - 32, count = Math.ceil(p.position + frames * ratio) - first + 33;
+    const a = await filteredRead(first, count, channels[0]);
+    if (channels.length > 1) {
+        // Mix before playback-only sinc resampling, using one reusable accumulator
+        // instead of retaining an AudioBuffer for each channel.
+        for (let c = 1; c < channels.length; c++) {
+            const next = await filteredRead(first, count, channels[c]);
+            for (let i = 0; i < count; i++) a[i] += next[i];
+        }
+        for (let i = 0; i < count; i++) a[i] /= channels.length;
+    }
+    const out = new Float32Array(frames);
     if (ratio === 1 && Number.isInteger(p.position))
         out.set(a.subarray(32, 32 + frames));
     else {
@@ -1439,7 +1463,7 @@ self.onmessage = async ({ data: m }) => {
             const p = m.params;
             if (!Number.isInteger(p.channel) || p.channel < -1 || p.channel >= source.channels ||
                 !Number.isFinite(p.start) || !Number.isFinite(p.span) || p.span <= 0 ||
-                !Number.isFinite(p.width) || p.width < 20 || p.width > 1600)
+                !Number.isFinite(p.width) || p.width < 20 || p.width > 2400)
                 throw Error('Invalid secondary-channel window.');
             // These requests must not displace or delay primary-channel detail.
             if (renderBusy || pendingRender) {
@@ -1449,7 +1473,7 @@ self.onmessage = async ({ data: m }) => {
             const token = { render: renderToken, secondary: ++secondaryToken };
             try {
                 let result;
-                if (p.spectrum) result = await render({ ...p, preview: true }, token);
+                if (p.spectrum) result = await render({ ...p, preview: p.detail !== true }, token);
                 else {
                     const width = Math.min(320, Math.max(32, Math.round(p.width)));
                     const start = clamp(p.start, 0, source.frames / source.sampleRate);
@@ -1553,7 +1577,7 @@ self.onmessage = async ({ data: m }) => {
 (() => {
     const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.max(a, Math.min(b, v)), finite = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
     const MAX_MARKERS = 1000000, HISTORY_BYTES = 256 * 1048576, MAX_IMPORT_BYTES = 256 * 1048576;
-    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), secondaryViews: new Map(), secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
+    const app = { file: null, meta: null, loadEpoch: 0, analysis: null, playback: null, start: 0, span: 10, cursor: 0, playing: false, playEpoch: 0, context: null, gain: null, analyser: null, nodes: new Set(), segments: [], nextPosition: 0, nextWhen: 0, pumpBusy: false, renderSerial: 0, renderTimer: 0, refineTimer: 0, renderFrame: 0, renderTarget: null, prefetchTimer: 0, prefetchTarget: null, zoomHint: null, renderCache: [], renderCacheBytes: 0, lastRender: null, renderPending: false, markers: new Map(), tags: new Map(), selected: null, undo: [], redo: [], historyBytes: 0, dirty: false, page: 0, markerVersion: 0, markerIndex: null, filteredIndices: new Map(), tableCache: null, overlayLayers: {}, annotationViews: new Map(), importSources: new Map(), spectralOverlayVisibility: new Map(), sourceVersion: 0, trackHeights: new Map(), resizeObserver: null, plotRenderTimer: 0, tableTimer: 0, tableSerial: 0, importBusy: false, importSerial: 0, held: null, gesture: null, overview: { active: false, progress: 0 }, viewChannel: 0, overviewRequest: 0, audioFilter: null, filterSerial: 0, filterUpdating: false, filterQueued: false, filterResumePlayback: false, filterTaps: 0, selectedChannels: new Set([0]), selectedWaveChannels: new Set([0]), selectedSpecChannels: new Set([0]), secondaryViews: new Map(), secondarySerial: 0, secondaryTimer: 0, visibleSecondary: new Set(), secondaryObserver: null, focusSerial: 0 };
     const workerURL = URL.createObjectURL(new Blob([$('audio-worker').textContent], { type: 'text/javascript' }));
     class RPC {
         constructor() {
@@ -1600,9 +1624,17 @@ self.onmessage = async ({ data: m }) => {
     }
     function markerVisibleOn(marker, layer) {
         const id = sourceKey(marker), source = id ? app.importSources.get(id) : null;
-        if (source && !source.visible) return false;
-        if (layer === 'spec') return true;
-        if (layer === 'wave') return !source || source.mode !== 'stack';
+        const isSpec = layer === 'spec' || layer.startsWith('spec:');
+        const isWave = layer === 'wave' || layer.startsWith('wave:');
+        // Channel-less labels (Audacity TXT and ordinary JSON/CSV) apply to
+        // every shown channel. Explicit channel indices are zero-based.
+        // Imported-source checkboxes ONLY control spectrogram overlays:
+        // waveform geometry, stacked label tracks and exports are unaffected.
+        const colon = layer.indexOf(':');
+        const match = colon < 0 || marker.channel == null ||
+            marker.channel === Number(layer.slice(colon + 1));
+        if (isSpec) return match && (!source || app.spectralOverlayVisibility.get(id) !== false);
+        if (isWave) return match && (!source || source.mode !== 'stack');
         return layer === 'track:' + id && source?.mode === 'stack';
     }
     function invalidateSourceViews() {
@@ -1613,19 +1645,22 @@ self.onmessage = async ({ data: m }) => {
     }
     function renderImportSourceControls() {
         const root = $('importSourceControls'), fragment = document.createDocumentFragment();
+        for (const id of app.spectralOverlayVisibility.keys())
+            if (!app.importSources.has(id)) app.spectralOverlayVisibility.delete(id);
         for (const source of app.importSources.values()) {
             const label = document.createElement('label'), checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
-            checkbox.checked = source.visible;
-            checkbox.setAttribute('aria-label', 'Show labels from ' + source.filename);
+            checkbox.checked = app.spectralOverlayVisibility.get(source.id) !== false;
+            checkbox.setAttribute('aria-label', 'Overlay ' + source.filename + ' on spectrograms');
             checkbox.addEventListener('change', () => {
-                app.importSources = new Map(app.importSources);
-                app.importSources.set(source.id, { ...app.importSources.get(source.id), visible: checkbox.checked });
-                app.dirty = true;
+                // Never mutate the imported source record, its labels, undo
+                // history or exported file when changing a display preference.
+                app.spectralOverlayVisibility.set(source.id, checkbox.checked);
                 invalidateSourceViews();
                 paintOverlays();
             });
-            label.append(checkbox, document.createTextNode(source.filename + ' (' + (source.mode === 'stack' ? 'stack' : 'overlay') + ')'));
+            label.append(checkbox, document.createTextNode('Spectrogram overlay: ' + source.filename +
+                (source.mode === 'stack' ? ' (stacked track stays visible)' : '')));
             fragment.append(label);
         }
         root.replaceChildren(fragment);
@@ -1637,7 +1672,15 @@ self.onmessage = async ({ data: m }) => {
         app.trackHeights.set(plot.dataset.sourceId || plot.id, next);
     }
     function installPlotResizer(bar) {
-        const pair = () => [bar.previousElementSibling, bar.nextElementSibling];
+        // Hidden primary wave/spec canvases can sit between two visible
+        // tracks. Never resize a hidden plot or a different separator.
+        const neighbor = direction => {
+            let node = bar[direction];
+            while (node && (!node.classList.contains('plot') || node.hidden))
+                node = node[direction];
+            return node;
+        };
+        const pair = () => [neighbor('previousElementSibling'), neighbor('nextElementSibling')];
         const resize = (delta, firstHeight, secondHeight) => {
             const [first, second] = pair();
             const total = firstHeight + secondHeight;
@@ -1677,7 +1720,7 @@ self.onmessage = async ({ data: m }) => {
     function rebuildPlotSeparators() {
         const stack = $('plotStack');
         stack.querySelectorAll('.plot-resizer').forEach(node => node.remove());
-        const plots = Array.from(stack.querySelectorAll(':scope > .plot'));
+        const plots = Array.from(stack.querySelectorAll(':scope > .plot')).filter(plot => !plot.hidden);
         for (let i = 1; i < plots.length; i++) {
             const bar = document.createElement('div');
             bar.className = 'plot-resizer';
@@ -1734,80 +1777,80 @@ self.onmessage = async ({ data: m }) => {
     function channel() { return app.viewChannel; }
     function channelName(ch) { return ch === -1 ? 'Mix (average)' : 'Channel ' + (ch + 1); }
     function orderedChannels() {
-        return Array.from(app.selectedChannels).sort((a, b) =>
-            (a < 0 ? app.meta.channels : a) - (b < 0 ? app.meta.channels : b));
+        return Array.from(app.selectedChannels).sort((a, b) => a - b);
     }
     function syncChannelPicker() {
-        $('channelSummary').textContent = app.selectedChannels.size === 1 ?
-            channelName(channel()) : app.selectedChannels.size + ' channels · focus ' + (channel() === -1 ? 'Mix' : channel() + 1);
-        for (const input of $('channelChoices').querySelectorAll('input[data-channel]'))
-            input.checked = app.selectedChannels.has(Number(input.dataset.channel));
-        for (const button of $('channelChoices').querySelectorAll('button[data-focus-channel]')) {
-            button.disabled = Number(button.dataset.focusChannel) === channel();
-            button.textContent = button.disabled ? 'Focused' : 'Focus';
+        const waves = app.selectedWaveChannels.size, specs = app.selectedSpecChannels.size;
+        $('channelSummary').textContent = 'Wave ' + waves + ' · Spec ' + specs;
+        for (const input of $('channelChoices').querySelectorAll('input[data-channel][data-view]')) {
+            const selected = input.dataset.view === 'wave' ? app.selectedWaveChannels : app.selectedSpecChannels;
+            input.checked = selected.has(Number(input.dataset.channel));
         }
         if (app.meta) $('channelViewInfo').textContent =
-            app.selectedChannels.size + ' of ' + (app.meta.channels + (app.meta.channels > 1 ? 1 : 0)) +
-            ' available tracks displayed · ' + channelName(channel()) +
-            ' supplies detailed spectrogram, overview and playback.' +
-            ($('otherSpectrograms').checked ? ' Additional spectrograms are lower-resolution previews.' : '');
+            'Waveforms: ' + waves + ' · spectrograms: ' + specs + ' · playback: ' +
+            (app.selectedChannels.size === 1 ? channelName(orderedChannels()[0]) :
+                'average of ' + app.selectedChannels.size + ' channels visible in either view') +
+            ' · spectral overview reference: ' + channelName(channel()) + '.';
     }
     function populateChannelPicker() {
-        const fragment = document.createDocumentFragment();
-        for (let c = 0; c < app.meta.channels; c++) appendChoice(c);
-        if (app.meta.channels > 1) appendChoice(-1);
-        function appendChoice(ch) {
-            const row = document.createElement('div'), label = document.createElement('label');
-            const check = document.createElement('input'), focus = document.createElement('button');
+        const fragment = document.createDocumentFragment(), head = document.createElement('div');
+        head.className = 'channel-choice channel-head';
+        for (const label of ['Channel', 'Waveform', 'Spectrogram']) {
+            const span = document.createElement('span');
+            span.textContent = label;
+            head.append(span);
+        }
+        fragment.append(head);
+        for (let c = 0; c < app.meta.channels; c++) {
+            const row = document.createElement('div');
             row.className = 'channel-choice';
-            check.type = 'checkbox';
-            check.dataset.channel = String(ch);
-            check.setAttribute('aria-label', 'Show ' + channelName(ch));
-            label.append(check, document.createTextNode(channelName(ch)));
-            focus.type = 'button';
-            focus.dataset.focusChannel = String(ch);
-            focus.setAttribute('aria-label', 'Focus ' + channelName(ch) + ' for detailed spectrogram and playback');
-            row.append(label, focus);
+            const name = document.createElement('span');
+            name.className = 'channel-name';
+            name.textContent = channelName(c);
+            row.append(name);
+            for (const [view, labelText] of [['wave', 'waveform'], ['spec', 'spectrogram']]) {
+                const label = document.createElement('label'), check = document.createElement('input');
+                label.className = 'channel-check';
+                check.type = 'checkbox';
+                check.dataset.channel = String(c);
+                check.dataset.view = view;
+                check.setAttribute('aria-label', 'Show ' + channelName(c) + ' ' + labelText);
+                label.title = 'Show ' + channelName(c) + ' ' + labelText;
+                label.append(check);
+                row.append(label);
+            }
             fragment.append(row);
         }
         $('channelChoices').replaceChildren(fragment);
         syncChannelPicker();
     }
-    function setSelectedChannels(channels) {
-        if (!app.meta || !channels.size) return;
-        app.selectedChannels = channels;
-        if (!channels.has(channel())) {
-            focusChannel(orderedChannels()[0]).catch(report);
-            return;
-        }
+    async function setSelectedChannels(waves, specs) {
+        if (!app.meta || !(waves instanceof Set) || !(specs instanceof Set)) return;
+        const union = new Set([...waves, ...specs]);
+        if (!union.size || [...union].some(ch => !Number.isInteger(ch) || ch < 0 || ch >= app.meta.channels)) return;
+        const same = (a, b) => a.size === b.size && [...a].every(ch => b.has(ch));
+        if (same(waves, app.selectedWaveChannels) && same(specs, app.selectedSpecChannels)) return;
+        const playbackChanged = !same(union, app.selectedChannels);
+        const wasPlaying = app.playing && playbackChanged, epoch = app.loadEpoch, serial = ++app.focusSerial;
+        const referenceChanged = !union.has(channel());
+        if (wasPlaying) pause(); // Clear queued samples before a new channel mix.
+        app.selectedWaveChannels = waves;
+        app.selectedSpecChannels = specs;
+        app.selectedChannels = union;
+        if (referenceChanged) app.viewChannel = orderedChannels()[0];
         syncChannelPicker();
         rebuildChannelPlots();
-    }
-    async function focusChannel(ch) {
-        if (!app.meta || (ch !== -1 && (ch < 0 || ch >= app.meta.channels))) return;
-        app.selectedChannels.add(ch);
-        if (ch === channel()) {
-            syncChannelPicker();
-            rebuildChannelPlots();
-            return;
+        if (referenceChanged) {
+            cancelZoomPrefetch();
+            app.lastRender = null;
+            app.renderCache = [];
+            app.renderCacheBytes = 0;
+            updateOverviewControls({ active: false, progress: 0 });
         }
-        const wasPlaying = app.playing, epoch = app.loadEpoch, focusSerial = ++app.focusSerial;
-        pause();
-        cancelZoomPrefetch();
-        app.viewChannel = ch;
-        app.lastRender = null;
-        app.renderCache = [];
-        app.renderCacheBytes = 0;
-        updateOverviewControls({ active: false, progress: 0 });
-        syncChannelPicker();
-        rebuildChannelPlots();
         requestRender();
-        try {
-            await restoreOverview();
-            if (wasPlaying && epoch === app.loadEpoch && focusSerial === app.focusSerial)
-                await play();
-        }
-        catch (e) { if (epoch === app.loadEpoch && focusSerial === app.focusSerial) report(e); }
+        if (referenceChanged) await restoreOverview();
+        if (wasPlaying && epoch === app.loadEpoch && serial === app.focusSerial)
+            await play();
     }
     function channelPlot(ch, kind) {
         const plot = document.createElement('div');
@@ -1822,13 +1865,7 @@ self.onmessage = async ({ data: m }) => {
         overlay.id = plot.id + '-overlay';
         overlay.tabIndex = 0;
         overlay.setAttribute('aria-label', channelName(ch) + (kind === 'spec' ? ' spectrogram' : ' waveform') + ' annotation surface');
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'channel-focus';
-        button.textContent = 'Focus ' + (ch === -1 ? 'Mix' : ch + 1);
-        button.title = 'Use this channel for detailed spectrogram, overview and playback';
-        button.addEventListener('click', () => focusChannel(ch).catch(report));
-        plot.append(canvas, overlay, button);
+        plot.append(canvas, overlay);
         setTrackHeight(plot, app.trackHeights.get(plot.id) ?? (kind === 'spec' ? 210 : 142));
         bindAnnotationCanvas(overlay, kind === 'spec');
         app.resizeObserver?.observe(plot);
@@ -1845,10 +1882,21 @@ self.onmessage = async ({ data: m }) => {
         paintOverlay(plot.querySelector('canvas.overlay'), isSpec);
     }
     function rebuildChannelPlots() {
-        const stack = $('plotStack'), desired = app.meta ? orderedChannels().filter(ch => ch !== channel()) : [];
-        const want = new Set(desired.map(String));
+        const stack = $('plotStack');
+        const reference = channel();
+        // The main analysis channel owns the static canvases, but each
+        // canvas is visible only if its column is checked. The other
+        // channels are rendered independently as secondary rows.
+        $('wavePlot').hidden = !!app.meta && !app.selectedWaveChannels.has(reference);
+        $('specPlot').hidden = !!app.meta && !app.selectedSpecChannels.has(reference);
+        const desiredWaves = app.meta ?
+            [...app.selectedWaveChannels].filter(ch => ch !== reference).sort((a, b) => a - b) : [];
+        const desiredSpecs = app.meta ?
+            [...app.selectedSpecChannels].filter(ch => ch !== reference).sort((a, b) => a - b) : [];
+        const waves = new Set(desiredWaves.map(String)), specs = new Set(desiredSpecs.map(String));
         for (const plot of stack.querySelectorAll(':scope > .channel-wave, :scope > .channel-spec')) {
-            if (!want.has(plot.dataset.channel) || plot.dataset.kind === 'spec' && !$('otherSpectrograms').checked) {
+            const wanted = plot.dataset.kind === 'wave' ? waves : specs;
+            if (!wanted.has(plot.dataset.channel)) {
                 app.secondaryObserver?.unobserve(plot);
                 app.resizeObserver?.unobserve(plot);
                 app.visibleSecondary.delete(plot);
@@ -1857,15 +1905,15 @@ self.onmessage = async ({ data: m }) => {
                 plot.remove();
             }
         }
-        let before = stack.querySelector(':scope > .label-track') || $('specPlot');
-        for (const ch of desired) {
-            let plot = stack.querySelector('#channel-wave-' + (ch === -1 ? 'mix' : ch));
+        const before = stack.querySelector(':scope > .label-track') || $('specPlot');
+        for (const ch of desiredWaves) {
+            let plot = $('channel-wave-' + ch);
             if (!plot) plot = channelPlot(ch, 'wave');
             before.before(plot);
         }
         let after = $('specPlot');
-        if ($('otherSpectrograms').checked) for (const ch of desired) {
-            let plot = stack.querySelector('#channel-spec-' + (ch === -1 ? 'mix' : ch));
+        for (const ch of desiredSpecs) {
+            let plot = $('channel-spec-' + ch);
             if (!plot) plot = channelPlot(ch, 'spec');
             after.after(plot);
             after = plot;
@@ -1873,6 +1921,16 @@ self.onmessage = async ({ data: m }) => {
         rebuildPlotSeparators();
         paintAll();
         scheduleSecondaryRenders(80);
+    }
+    function analysisCanvas() {
+        // A checked waveform must not force a hidden spectrogram to a
+        // 20-pixel resolution. Use a visible spectrogram's geometry if
+        // one exists, falling back to a displayed waveform.
+        if (!$('specPlot').hidden) return $('specCanvas');
+        const spec = $('plotStack').querySelector(':scope > .channel-spec canvas:not(.overlay)');
+        if (spec) return spec;
+        if (!$('wavePlot').hidden) return $('waveCanvas');
+        return $('plotStack').querySelector(':scope > .channel-wave canvas:not(.overlay)') || $('specCanvas');
     }
     function secondaryWaveKey() {
         return JSON.stringify([app.loadEpoch, app.start, app.span, audioFilterKey()]);
@@ -1895,37 +1953,48 @@ self.onmessage = async ({ data: m }) => {
     async function renderSecondaryViews(serial) {
         const epoch = app.loadEpoch, worker = app.analysis, waveKey = secondaryWaveKey();
         const specKey = secondarySpectrumKey(waveKey);
-        for (const ch of orderedChannels()) {
-            if (ch === channel()) continue;
-            if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
-            const suffix = ch === -1 ? 'mix' : ch;
-            const wavePlot = $('channel-wave-' + suffix), specPlot = $('channel-spec-' + suffix);
-            const waveVisible = wavePlot && secondaryVisible(wavePlot);
-            const specVisible = specPlot && secondaryVisible(specPlot);
-            if (!waveVisible && !specVisible) continue;
-            const stored = app.secondaryViews.get(ch);
-            if (stored?.waveKey === waveKey && (!specVisible || stored.specKey === specKey)) {
+        // Fast previews first; only when navigation is idle refine near-visible
+        // spectrograms to the same native FFT resolution as the primary track.
+        // Both passes are worker-side, cancellable and bounded in memory.
+        for (const detailed of [false, true]) {
+            if (detailed) await new Promise(resolve => setTimeout(resolve, 250));
+            if (serial !== app.secondarySerial || epoch !== app.loadEpoch || document.hidden) return;
+            for (const ch of orderedChannels()) {
+                if (ch === channel()) continue;
+                if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
+                const wavePlot = $('channel-wave-' + ch), specPlot = $('channel-spec-' + ch);
+                const waveVisible = wavePlot && secondaryVisible(wavePlot);
+                const specVisible = specPlot && secondaryVisible(specPlot);
+                if (!waveVisible && !specVisible || detailed && !specVisible) continue;
+                const stored = app.secondaryViews.get(ch);
+                if (stored?.waveKey === waveKey && (!specVisible || stored.specKey === specKey) &&
+                    (!detailed || stored.detailed)) {
+                    if (waveVisible) paintSecondaryPlot(wavePlot);
+                    if (specVisible) paintSecondaryPlot(specPlot);
+                    continue;
+                }
+                const p = renderParameters(app.start, app.span, !detailed);
+                p.channel = ch;
+                p.spectrum = !!specVisible;
+                p.detail = detailed && !!specVisible;
+                if (!detailed) p.width = Math.min(320, Math.max(32, Math.round(geom(analysisCanvas()).w)));
+                const result = await worker.call('secondary', p);
+                if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
+                if (result.cancelled) {
+                    scheduleSecondaryRenders(220);
+                    return;
+                }
+                if (p.spectrum) prepareRenderedView(result, null, app.span);
+                // Latest result only; bound the total number of live image buffers.
+                app.secondaryViews.delete(ch);
+                app.secondaryViews.set(ch, { result, waveKey, specKey: p.spectrum ? specKey : null,
+                    detailed: p.detail });
+                while (app.secondaryViews.size > 8)
+                    app.secondaryViews.delete(app.secondaryViews.keys().next().value);
                 if (waveVisible) paintSecondaryPlot(wavePlot);
                 if (specVisible) paintSecondaryPlot(specPlot);
-                continue;
             }
-            const p = renderParameters(app.start, app.span, true);
-            p.channel = ch;
-            p.spectrum = !!specVisible;
-            p.width = Math.min(320, Math.max(32, Math.round(geom($('waveCanvas')).w)));
-            const result = await worker.call('secondary', p);
-            if (serial !== app.secondarySerial || epoch !== app.loadEpoch) return;
-            if (result.cancelled) {
-                scheduleSecondaryRenders(220);
-                return;
-            }
-            if (p.spectrum) prepareRenderedView(result, null, app.span);
-            // Small per-channel previews only. No additional full-resolution FFT caches.
-            app.secondaryViews.set(ch, { result, waveKey, specKey: p.spectrum ? specKey : null });
-            if (waveVisible) paintSecondaryPlot(wavePlot);
-            if (specVisible) paintSecondaryPlot(specPlot);
         }
-        // Removed channels should not keep canvases and decoded previews alive.
         for (const ch of app.secondaryViews.keys())
             if (!app.selectedChannels.has(ch) || ch === channel()) app.secondaryViews.delete(ch);
     }
@@ -2091,7 +2160,7 @@ self.onmessage = async ({ data: m }) => {
         $('displayFreqMin').max = $('displayFreqMax').max = app.meta ? app.meta.sampleRate / 2 : 48000;
         return f;
     }
-    const readyControls = ['highPassHz', 'lowPassHz', 'channelSelectAll', 'channelSolo', 'otherSpectrograms', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
+    const readyControls = ['highPassHz', 'lowPassHz', 'channelSelectAll', 'channelSolo', 'playPauseBtn', 'stopBtn', 'prevBtn', 'nextBtn', 'gotoBtn', 'scrubSlider', 'zoomIn', 'zoomOut', 'fitBtn', 'panLeft', 'panRight', 'scrollSlider', 'fullBandBtn', 'overviewBtn', 'clearSavedOverviews', 'addPointBtn', 'exportJson', 'exportCsv', 'exportTxt', 'importBtn'];
     function ready(enabled) {
         for (const id of readyControls)
             $(id).disabled = !enabled;
@@ -2115,6 +2184,8 @@ self.onmessage = async ({ data: m }) => {
         app.secondaryViews.clear();
         app.visibleSecondary.clear();
         app.selectedChannels = new Set([0]);
+        app.selectedWaveChannels = new Set([0]);
+        app.selectedSpecChannels = new Set([0]);
         app.viewChannel = 0;
         app.filterSerial++;
         app.filterUpdating = false; app.filterQueued = false; app.filterResumePlayback = false;
@@ -2150,6 +2221,7 @@ self.onmessage = async ({ data: m }) => {
         app.markers = new Map();
         app.tags = new Map();
         app.importSources = new Map();
+        app.spectralOverlayVisibility.clear();
         invalidateMarkers();
         rebuildLabelTracks();
         rebuildChannelPlots();
@@ -2180,6 +2252,11 @@ self.onmessage = async ({ data: m }) => {
             app.span = Math.min(10, meta.duration);
             app.viewChannel = 0;
             app.selectedChannels = new Set([0]);
+            app.selectedWaveChannels = new Set([0]);
+            app.selectedSpecChannels = new Set([0]);
+            $('editChannel').replaceChildren(new Option('All channels', ''));
+            for (let c = 0; c < meta.channels; c++)
+                $('editChannel').add(new Option(channelName(c), String(c)));
             populateChannelPicker();
             rebuildChannelPlots();
             $('displayFreqMin').value = 0;
@@ -2343,7 +2420,7 @@ self.onmessage = async ({ data: m }) => {
         try {
             const context = app.context;
             while (app.playing && epoch === app.playEpoch && app.nextWhen < context.currentTime + .9 && app.nextPosition < app.meta.frames) {
-                const position = app.nextPosition, speed = Number($('speed').value), result = await app.playback.call('audio', { position, frames: Math.max(1, Math.round(context.sampleRate * .3)), speed, outputRate: context.sampleRate, channel: channel() });
+                const position = app.nextPosition, speed = Number($('speed').value), result = await app.playback.call('audio', { position, frames: Math.max(1, Math.round(context.sampleRate * .3)), speed, outputRate: context.sampleRate, channels: orderedChannels() });
                 if (!app.playing || epoch !== app.playEpoch)
                     return;
                 if (!result.data.length) {
@@ -2445,7 +2522,7 @@ self.onmessage = async ({ data: m }) => {
         setView(anchor - fraction * span, span, { factor, fraction: clamp(fraction, 0, 1) });
     }
     function renderViewKey() {
-        const f = getDisplayFreqRange(), g = geom($('specCanvas'));
+        const f = getDisplayFreqRange(), g = geom(analysisCanvas());
         const min = clamp(finite($('dbMin').value, -100), -180, 0);
         let max = clamp(finite($('dbMax').value, 0), -179, 20);
         if (max <= min) max = Math.min(20, min + 1);
@@ -2573,7 +2650,7 @@ self.onmessage = async ({ data: m }) => {
         }
     }
     function renderParameters(viewStart, viewSpan, preview) {
-        const f = getDisplayFreqRange(), geometry = geom($('specCanvas')), scale = currentScale();
+        const f = getDisplayFreqRange(), geometry = geom(analysisCanvas()), scale = currentScale();
         const dbMin = clamp(finite($('dbMin').value, -100), -180, 0);
         let dbMax = clamp(finite($('dbMax').value, 0), -179, 20);
         if (dbMax <= dbMin) dbMax = Math.min(20, dbMin + 1);
@@ -2881,11 +2958,12 @@ self.onmessage = async ({ data: m }) => {
         ctx.textAlign = 'left';
         ctx.fillText((isSpec ? 'Spectrogram · ' : 'Waveform · ') +
             (app.meta ? channelName(displayChannel) : (isSpec ? 'Hz (k = 1000 Hz)' : 'full scale')) +
-            (focused && app.meta ? ' (focus)' : ''), 8, 14, Math.max(10, g.width - (focused ? 140 : 100)));
+            (focused && app.meta ? ' (reference)' : ''), 8, 14, Math.max(10, g.width - (focused ? 155 : 100)));
         ctx.textAlign = 'right';
         ctx.fillStyle = focused && app.renderPending || !r ? '#ffda86' : '#d8e3ef';
         ctx.fillText(!r && app.meta ? 'Loading…' : focused && app.renderPending ? 'Updating preview…' :
-            isSpec && !focused ? 'Fast preview' : isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
+            isSpec && !focused ? (app.secondaryViews.get(displayChannel)?.detailed ? 'Hann · dBFS' : 'Fast preview') :
+            isSpec ? 'Hann · dBFS' : '', g.width - 12, 14);
     }
 
     // Endpoints allow exact overlap counts and density bins in O(pixels * log N),
@@ -2910,6 +2988,7 @@ self.onmessage = async ({ data: m }) => {
     }
     function buildMarkerIndex(items) {
         items.sort((a, b) => a.start - b.start || a.end - b.end);
+        const hasChannelRestrictions = items.some(marker => marker.channel != null);
         const maxEnd = new Float64Array(items.length), starts = new Float64Array(items.length),
             ends = new Float64Array(items.length), blockEnds = new Float64Array(Math.ceil(items.length / 256));
         blockEnds.fill(-Infinity);
@@ -2922,7 +3001,7 @@ self.onmessage = async ({ data: m }) => {
             blockEnds[i >>> 8] = Math.max(blockEnds[i >>> 8], items[i].end);
         }
         ends.sort();
-        return { items, maxEnd, starts, ends, blockEnds };
+        return { items, maxEnd, starts, ends, blockEnds, hasChannelRestrictions };
     }
     function markerIndex() {
         if (!app.markerIndex)
@@ -2930,13 +3009,22 @@ self.onmessage = async ({ data: m }) => {
         return app.markerIndex;
     }
     function filteredMarkerIndex(layer) {
+        const all = markerIndex(), isSpec = layer === 'spec' || layer.startsWith('spec:');
+        const isWave = layer === 'wave' || layer.startsWith('wave:');
+        const allSourcesEnabled = [...app.importSources.keys()].every(id =>
+            app.spectralOverlayVisibility.get(id) !== false);
+        const noWaveExclusions = [...app.importSources.values()].every(source => source.mode !== 'stack');
+        const restrictChannel = (isSpec || isWave) && layer.includes(':');
         if (layer === 'all' ||
-            layer === 'spec' && Array.from(app.importSources.values()).every(source => source.visible) ||
-            layer === 'wave' && Array.from(app.importSources.values()).every(source => source.visible && source.mode !== 'stack'))
-            return markerIndex();
+            isSpec && allSourcesEnabled && (!restrictChannel || !all.hasChannelRestrictions) ||
+            isWave && noWaveExclusions && (!restrictChannel || !all.hasChannelRestrictions))
+            return all;
         let index = app.filteredIndices.get(layer);
         if (!index) {
-            index = buildMarkerIndex(Array.from(app.markers.values()).filter(marker => markerVisibleOn(marker, layer)));
+            index = buildMarkerIndex(all.items.filter(marker => markerVisibleOn(marker, layer)));
+            // Large imports can contain 1M markers; cap per-channel copies.
+            if (app.filteredIndices.size >= 8)
+                app.filteredIndices.delete(app.filteredIndices.keys().next().value);
             app.filteredIndices.set(layer, index);
         }
         return index;
@@ -3042,6 +3130,12 @@ self.onmessage = async ({ data: m }) => {
         }
         ctx.globalAlpha = 1;
     }
+    function layerForCanvas(canvas, isSpec, trackId = null) {
+        if (trackId) return 'track:' + trackId;
+        const plot = canvas.closest('[data-channel]');
+        const ch = plot ? Number(plot.dataset.channel) : channel();
+        return (isSpec ? 'spec:' : 'wave:') + ch;
+    }
     function paintOverlay(canvas, isSpec, trackId = null) {
         const { ctx, g } = sizedContext(canvas);
         ctx.clearRect(0, 0, g.width, g.height);
@@ -3050,11 +3144,11 @@ self.onmessage = async ({ data: m }) => {
                 $('annotationRenderInfo').textContent = 'No annotations in view.';
             return;
         }
-        const key = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        const key = layerForCanvas(canvas, isSpec, trackId);
         const band = isSpec ? getDisplayFreqRange() : null;
         const show = $('showAnnotations').checked, text = $('showLabelText').checked;
         const view = show ? annotationView(g, key) : null;
-        if (key === 'wave' && canvas === $('waveOverlay')) {
+        if (canvas === $('waveOverlay')) {
             const info = $('annotationRenderInfo');
             const message = !show ? 'Annotations hidden (all retained).' :
                 view.count.toLocaleString() + ' annotations in view · ' + (view.dense
@@ -3167,8 +3261,8 @@ self.onmessage = async ({ data: m }) => {
         ctx.restore();
     }
     function paintOverlays() {
-        paintOverlay($('waveOverlay'), false);
-        paintOverlay($('specOverlay'), true);
+        if (!$('wavePlot').hidden) paintOverlay($('waveOverlay'), false);
+        if (!$('specPlot').hidden) paintOverlay($('specOverlay'), true);
         for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec'))
             if (secondaryVisible(plot))
                 paintOverlay(plot.querySelector('canvas.overlay'), plot.dataset.kind === 'spec');
@@ -3176,8 +3270,8 @@ self.onmessage = async ({ data: m }) => {
             paintOverlay(plot.querySelector('canvas.overlay'), false, plot.dataset.sourceId);
     }
     function paintAll() {
-        drawBase($('waveCanvas'), false);
-        drawBase($('specCanvas'), true);
+        if (!$('wavePlot').hidden) drawBase($('waveCanvas'), false);
+        if (!$('specPlot').hidden) drawBase($('specCanvas'), true);
         for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave, :scope > .channel-spec'))
             if (secondaryVisible(plot))
                 drawBase(plot.querySelector('canvas:not(.overlay)'), plot.dataset.kind === 'spec', Number(plot.dataset.channel));
@@ -3240,7 +3334,14 @@ self.onmessage = async ({ data: m }) => {
         if (alpha < 0 || alpha > 1)
             throw Error('Alpha must be between zero and one.');
         return { id: raw.id ? cleanText(raw.id, 128, 'Marker id') : uid(), type: raw.type, start, end, frequency, freqMin, freqMax, tag: cleanText(raw.tag ?? '', 64, 'Tag'), label: cleanText(raw.label ?? '', 2000, 'Label'), color, alpha, createdAt: cleanText(raw.createdAt ?? new Date().toISOString(), 100, 'Creation timestamp'),
-            sourceId: raw.sourceId ? cleanText(raw.sourceId, 128, 'Label file id') : null };
+            sourceId: raw.sourceId ? cleanText(raw.sourceId, 128, 'Label file id') : null,
+            channel: (() => {
+                if (raw.channel === null || raw.channel === undefined || raw.channel === '') return null;
+                const ch = Number(raw.channel);
+                if (!Number.isInteger(ch) || ch < 0 || ch >= app.meta.channels)
+                    throw Error('Annotation channel must be a zero-based index in this recording.');
+                return ch;
+            })() };
     }
     function normalizeTag(raw) {
         const key = cleanText(raw.key, 64, 'Tag key');
@@ -3265,7 +3366,8 @@ self.onmessage = async ({ data: m }) => {
     }
     function applyTransaction(tx, forward) {
         const keepIndex = !tx.snapshot && (tx.markers || []).every(c => c.before && c.after &&
-            c.before.start === c.after.start && c.before.end === c.after.end);
+            c.before.start === c.after.start && c.before.end === c.after.end &&
+            c.before.channel === c.after.channel);
         if (tx.snapshot) {
             app.markers = forward ? tx.afterMarkers : tx.beforeMarkers;
             app.tags = forward ? tx.afterTags : tx.beforeTags;
@@ -3547,6 +3649,7 @@ self.onmessage = async ({ data: m }) => {
         for (const m of rows.slice(app.page * 100, (app.page + 1) * 100)) {
             const tr = document.createElement('tr');
             tr.dataset.id = m.id;
+            tr.title = m.channel == null ? 'All channels' : channelName(m.channel) + ' only';
             if (m.id === app.selected)
                 tr.className = 'selected';
             for (const text of [m.type.replaceAll('_', ' '), m.type === 'point' ? fmt(m.start) : fmt(m.start) + ' – ' + fmt(m.end), markerFrequencyText(m)]) {
@@ -3638,7 +3741,9 @@ self.onmessage = async ({ data: m }) => {
     function renderEditor() {
         const m = app.markers.get(app.selected);
         $('editFields').disabled = !m;
-        $('selectionInfo').textContent = m ? m.type.replaceAll('_', ' ') + ' · ' + m.id : 'Select a marker from the table, or click one in Navigate mode.';
+        $('selectionInfo').textContent = m ? m.type.replaceAll('_', ' ') + ' · ' +
+            (m.channel == null ? 'all channels' : channelName(m.channel)) + ' · ' + m.id :
+            'Select a marker from the table, or click one in Navigate mode.';
         if (!m)
             return;
         $('editStart').value = String(m.start);
@@ -3648,6 +3753,7 @@ self.onmessage = async ({ data: m }) => {
         $('editMax').value = m.freqMax === null ? '' : String(m.freqMax);
         $('editMin').disabled = m.type === 'time_range';
         $('editMax').disabled = m.type === 'time_range';
+        $('editChannel').value = m.channel == null ? '' : String(m.channel);
         $('editTag').value = m.tag;
         $('editLabel').value = m.label;
     }
@@ -3794,7 +3900,7 @@ self.onmessage = async ({ data: m }) => {
         return lines.length ? lines.join('\n') + '\n' : '';
     }
     // AUDACITY_LABEL_IO_END
-    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json', 'source_id'];
+    const csvHeader = ['record_type', 'id', 'type', 'start_seconds', 'end_seconds', 'frequency_hz', 'freq_min_hz', 'freq_max_hz', 'tag', 'tag_name', 'label', 'color', 'alpha', 'created_at', 'metadata_json', 'source_id', 'channel'];
     const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
     function exportCSV() {
         const data = exportObject(), metadata = { ...data, csvTextEncoding: 'apostrophe-prefix' };
@@ -3805,7 +3911,7 @@ self.onmessage = async ({ data: m }) => {
         const lines = [csvHeader.map(csvCell).join(','), row.map(csvCell).join(',')];
         for (const m of data.markers) {
             const text = v => "'" + v;
-            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), '', text(m.sourceId || '')].map(csvCell).join(','));
+            lines.push(['marker', text(m.id), m.type, m.start, m.end, m.frequency, m.freqMin, m.freqMax, text(m.tag), text(m.tagName), text(m.label), m.color, m.alpha, text(m.createdAt), '', text(m.sourceId || ''), m.channel].map(csvCell).join(','));
         }
         return lines.join('\r\n') + '\r\n';
     }
@@ -3880,7 +3986,7 @@ self.onmessage = async ({ data: m }) => {
             if (!rows.length)
                 throw Error('Empty CSV.');
             const header = rows.shift(), col = name => header.indexOf(name);
-            if (new Set(header).size !== header.length || csvHeader.slice(0, -1).some(h => col(h) < 0))
+            if (new Set(header).size !== header.length || csvHeader.slice(0, -2).some(h => col(h) < 0))
                 throw Error('CSV needs the Audio Annotator v2 column headers.');
             const metadataRows = rows.filter(r => r[col('record_type')] === 'metadata');
             if (metadataRows.length !== 1)
@@ -3905,7 +4011,8 @@ self.onmessage = async ({ data: m }) => {
                     return value;
                 };
                 data.markers.push({ id: textField('id'), type: get('type'), start: get('start_seconds'), end: get('end_seconds'), frequency: get('frequency_hz') === '' ? null : get('frequency_hz'), freqMin: get('freq_min_hz') === '' ? null : get('freq_min_hz'), freqMax: get('freq_max_hz') === '' ? null : get('freq_max_hz'), tag: textField('tag'), label: textField('label'), color: get('color'), alpha: get('alpha'), createdAt: textField('created_at'),
-                    sourceId: col('source_id') >= 0 ? textField('source_id') : null });
+                    sourceId: col('source_id') >= 0 ? textField('source_id') : null,
+                    channel: col('channel') >= 0 && get('channel') !== '' ? get('channel') : null });
             }
         }
         if (!data || data.schema !== 'audio-annotator-v2' || data.version !== 1 || !Array.isArray(data.markers) || !Array.isArray(data.tags) || !data.meta)
@@ -4070,10 +4177,11 @@ self.onmessage = async ({ data: m }) => {
         }
         return null;
     }
-    function nearestMarker(p, isSpec, trackId = null) {
+    function nearestMarker(p, isSpec, trackId = null, canvas = null) {
         // Aggregated geometry is not an individual marker: don't select/delete an
         // arbitrary hidden event. Use the table or zoom into the density strip.
-        const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        const layer = canvas ? layerForCanvas(canvas, isSpec, trackId) :
+            trackId ? 'track:' + trackId : isSpec ? 'spec:' + channel() : 'wave:' + channel();
         if (!$('showAnnotations').checked || annotationView(p.g, layer).dense) return null;
         let best = null, distance = 11;
         const tolerance = 11 / p.g.w * app.span;
@@ -4103,7 +4211,7 @@ self.onmessage = async ({ data: m }) => {
         }, filteredMarkerIndex(layer));
         return best;
     }
-    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8, sourceId: g.trackId || null }; }
+    function gestureMarker(g) { const a = g.point, b = g.current || a; const type = g.mode; return { id: 'preview', type, start: Math.min(a.time, b.time), end: type === 'point' ? Math.min(a.time, b.time) : Math.max(a.time, b.time), frequency: type === 'point' && g.isSpec ? a.frequency : null, freqMin: type === 'frequency_range' ? Math.min(a.frequency, b.frequency) : null, freqMax: type === 'frequency_range' ? Math.max(a.frequency, b.frequency) : null, tag: g.tag, label: g.label, color: '#69df98', alpha: .8, sourceId: g.trackId || null, channel: g.isSpec ? g.audioChannel : null }; }
     function cancelGesture() {
         const g = app.gesture;
         app.gesture = null;
@@ -4137,13 +4245,13 @@ self.onmessage = async ({ data: m }) => {
             control.value = option.value;
         }
         // Gain only changes waveform geometry, not spectral data or annotations.
-        drawBase($('waveCanvas'), false);
+        if (!$('wavePlot').hidden) drawBase($('waveCanvas'), false);
         for (const plot of $('plotStack').querySelectorAll(':scope > .channel-wave'))
             if (secondaryVisible(plot))
                 drawBase(plot.querySelector('canvas:not(.overlay)'), false, Number(plot.dataset.channel));
     }
     function bindAnnotationCanvas(canvas, isSpec, trackId = null) {
-        const layer = trackId ? 'track:' + trackId : isSpec ? 'spec' : 'wave';
+        const layer = () => layerForCanvas(canvas, isSpec, trackId);
         canvas.addEventListener('pointerdown', e => {
             cancelZoomPrefetch();
             if (!app.meta || e.button > 1)
@@ -4153,7 +4261,7 @@ self.onmessage = async ({ data: m }) => {
                 return;
             e.preventDefault();
             canvas.focus({ preventScroll: true });
-            const nearby = markerAtText(point, layer, canvas) || nearestMarker(point, isSpec, trackId);
+            const nearby = markerAtText(point, layer(), canvas) || nearestMarker(point, isSpec, trackId, canvas);
             if (e.shiftKey && !app.held) {
                 if (nearby)
                     removeMarker(nearby.id);
@@ -4167,7 +4275,11 @@ self.onmessage = async ({ data: m }) => {
             // Keep range drags functional even when they start inside an existing
             // annotation. A nearby Point click is briefly deferred on pointerup
             // so its matching double-click can open the editor without adding one.
-            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point, current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span, tag: app.held ?? $('tagInput').value, label: $('labelInput').value, nearby: nearby?.id, moved: false };
+            app.gesture = { kind: pan ? 'pan' : 'annotate', canvas, isSpec, trackId, mode, point,
+                audioChannel: isSpec ? Number(layer().slice(5)) : null,
+                current: point, pointerId: e.pointerId, viewStart: app.start, span: app.span,
+                tag: app.held ?? $('tagInput').value, label: $('labelInput').value,
+                nearby: nearby?.id, moved: false };
             canvas.setPointerCapture(e.pointerId);
             paintOverlays();
         });
@@ -4179,7 +4291,7 @@ self.onmessage = async ({ data: m }) => {
                 channelName(Number(canvas.closest('[data-channel]').dataset.channel)) + ' · ' : '') +
                 fmt(p.time, 6) + ' s' + (isSpec ? ' · ' + fmt(p.frequency, 2) + ' Hz' : '') : '';
             if (p.inside && $('showAnnotations').checked && p.y >= p.g.top + p.g.h - 20) {
-                const view = annotationView(p.g, layer);
+                const view = annotationView(p.g, layer());
                 if (view.dense) {
                     const bin = clamp(Math.floor((p.x - p.g.left) / p.g.w * view.bins.length), 0, view.bins.length - 1);
                     $('hoverInfo').textContent = fmt(p.time, 6) + ' s · ' + view.bins[bin].toLocaleString() + ' annotations overlap this time bin';
@@ -4247,14 +4359,14 @@ self.onmessage = async ({ data: m }) => {
             if (!app.meta || !$('showAnnotations').checked) return;
             const p = canvasPoint(e, canvas);
             if (!p.inside) return;
-            const marker = markerAtText(p, layer, canvas) || nearestMarker(p, isSpec, trackId);
+            const marker = markerAtText(p, layer(), canvas) || nearestMarker(p, isSpec, trackId, canvas);
             if (marker) {
                 e.preventDefault();
                 e.stopPropagation();
                 cancelGesture();
                 openInlineMarkerEditor(marker.id, e.clientX, e.clientY);
             }
-            else if (p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer).dense &&
+            else if (p.y >= p.g.top + p.g.h - 20 && annotationView(p.g, layer()).dense &&
                 document.querySelector('input[name=mode]:checked').value === 'navigate') {
                 e.preventDefault();
                 zoom(.125, p.time);
@@ -4375,30 +4487,29 @@ self.onmessage = async ({ data: m }) => {
     });
     handle('waveformColor', 'input', paintAll);
     handle('channelChoices', 'change', e => {
-        const box = e.target.closest('input[data-channel]');
+        const box = e.target.closest('input[data-channel][data-view]');
         if (!box || !app.meta) return;
-        const ch = Number(box.dataset.channel), chosen = new Set(app.selectedChannels);
+        const ch = Number(box.dataset.channel);
+        const waves = new Set(app.selectedWaveChannels), specs = new Set(app.selectedSpecChannels);
+        const chosen = box.dataset.view === 'wave' ? waves : specs;
         if (box.checked) chosen.add(ch);
         else chosen.delete(ch);
-        if (!chosen.size) {
-            box.checked = true; // Keep at least one drawable, playable track.
-            status('Keep one channel selected. Use Only focused to show just one.');
+        if (!waves.size && !specs.size) {
+            box.checked = true;
+            status('Keep at least one waveform or spectrogram selected for display and playback.');
             return;
         }
-        setSelectedChannels(chosen);
-    });
-    handle('channelChoices', 'click', e => {
-        const button = e.target.closest('button[data-focus-channel]');
-        if (button) return focusChannel(Number(button.dataset.focusChannel));
+        return setSelectedChannels(waves, specs);
     });
     handle('channelSelectAll', 'click', () => {
         if (!app.meta) return;
-        setSelectedChannels(new Set(Array.from({ length: app.meta.channels }, (_, i) => i)));
+        const all = new Set(Array.from({ length: app.meta.channels }, (_, i) => i));
+        return setSelectedChannels(all, new Set(all));
     });
-    handle('channelSolo', 'click', () => setSelectedChannels(new Set([channel()])));
-    handle('otherSpectrograms', 'change', () => {
-        if (app.meta) rebuildChannelPlots();
-        syncChannelPicker();
+    handle('channelSolo', 'click', () => {
+        if (!app.meta) return;
+        const first = orderedChannels()[0];
+        return setSelectedChannels(new Set([first]), new Set([first]));
     });
     document.addEventListener('pointerdown', e => {
         const picker = $('channelPicker');
@@ -4494,7 +4605,8 @@ self.onmessage = async ({ data: m }) => {
         const min = $('editMin').value, max = $('editMax').value;
         // Preserve imported point spectral ranges even when one end is undefined.
         const pair = old.type === 'frequency_range' || old.type === 'point' && (old.freqMin !== null || old.freqMax !== null || max !== '');
-        const m = normalizeMarker({ ...old, start: $('editStart').value, end: $('editEnd').value,
+        const m = normalizeMarker({ ...old, channel: $('editChannel').value,
+            start: $('editStart').value, end: $('editEnd').value,
             frequency: old.type === 'point' && !pair ? min : null,
             freqMin: pair ? min : null, freqMax: pair ? max : null, tag, label });
         transact({ markers: [{ id: m.id, before: old, after: m }], tags: m.tag && !app.tags.has(m.tag) ? [{ key: m.tag, before: null, after: tagDefinition(m.tag) }] : [] });
@@ -4622,7 +4734,8 @@ self.onmessage = async ({ data: m }) => {
         paintAll();
         // Only a spectrogram size change alters FFT pixel resolution. Avoid
         // starting a new worker render on every pixel of splitter dragging.
-        if (app.meta && entries.some(entry => entry.target === $('specPlot'))) {
+        if (app.meta && entries.some(entry =>
+            entry.target === $('specPlot') || entry.target.classList.contains('channel-spec'))) {
             clearTimeout(app.plotRenderTimer);
             app.plotRenderTimer = setTimeout(() => {
                 app.plotRenderTimer = 0;
@@ -4646,10 +4759,18 @@ self.onmessage = async ({ data: m }) => {
     window.AudioAnnotatorV2 = Object.freeze({ overlayDebug: () => ({
         waveform: filteredMarkerIndex('wave').items.length,
         spectrogram: filteredMarkerIndex('spec').items.length,
+        spectrogramsByChannel: app.meta ? Object.fromEntries([...app.selectedSpecChannels].map(ch =>
+            [ch, filteredMarkerIndex('spec:' + ch).items.length])) : {},
+        waveformsByChannel: app.meta ? Object.fromEntries([...app.selectedWaveChannels].map(ch =>
+            [ch, filteredMarkerIndex('wave:' + ch).items.length])) : {},
         tracks: Array.from(app.importSources.values()).filter(source => source.mode === 'stack')
             .map(source => ({ id: source.id, filename: source.filename,
                 count: filteredMarkerIndex('track:' + source.id).items.length })),
-    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, selectedChannels: orderedChannels(), focusChannel: channel(), secondaryPreviewCount: app.secondaryViews.size, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) => view.result.image ? ch : null).filter(ch => ch !== null), start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
+    }), inspect: (options = {}) => ({ meta: app.meta ? { ...app.meta } : null, file: app.file?.name, selectedChannels: orderedChannels(), selectedWaveChannels: [...app.selectedWaveChannels].sort((a, b) => a - b),
+        selectedSpectrogramChannels: [...app.selectedSpecChannels].sort((a, b) => a - b),
+        referenceChannel: channel(), focusChannel: channel(), playbackChannels: orderedChannels(),
+        spectrumOverlayVisibility: Object.fromEntries(Array.from(app.importSources.keys(), id =>
+            [id, app.spectralOverlayVisibility.get(id) !== false])), secondaryPreviewCount: app.secondaryViews.size, secondarySpectrumChannels: Array.from(app.secondaryViews, ([ch, view]) => view.result.image ? ch : null).filter(ch => ch !== null), start: app.start, span: app.span, cursor: app.cursor, playing: app.playing, renderPending: app.renderPending, audioFilter: app.audioFilter ? { ...app.audioFilter, taps: app.filterTaps } : null, render: app.lastRender ? { start: app.lastRender.start, span: app.lastRender.span, fmin: app.lastRender.fmin, fmax: app.lastRender.fmax, scale: app.lastRender.scale, mode: app.lastRender.mode, fft: app.lastRender.fft, elapsedMs: app.lastRender.elapsedMs } : null, markerCount: app.markers.size, markersTruncated: app.markers.size > 50000 && !options.allMarkers, markers: inspectMarkers(options.allMarkers ? app.markers.size : 50000), sources: Array.from(app.importSources.values(), source => ({ ...source })), tags: Array.from(app.tags, ([key, v]) => ({ key, ...v })), undo: app.undo.length, redo: app.redo.length, selected: app.selected, overview: { ...app.overview }, outputRate: app.context?.sampleRate || null, scheduledNodes: app.nodes.size }), readNativeSamples: (start, count, ch = 0) => app.analysis.call('read', { start, count, channel: ch }).then(a => Array.from(a)), readFilteredSamples: (start, count, ch = 0) => app.analysis.call('readFiltered', { start, count, channel: ch }).then(a => Array.from(a)), frequencyAxis: () => ({ scale: currentScale(), ...getDisplayFreqRange() }), frequencyPosition: hz => scaleFraction(hz), frequencyAtPosition: position => fractionHz(position), readSpectrum: (time, fft = 4096, ch = 0) => app.analysis.call('spectrum', { time, fft, channel: ch }).then(r => ({ sampleRate: r.sampleRate, db: Array.from(r.db) })), diagnostics: async () => ({ analysis: await app.analysis.call('stats'), playback: await app.playback.call('stats'), historyBytes: app.historyBytes }), audioRMS: () => {
             if (!app.analyser)
                 return 0;
             const a = new Float32Array(app.analyser.fftSize);
