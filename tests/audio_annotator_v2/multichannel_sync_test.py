@@ -121,6 +121,20 @@ with sync_playwright() as playwright:
     assert after_pan['start'] + after_pan['span'] >= 1.85 - 1e-8
     print('SYNC 28 rapid pan changes recovered detailed view', after_pan, flush=True)
 
+    # Small pans inside the already rendered 25% margins should reuse the
+    # same full-resolution pixels, not launch another expensive FFT per channel.
+    old_frame = after_pan['frame']
+    page.evaluate('''() => {
+        const slider = document.getElementById('scrollSlider');
+        slider.value = '1.44';
+        slider.dispatchEvent(new Event('input', {bubbles: true}));
+    }''')
+    page.wait_for_function('Math.abs(AudioAnnotatorV2.inspect().start - 1.44) < .01')
+    page.wait_for_timeout(350)  # let the secondary scheduler check the cached coverage
+    after_small_pan = refined(2, spectrum=True, waveform=False, min_height=before_height + 100)
+    assert after_small_pan['frame'] == old_frame, (after_pan, after_small_pan)
+    print('SYNC overscan reused full-resolution frame across small pan', old_frame, flush=True)
+
     # Zoom, scrub outside the current window and confirm the secondary image
     # catches up to the new visible time interval, not just the primary ruler.
     page.locator('#zoomIn').click()
@@ -152,7 +166,7 @@ with sync_playwright() as playwright:
     assert not errors, errors
     result = {'passed': True, 'initial': initial, 'waveOnly': wave_only,
               'spectrumOnly': spectrum_only, 'resized': resized,
-              'rapidPan': after_pan, 'zoom': zoomed, 'scrub': scrubbed,
+              'rapidPan': after_pan, 'cachedPan': after_small_pan, 'zoom': zoomed, 'scrub': scrubbed,
               'filter': filtered, 'browser': browser.version, 'pageErrors': errors}
     (OUT / 'multichannel-sync-results.json').write_text(json.dumps(result, indent=2))
     print('MULTICHANNEL SYNCHRONIZATION PASS: preview/refinement, native detail,'
