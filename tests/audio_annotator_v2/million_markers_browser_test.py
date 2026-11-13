@@ -43,13 +43,14 @@ with sync_playwright() as p:
     labels = make_labels(COUNT)
     encoded = labels.encode('utf-8')
     started = time.monotonic()
-    page.locator('#importMode').select_option('replace')
     page.locator('#importInput').set_input_files({
         'name': 'million-mixed.labels.txt',
         'mimeType': 'text/plain',
         'buffer': encoded,
     })
     page.locator('#importBtn').click()
+    page.locator('#importChoiceDialog[open]').wait_for(timeout=180_000)
+    page.locator('[data-import-choice=replace]').click()
     page.wait_for_function(
         '(expected) => AudioAnnotatorV2.inspect().markerCount === expected',
         arg=COUNT,

@@ -35,9 +35,10 @@ with sync_playwright() as p:
         page.wait_for_function('(n) => AudioAnnotatorV2.inspect().markerCount === n', arg=n)
 
     def upload(name, labels, mode, sources, markers):
-        page.locator('#importMode').select_option(mode)
         page.locator('#importInput').set_input_files(txt(name, labels))
         page.locator('#importBtn').click()
+        page.locator('#importChoiceDialog[open]').wait_for()
+        page.locator(f'#importChoiceDialog [data-import-choice={mode}]').click()
         source_count(sources)
         marker_count(markers)
 
@@ -70,8 +71,7 @@ with sync_playwright() as p:
 
     page.locator('#fileInput').set_input_files(str(SAMPLE))
     loaded()
-    assert page.locator('#importMode option[value=replace]').count() == 1
-    assert page.locator('#importMode option[value=stack]').count() == 1
+    assert page.locator('#importChoiceDialog').count() == 1
     assert page.locator('#plotStack > .plot-resizer').count() == 1
     assert_time_alignment()
 
@@ -139,7 +139,6 @@ with sync_playwright() as p:
     marker_count(1)
     assert page.locator('#plotStack > .label-track').count() == 0
 
-    page.locator('#importMode').select_option('stack')
     page.locator('#importInput').set_input_files(txt(
         'invalid.txt', '0.2\t0.2\tValid\n999\t999\tInvalid\n'))
     page.locator('#importBtn').click()

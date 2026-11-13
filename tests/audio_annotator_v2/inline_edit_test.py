@@ -22,11 +22,12 @@ with sync_playwright() as p:
         page.wait_for_function('(n) => AudioAnnotatorV2.inspect().markerCount === n', arg=n)
 
     def labels(name, text, mode):
-        page.locator('#importMode').select_option(mode)
         page.locator('#importInput').set_input_files({
             'name': name, 'mimeType': 'text/plain', 'buffer': text.encode()
         })
         page.locator('#importBtn').click()
+        page.locator('#importChoiceDialog[open]').wait_for()
+        page.locator(f'#importChoiceDialog [data-import-choice={mode}]').click()
 
     def plot_double_click(canvas, at_time, dx=35, y=None):
         el = page.locator(canvas)

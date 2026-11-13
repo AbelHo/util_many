@@ -26,8 +26,8 @@ with sync_playwright() as p:
  def export(fmt='json'):
   with page.expect_download() as di:page.locator('#export'+('Json' if fmt=='json' else 'Csv')).click()
   path=OUT/('reg-export.'+fmt);di.value.save_as(path);return path.read_bytes().decode('utf-8')
- def imp(text,fmt='json',mode='replace'):
-  page.locator('#importMode').select_option(mode);page.locator('#importInput').set_input_files({'name':'test.'+fmt,'mimeType':'text/plain','buffer':text.encode()});page.locator('#importBtn').click();page.wait_for_timeout(200)
+ def imp(text,fmt='json',mode='replace',cancel=False):
+  page.locator('#importInput').set_input_files({'name':'test.'+fmt,'mimeType':'text/plain','buffer':text.encode()});page.locator('#importBtn').click();page.locator('#importChoiceDialog[open]').wait_for();page.locator(f'[data-import-choice={"cancel" if cancel else mode}]').click();page.wait_for_timeout(200)
  def fft_check():
   load(F/'ultrasonic_PCM_24.wav');peaks=[];maxerr=0
   for ch,expected in [(0,100000),(1,150000)]:
@@ -49,8 +49,8 @@ with sync_playwright() as p:
   load(SAMPLE);page.locator('#labelInput').fill('line1\n=SUM(1,2), "quoted" 海豚 <img src=x onerror=alert(1)>');page.locator('#tagInput').fill('=DANGER');page.locator('#addPointBtn').click();marker_count(1);o=json.loads(export());m=o['markers'][0];m['id']='=CMD("x")';m['createdAt']='+Untrusted';m['label']='line1\r\n=SUM(1,2), "quoted" 海豚 <img src=x onerror=alert(1)>';imp(json.dumps(o));marker_count(1);before=json.loads(export());page.locator('#markerRows button').first.click();page.locator('#saveMarker').click();assert state()['markers'][0]['label']==m['label'];csv=export('csv');assert "'=CMD" in csv and "'+Untrusted" in csv;imp(csv,'csv');marker_count(1);after=json.loads(export());assert before['markers']==after['markers'] and before['tags']==after['tags'];assert not page.locator('img').count();return {'multiline_and_unicode_roundtrip':True,'formula_prefixes':True}
  record('CSV multiline/Unicode/formula safety and plain-text DOM',hostile_text)
  def cancel_import():
-  before=state()['markers'];o=json.loads(export());o['markers'][0]['label']='replacement';accept[0]=False;imp(json.dumps(o));accept[0]=True;assert state()['markers']==before
-  o['meta']['filename']='not_this_audio.wav';accept[0]=False;imp(json.dumps(o),'json','merge');accept[0]=True;assert state()['markers']==before;return {'replace_and_mismatch_cancelled':True}
+  before=state()['markers'];o=json.loads(export());o['markers'][0]['label']='replacement';imp(json.dumps(o),cancel=True);assert state()['markers']==before
+  o['meta']['filename']='not_this_audio.wav';imp(json.dumps(o),'json','merge',cancel=True);assert state()['markers']==before;return {'replace_and_mismatch_cancelled':True}
  record('Cancel replace and mismatched import preserve existing state',cancel_import)
  def keyboard():
   page.locator('#clearBtn').click();marker_count(0);page.locator('#tagInput').fill('');page.locator('input[name=mode][value=point]').check();page.locator('#waveOverlay').click(position={'x':170,'y':70});marker_count(1);page.keyboard.press('Delete');marker_count(0);page.keyboard.press('Control+z');marker_count(1);page.keyboard.press('Control+Shift+z');marker_count(0);page.locator('#waveOverlay').click(position={'x':170,'y':70});marker_count(1);page.locator('#waveOverlay').click(position={'x':170,'y':70},modifiers=['Shift']);marker_count(0)
