@@ -1002,7 +1002,12 @@ async function render(p, token) {
             spectrumFreqBin: null, elapsedMs: performance.now() - started, stats: statistics() };
     }
     const spanSamples = (end - start) * source.sampleRate, hop = n / 4;
-    const sampledColumns = Math.min(width, preview ? 64 : Math.ceil((spanSamples / overscan > 50000000 ? 192 : 640) * overscan));
+    // After idle, retain the full bounded pixel sampling budget even on wide
+    // windows. The old 192-column fallback made non-indexed channels visibly
+    // blurrier than the reference track as soon as the span grew large.
+    // Foreground previews still use at most 64 columns; final detail is
+    // bounded to 640 * overscan and runs in the secondary worker.
+    const sampledColumns = Math.min(width, preview ? 64 : Math.ceil(640 * overscan));
     // At intermediate zoom, include every FFT hop in each pixel instead of a
     // single center frame. Bound foreground work by both frame count and FFT size.
     const localPeaks = !preview && spanSamples / hop > sampledColumns &&
