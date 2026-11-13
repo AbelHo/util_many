@@ -4507,6 +4507,7 @@ self.onmessage = async ({ data: m }) => {
         const sourceId = uid();
         sources.set(sourceId, { id: sourceId, filename: cleanText(filename, 512, 'Import filename'),
             mode: mode === 'stack' ? 'stack' : 'merge', visible: true });
+        const usedTags = plan.definitions.size ? new Set() : null;
         for (let i = 0; i < data.markers.length; i++) {
             const item = data.markers[i];
             // Whole-file tag is a fallback. First matching (top-priority) keyword
@@ -4519,6 +4520,7 @@ self.onmessage = async ({ data: m }) => {
                 }
             }
             const m = { ...item, id: markers.has(item.id) ? uid() : item.id, sourceId, tag };
+            usedTags?.add(tag);
             markers.set(m.id, m);
             if (markers.size > MAX_MARKERS)
                 throw Error('The annotation limit is ' + MAX_MARKERS.toLocaleString() + '.');
@@ -4530,8 +4532,6 @@ self.onmessage = async ({ data: m }) => {
         }
         // When batch-tagging every label, do not retain unused imported tag
         // definitions. A no-options import still round-trips all definitions.
-        const usedTags = plan.definitions.size ? new Set(
-            [...markers.values()].filter(m => m.sourceId === sourceId).map(m => m.tag)) : null;
         for (const [key, definition] of data.tags)
             if (!usedTags || usedTags.has(key)) tags.set(key, definition);
         // Explicit colors win, including where a chosen key exists already.
@@ -4575,7 +4575,10 @@ self.onmessage = async ({ data: m }) => {
             const mismatch = ext !== 'txt' && (meta.filename !== app.file.name ||
                 Number(meta.fileSize) !== app.file.size || Number(meta.sampleRate) !== app.meta.sampleRate ||
                 Number(meta.frames) !== app.meta.frames);
-            const keywords = data.tags.size ? null : await suggestImportKeywords(data.markers, epoch, serial);
+            // A file can contain unused tag definitions but no tagged labels.
+            // Suggest keywords whenever its actual annotations are untagged.
+            const hasTaggedLabels = data.markers.some(marker => !!marker.tag);
+            const keywords = hasTaggedLabels ? null : await suggestImportKeywords(data.markers, epoch, serial);
             checkImport(epoch, serial);
             $('importProgress').hidden = true;
             $('cancelImport').disabled = true; // Modal has Cancel / Escape.
