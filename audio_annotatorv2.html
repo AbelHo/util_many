@@ -718,7 +718,24 @@ class FlacSource {
         return out;
     }
 }
-let source = null, renderBusy = false, pendingRender = null, renderToken = 0, secondaryToken = 0, overview = null, overviewToken = 0, overviewRevision = 0;
+let source = null, renderBusy = false, secondaryBusy = false, pendingRender = null,
+    renderToken = 0, secondaryToken = 0, overview = null, overviewToken = 0,
+    overviewRevision = 0, overviewBatch = null, overviewBatchToken = 0;
+const overviewsByChannel = new Map();
+function overviewKey(channel, fft, filter = filterSettingsKey()) {
+    return channel + ':' + fft + ':' + filter;
+}
+function channelOverview(channel, fft = null) {
+    if (fft !== null) return overviewsByChannel.get(overviewKey(channel, fft)) || null;
+    for (const o of overviewsByChannel.values())
+        if (o.channel === channel && o.filterKey === filterSettingsKey() && o.waveReady)
+            return o;
+    return null;
+}
+function rememberChannelOverview(o) {
+    overviewsByChannel.delete(overviewKey(o.channel, o.fft, o.filterKey));
+    overviewsByChannel.set(overviewKey(o.channel, o.fft, o.filterKey), o);
+}
 const spectra = new LRU(32 * MiB), fftPlans = new LRU(2 * MiB), resamplers = new LRU(2 * MiB);
 function fftPlan(n) {
     let plan = fftPlans.get(n);
@@ -870,8 +887,12 @@ function updateAudioFilter(settings) {
     if (pendingRender) postMessage({ id: pendingRender.id, result: { cancelled: true } });
     pendingRender = null;
     overviewToken++;
+    overviewBatchToken++;
     if (overview) overview.active = false;
+    if (overviewBatch) overviewBatch.active = false;
+    overviewBatch = null;
     overview = null;
+    overviewsByChannel.clear();
     overviewRevision++;
     audioFilter = next;
     filterKernel = kernel;
@@ -949,9 +970,9 @@ async function envelope(start, end, width, channel, token, preview = false, over
             }
         }
     }
-    else if (overview?.waveReady && overview.channel === channel) {
+    else if (channelOverview(channel)?.waveReady) {
         mode = 'indexed';
-        const level = overviewLevel(overview.waveLevels, span / width);
+        const level = overviewLevel(channelOverview(channel).waveLevels, span / width);
         for (let x = 0; x < width; x++) {
             const a = Math.floor((first + x / width * span) / level.block), b = Math.min(level.min.length - 1, Math.ceil((first + (x + 1) / width * span) / level.block) - 1);
             let lo = Infinity, hi = -Infinity;
@@ -986,7 +1007,10 @@ async function envelope(start, end, width, channel, token, preview = false, over
     guard(token);
     return { wave, mode };
 }
-function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes + (filterKernelFFT ? filterKernelFFT.re.byteLength + filterKernelFFT.im.byteLength : 0), filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0, overviewBytes: overviewBytes(overview), renderBusy }; }
+function statistics() { return { byteCache: source?.bytes.cache.bytes || 0, frameCache: source?.decoded?.bytes || 0, fftCache: spectra.bytes, filterCache: filteredBlocks.bytes + (filterKernelFFT ? filterKernelFFT.re.byteLength + filterKernelFFT.im.byteLength : 0), filterTaps: filterKernel?.length || 0, filter: audioFilter, fftHits: spectra.hits, readBytes: source?.bytes.readBytes || 0,
+    overviewBytes: [...overviewsByChannel.values()].reduce((n, o) => n + overviewBytes(o), 0),
+    overviewChannels: [...overviewsByChannel.values()].filter(o => o.complete).map(o => o.channel),
+    renderBusy }; }
 async function render(p, token) {
     const started = performance.now(), preview = p.preview === true;
     const overscan = preview ? 1 : clamp(Number(p.overscan) || 1, 1, 1.5);
@@ -1020,7 +1044,7 @@ async function render(p, token) {
     // single center frame. Bound foreground work by both frame count and FFT size.
     const localPeaks = !preview && spanSamples / hop > sampledColumns &&
         Math.ceil(spanSamples / hop) + 2 <= Math.floor(Math.min(8192, 16777216 / n) * overscan);
-    const spectralOverview = overview;
+    const spectralOverview = channelOverview(p.channel, n);
     const canPool = spectralOverview?.complete && spectralOverview.channel === p.channel && spectralOverview.fft === n &&
         !localPeaks && spanSamples >= spectralOverview.specLevels[0].block * 2;
     const columns = canPool && !preview ? Math.max(1, Math.min(width, Math.floor(spanSamples / spectralOverview.specLevels[0].block))) : sampledColumns;
@@ -1159,10 +1183,14 @@ function overviewState(o = overview) {
         bytes: overviewBytes(o), timeBin: o.group * o.hop / source.sampleRate, frequencyBin: o.freqGroup * source.sampleRate / o.fft }
         : { active: false, progress: 0, complete: false, revision: overviewRevision };
 }
-function notifyOverview(o) { postMessage({ event: 'overview', ...overviewState(o) }); }
+function notifyOverview(o) {
+    postMessage({ event: 'overview', ...overviewState(o) });
+    if (overviewBatch?.active && overviewBatch.currentChannel === o.channel)
+        notifyOverviewBatch();
+}
 async function overviewYield(o, token) {
     await sleep();
-    while (o === overview && o.active && token === overviewToken && renderBusy)
+    while (o === overview && o.active && token === overviewToken && (renderBusy || secondaryBusy))
         await new Promise(r => setTimeout(r, 25));
     if (o !== overview || !o.active || token !== overviewToken) throw Error('OVERVIEW_CANCELLED');
 }
@@ -1240,8 +1268,9 @@ async function overviewLoop(token) {
         o.complete = true;
         o.active = false;
         o.revision = ++overviewRevision;
+        rememberChannelOverview(o);
         notifyOverview(o);
-        if (o.remember) saveOverview(o);
+        if (o.remember) await saveOverview(o);
     }
     catch (e) {
         if (e.message === 'OVERVIEW_CANCELLED' || o !== overview || token !== overviewToken) return;
@@ -1368,22 +1397,25 @@ async function saveOverview(o) {
     const generation = overviewStorageGeneration;
     try {
         const key = await overviewStorageKey(o.channel, o.fft, o.filterKey);
-        if (o !== overview || !o.remember || generation !== overviewStorageGeneration) return;
+        if (!o.complete || !o.remember || !overviewsByChannel.has(overviewKey(o.channel, o.fft, o.filterKey)) ||
+            generation !== overviewStorageGeneration) return;
         const { channel, fft, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels } = o;
         await overviewStorage('put', key, { key, version: OVERVIEW_VERSION, frames: source.frames, sampleRate: source.sampleRate,
             channel, fft, filterKey: o.filterKey, hop, frameCount, group, freqGroup, bands, waveLevels, specLevels, bytes: overviewBytes(o) }, generation);
-        if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
+        if (o.remember && generation === overviewStorageGeneration) { o.storage = 'Saved locally'; notifyOverview(o); }
     } catch (e) {
-        if (o === overview && o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
+        if (o.remember && generation === overviewStorageGeneration) { o.storage = 'Memory only: ' + e.message; notifyOverview(o); }
     }
 }
 async function selectOverview(channel, fft, remember) {
     const token = ++overviewToken, previous = overview;
     if (previous) previous.active = false;
-    const o = createOverview(channel, fft, previous);
+    const cached = channelOverview(channel, fft);
+    const o = cached || createOverview(channel, fft, previous);
     o.remember = remember;
     overview = o;
-    if (remember) {
+    rememberChannelOverview(o);
+    if (remember && !cached) {
         try {
             const key = await overviewStorageKey(channel, fft, o.filterKey);
             const record = await overviewStorage('get', key);
@@ -1391,6 +1423,7 @@ async function selectOverview(channel, fft, remember) {
             if (validOverviewRecord(record, channel, fft)) {
                 Object.assign(o, record, { active: false, complete: true, waveReady: true, nextFrame: record.frameCount,
                     wavePosition: source.frames, storage: 'Restored from local cache', revision: ++overviewRevision });
+                rememberChannelOverview(o);
             } else o.storage = record ? 'Saved overview incompatible; rebuild required' : 'Not cached yet';
         } catch (e) {
             if (token === overviewToken && overview === o) o.storage = 'Memory only: ' + e.message;
@@ -1504,6 +1537,7 @@ self.onmessage = async ({ data: m }) => {
                 return;
             }
             const token = { render: renderToken, secondary: ++secondaryToken };
+            secondaryBusy = true;
             try {
                 // Use the same renderer and accuracy levels for every channel.
                 // The former waveform-only branch never left 320px previews.
@@ -1518,6 +1552,7 @@ self.onmessage = async ({ data: m }) => {
                 postMessage({ id: m.id, ...(e.message === 'CANCELLED' ?
                     { result: { cancelled: true } } : { error: e.message }) });
             }
+            finally { secondaryBusy = false; }
             return;
         }
         let result;
@@ -1556,6 +1591,7 @@ self.onmessage = async ({ data: m }) => {
                 // waveform extrema restored from disk. FFT-only reuse happens
                 // when selectOverview prepares an incomplete overview instead.
                 overview = createOverview(channel, fft);
+                rememberChannelOverview(overview);
                 overview.active = true;
             }
             overview.remember = m.params.remember === true;
@@ -1585,7 +1621,11 @@ self.onmessage = async ({ data: m }) => {
         }
         else if (m.type === 'clearOverview') {
             overviewToken++;
+            overviewBatchToken++;
+            if (overviewBatch) overviewBatch.active = false;
+            overviewBatch = null;
             overview = null;
+            overviewsByChannel.clear();
             overviewRevision++;
             result = true;
         }
