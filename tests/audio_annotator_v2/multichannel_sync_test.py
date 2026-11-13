@@ -185,8 +185,46 @@ with sync_playwright() as playwright:
         'secondary': round(budget['secondaryImageCacheBytes'] / 1048576, 2),
         'overlays': round(budget['annotationRasterCacheBytes'] / 1048576, 2)}, flush=True)
 
+    # The button must build *every selected channel's* waveform + spectral
+    # overview, not just the reference channel. Check both checkbox columns
+    # and require secondary pooled spectral rendering after index completion.
+    page.locator('#channelPicker').evaluate('(node) => node.open = true')
+    page.locator('#channelSolo').click()
+    for ch in (1, 2):
+        channel(ch, 'wave', True)
+        channel(ch, 'spec', True)
+    page.locator('#channelPicker').evaluate('(node) => node.open = false')
+    page.locator('#fftSize').select_option('32')
+    page.locator('#rememberOverview').uncheck()
+    page.wait_for_function('AudioAnnotatorV2.inspect().overview.fft === 32', timeout=30000)
+    page.locator('#fitBtn').click()
+    assert state()['selectedChannels'] == [0, 1, 2]
+    page.locator('#overviewBtn').click()
+    page.wait_for_function('''() => {
+        const s = AudioAnnotatorV2.inspect();
+        return s.overview.complete && s.overviewBatch?.complete &&
+            s.overviewBatch.channels.join(',') === '1,2' &&
+            s.overviewBatch.completed.join(',') === '1,2' &&
+            Math.abs(Number(document.getElementById('overviewProgress').value) - 1) < 1e-8;
+    }''', timeout=120000)
+    batch = state()['overviewBatch']
+    status = page.locator('#overviewInfo').inner_text()
+    assert '3/3 selected channels indexed' in status, status
+    stats = page.evaluate('AudioAnnotatorV2.diagnostics()')
+    assert 0 in stats['analysis']['overviewChannels'], stats
+    assert all(ch in stats['secondary']['overviewChannels'] for ch in (1, 2)), stats
+    page.locator('#channel-spec-2').scroll_into_view_if_needed()
+    page.wait_for_function('''() => {
+        const s = AudioAnnotatorV2.inspect(), v = s.secondaryRenders['2'];
+        return v?.detailed && v.coversWindow && v.spectrumMode === 'pooled';
+    }''', timeout=35000)
+    pooled = view(2)
+    assert pooled['spectrumMode'] == 'pooled', pooled
+    print('SYNC all-selected overview indexing PASS', batch, pooled, flush=True)
+
     assert not errors, errors
-    result = {'passed': True, 'initial': initial, 'waveOnly': wave_only,
+    result = {'passed': True, 'selectedOverviews': batch, 'indexedSpectrum': pooled,
+              'initial': initial, 'waveOnly': wave_only,
               'spectrumOnly': spectrum_only, 'resized': resized,
               'rapidPan': after_pan, 'cachedPan': after_small_pan, 'zoom': zoomed, 'scrub': scrubbed,
               'filter': filtered, 'browser': browser.version, 'pageErrors': errors}
