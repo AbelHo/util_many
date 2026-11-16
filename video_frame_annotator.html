@@ -51,6 +51,15 @@ Maintenance Notes:
     #pointsList { max-height:200px; overflow:auto; border:1px solid #eee; padding:8px; }
     .point-item { font-size:13px; }
     .hint { color:#666; font-size:13px; }
+    .scrub-stack { flex:1; min-width:0; max-width:1300px; }
+    #scrubSlider { box-sizing:border-box; width:100%; margin:2px 0 5px; }
+    .timeline-track { position:relative; margin:0 8px; }
+    #markerTimeline { display:block; width:100%; height:18px; max-width:none; border:0; border-radius:3px; background:#f0f2f6; box-shadow:inset 0 0 0 1px #cbd5e1; cursor:crosshair; }
+    #timelineCursor { display:none; position:absolute; top:0; bottom:0; width:2px; background:#1f2937; box-shadow:0 0 0 1px #fff; transform:translateX(-1px); pointer-events:none; }
+    #timelineTip { display:none; position:absolute; bottom:calc(100% + 8px); z-index:5; left:0; max-width:min(355px,90vw); min-width:200px; max-height:300px; overflow:hidden; border:1px solid #cbd5e1; border-radius:5px; padding:8px 10px; background:#fff; box-shadow:0 4px 14px #0002; color:#111827; font-size:12px; line-height:1.5; pointer-events:none; }
+    .timeline-swatch { display:inline-block; flex:none; width:12px; height:12px; border:1px solid #94a3b8; vertical-align:middle; }
+    .timeline-color-row { display:flex; align-items:center; gap:6px; }
+
   </style>
 </head>
 <body>
@@ -90,7 +99,14 @@ Maintenance Notes:
     <button id="firstFrameBtn">First Frame</button>
   </div>
   <div class="row">
-    <input id="scrubSlider" type="range" min="0" value="0" step="1" style="flex:1; max-width:1300px" disabled>
+    <div class="scrub-stack">
+      <input id="scrubSlider" type="range" min="0" value="0" step="1" disabled aria-label="Scrub frames">
+      <div class="timeline-track" id="timelineTrack">
+        <canvas id="markerTimeline" width="1" height="18" role="img" aria-label="Marker timeline. Hover for frame, time and color counts; click to seek."></canvas>
+        <div id="timelineCursor" aria-hidden="true"></div>
+        <div id="timelineTip" role="tooltip"></div>
+      </div>
+    </div>
     <label>Time: <span id="currentTime">0:00.000</span> / <span id="totalTime">0:00.000</span></label>
   </div>
 
@@ -153,6 +169,11 @@ Maintenance Notes:
   const scrubSlider = document.getElementById('scrubSlider');
   const currentTimeLabel = document.getElementById('currentTime');
   const totalTimeLabel = document.getElementById('totalTime');
+  const markerTimeline = document.getElementById('markerTimeline');
+  const timelineCtx = markerTimeline.getContext('2d');
+  const timelineTrack = document.getElementById('timelineTrack');
+  const timelineCursor = document.getElementById('timelineCursor');
+  const timelineTip = document.getElementById('timelineTip');
 
   // Data structure: map frameNumber -> array of markers
   // Each marker: {type:'point', x, y} OR {type:'box', x1, y1, x2, y2} OR {type:'circle', cx, cy, radius} OR {type:'square', cx, cy, radius} OR {type:'triangle', cx, cy, radius}
@@ -503,6 +524,7 @@ Maintenance Notes:
         scrubSlider.value = String(Math.min(Math.max(0, cf), maxFrame));
       }
     }
+    updateTimelineCursor();
   }
 
   function formatTime(sec) {
@@ -512,6 +534,127 @@ Maintenance Notes:
     const ms = Math.floor((sec - Math.floor(sec)) * 1000);
     return `${m}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
   }
+
+
+  // Aggregate markers only when annotations, geometry, FPS or duration change.
+  // Each pixel column represents a block of frames; translucent RGBA layers
+  // are composited source-over in ascending frame order.
+  let timelineBins = [], timelineFrames = 0, timelineScheduled = false;
+  function scheduleTimeline() {
+    if (timelineScheduled) return;
+    timelineScheduled = true;
+    requestAnimationFrame(() => { timelineScheduled = false; renderTimeline(); });
+  }
+  function updateTimelineCursor() {
+    if (!Number.isFinite(video.duration) || video.duration <= 0 || video.readyState < 1) {
+      timelineCursor.style.display = 'none'; return;
+    }
+    const max = Math.max(0, Math.round(video.duration * estimateFPS()) - 1);
+    timelineCursor.style.left = (max ? 100 * Math.max(0, Math.min(max, getCurrentFrameIndex())) / max : 0) + '%';
+    timelineCursor.style.display = 'block';
+  }
+  function renderTimeline() {
+    const rect = markerTimeline.getBoundingClientRect();
+    if (!rect.width) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(18 * dpr));
+    if (markerTimeline.width !== w) markerTimeline.width = w;
+    if (markerTimeline.height !== h) markerTimeline.height = h;
+    timelineCtx.clearRect(0, 0, w, h);
+    timelineFrames = Number.isFinite(video.duration) && video.duration > 0
+      ? Math.max(0, Math.round(video.duration * estimateFPS())) : 0;
+    timelineBins = new Array(w).fill(null);
+    timelineTip.style.display = 'none';
+    if (!timelineFrames) return;
+
+    for (const key of Object.keys(markers).sort((a, b) => Number(a) - Number(b))) {
+      const frame = Number(key), arr = markers[key];
+      if (!Number.isInteger(frame) || frame < 0 || frame >= timelineFrames ||
+          !Array.isArray(arr) || !arr.length) continue;
+      const col = Math.min(w - 1, Math.floor(frame * w / timelineFrames));
+      const bin = timelineBins[col] || (timelineBins[col] = {
+        count:0, frames:0, a:0, pr:0, pg:0, pb:0, colors:new Map()
+      });
+      bin.frames++;
+      for (const m of arr) {
+        if (!m) continue;
+        const r = Math.round(Math.max(0, Math.min(255, Number.isFinite(m.r) ? m.r : 0)));
+        const g = Math.round(Math.max(0, Math.min(255, Number.isFinite(m.g) ? m.g : 255)));
+        const b = Math.round(Math.max(0, Math.min(255, Number.isFinite(m.b) ? m.b : 0)));
+        const a = Math.max(0, Math.min(1, Number.isFinite(m.a) ? m.a : DEFAULT_ALPHA));
+        const rgba = r + ',' + g + ',' + b + ',' + a;
+        const group = bin.colors.get(rgba);
+        if (group) group.count++;
+        else bin.colors.set(rgba, {r, g, b, a, count:1});
+        bin.count++;
+        bin.pr = r*a + bin.pr*(1-a);
+        bin.pg = g*a + bin.pg*(1-a);
+        bin.pb = b*a + bin.pb*(1-a);
+        bin.a = a + bin.a*(1-a);
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      const bin = timelineBins[x];
+      if (!bin || !bin.a) continue;
+      timelineCtx.fillStyle = 'rgba(' + Math.round(bin.pr/bin.a) + ',' +
+        Math.round(bin.pg/bin.a) + ',' + Math.round(bin.pb/bin.a) + ',' + bin.a + ')';
+      timelineCtx.fillRect(x, 0, 1, h);
+    }
+    updateTimelineCursor();
+  }
+  function timelineHit(e) {
+    const rect = markerTimeline.getBoundingClientRect();
+    if (!rect.width || !timelineFrames) return null;
+    const t = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    return { t, x:Math.min(markerTimeline.width-1, Math.floor(t * markerTimeline.width)) };
+  }
+  function hoverTimeline(e) {
+    const hit = timelineHit(e);
+    if (!hit) { timelineTip.style.display = 'none'; return; }
+    const w = markerTimeline.width, count = timelineFrames, fps = estimateFPS();
+    const start = Math.ceil(hit.x * count / w);
+    const end = Math.min(count-1, Math.ceil((hit.x+1)*count/w)-1);
+    const frame = Math.min(count-1, Math.floor(hit.t * count));
+    const bin = timelineBins[hit.x];
+    timelineTip.replaceChildren();
+    const addLine = (txt, bold=false) => {
+      const el = document.createElement('div');
+      el.textContent = txt;
+      if (bold) el.style.fontWeight = '600';
+      timelineTip.appendChild(el);
+    };
+    addLine('Time: ' + formatTime(frame/fps) +
+      (start <= end ? ' · block ' + formatTime(start/fps) + '–' +
+        formatTime(Math.min(video.duration, (end+1)/fps)) : ''));
+    addLine('Frame: ' + frame + (start <= end ? ' · block ' + start + '–' + end : ''));
+    addLine(bin ? bin.count + ' markers across ' + bin.frames + ' annotated frame(s)' :
+      'No markers in this block', true);
+    if (bin) {
+      const colors = Array.from(bin.colors.values()).sort((a,b)=>b.count-a.count);
+      for (const c of colors.slice(0, 24)) {
+        const row = document.createElement('div'); row.className = 'timeline-color-row';
+        const sw = document.createElement('span'); sw.className = 'timeline-swatch';
+        sw.style.backgroundColor = 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + c.a + ')';
+        const label = document.createElement('span');
+        label.textContent = rgbToHex(c.r,c.g,c.b) + ' · α ' + c.a + ' × ' + c.count;
+        row.append(sw,label); timelineTip.appendChild(row);
+      }
+      if (colors.length > 24) addLine('+' + (colors.length-24) + ' more color/alpha groups');
+    }
+    timelineTip.style.display = 'block';
+    const width = timelineTrack.clientWidth, tipWidth = timelineTip.offsetWidth;
+    timelineTip.style.left = Math.max(0, Math.min(width-tipWidth, hit.t*width-tipWidth/2)) + 'px';
+  }
+  markerTimeline.addEventListener('mouseenter', hoverTimeline);
+  markerTimeline.addEventListener('mousemove', hoverTimeline);
+  markerTimeline.addEventListener('mouseleave', () => { timelineTip.style.display = 'none'; });
+  markerTimeline.addEventListener('click', e => {
+    if (video.readyState < 1) return;
+    const hit = timelineHit(e);
+    if (hit) seekToFrame(Math.min(timelineFrames-1, Math.floor(hit.t*timelineFrames)));
+  });
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(scheduleTimeline).observe(timelineTrack);
+  else window.addEventListener('resize', scheduleTimeline);
 
   // Navigation
   prevBtn.addEventListener('click', () => {
@@ -816,6 +959,7 @@ async function inspectVideoFPS(file) {
     fpsInput.title = fullExplanation;
     fpsInput.placeholder = '';
     updateFrameLabels();
+    scheduleTimeline();
   }
 
   // For formats without readable timing metadata, use *presentation timestamps* of
@@ -913,6 +1057,7 @@ async function inspectVideoFPS(file) {
     fpsFileUrl = URL.createObjectURL(file);
     video.src = fpsFileUrl;
     video.load();
+    scheduleTimeline();
     let found = await inspectVideoFPS(file);
     if (loadId !== fpsLoadSequence) return;
     if (!found) found = await probeDecodedFPS(loadId);
@@ -924,6 +1069,7 @@ async function inspectVideoFPS(file) {
     resetCanvasSize();
     drawFrameOverlay();
     updateFrameLabels();
+    scheduleTimeline();
   });
   video.addEventListener('error', () => {
     if (video.error) {
@@ -1273,6 +1419,7 @@ async function inspectVideoFPS(file) {
     drawFrameOverlay();
     updateFrameLabels();
     updateTagMappingUI();
+    scheduleTimeline();
   }
 
   // Canvas mouse handlers for drawing markers
@@ -1319,6 +1466,7 @@ async function inspectVideoFPS(file) {
         undoStack.push({ type: 'remove', frame, point: removed }); 
         redoStack.length = 0;
         drawFrameOverlay();
+        scheduleTimeline();
       }
       return;
     }
@@ -1436,6 +1584,7 @@ async function inspectVideoFPS(file) {
     }
 
     drawFrameOverlay();
+    scheduleTimeline();
   });
 
   canvas.addEventListener('mouseleave', () => {
@@ -1628,6 +1777,7 @@ async function inspectVideoFPS(file) {
       redoStack.push(op);
     }
     drawFrameOverlay();
+    scheduleTimeline();
   }
 
   function performRedo() {
@@ -1667,6 +1817,7 @@ async function inspectVideoFPS(file) {
       undoStack.push(op);
     }
     drawFrameOverlay();
+    scheduleTimeline();
   }
 
   // Keyboard shortcuts
@@ -1717,6 +1868,7 @@ async function inspectVideoFPS(file) {
         undoStack.push({ type: 'remove', frame, point: removed });
         redoStack.length = 0;
         drawFrameOverlay();
+        scheduleTimeline();
       }
     }
     else if (e.key === 'Escape') { e.preventDefault(); // clear current frame markers
@@ -1727,6 +1879,7 @@ async function inspectVideoFPS(file) {
         redoStack.length = 0;
         delete markers[f];
         drawFrameOverlay();
+        scheduleTimeline();
       }
     }
   });
@@ -1746,6 +1899,7 @@ async function inspectVideoFPS(file) {
     undoStack.push({ type: 'clear-all', prevState: prev });
     for (const k in markers) delete markers[k];
     drawFrameOverlay();
+    scheduleTimeline();
   });
 
   // goto frame
@@ -1769,6 +1923,7 @@ async function inspectVideoFPS(file) {
       fpsWarn.title = 'Enter a valid FPS between 0.1 and 1000. Until then, detection or fallback FPS is used.';
     }
     updateFrameLabels();
+    scheduleTimeline();
   });
 
   // small UI update loop to keep labels updated when video playing or seeking
@@ -1818,6 +1973,7 @@ async function inspectVideoFPS(file) {
           (markers[f] || []).forEach(m => { if (m.tag === tag) { m.r = rgb.r; m.g = rgb.g; m.b = rgb.b; } });
         }
         drawFrameOverlay(); renderPointsList(getCurrentFrameIndex(), markers[getCurrentFrameIndex()] || []);
+        scheduleTimeline();
       });
 
       const alphaInput = document.createElement('input');
@@ -1831,6 +1987,7 @@ async function inspectVideoFPS(file) {
           (markers[f] || []).forEach(m => { if (m.tag === tag) { m.a = v; } });
         }
         drawFrameOverlay(); renderPointsList(getCurrentFrameIndex(), markers[getCurrentFrameIndex()] || []);
+        scheduleTimeline();
         // reflect alpha in color input opacity
         colorInput.style.opacity = String(v);
       });
