@@ -38,7 +38,7 @@ def main() -> int:
     env = dict(os.environ, AUDIO_V2_ROOT=str(root), AUDIO_V2_FIXTURES=str(fixtures), AUDIO_V2_REPORTS=str(fixtures/'reports'), AUDIO_V2_FILES=json.dumps([str(p.expanduser().resolve()) for p in args.audio]), AUDIO_V2_INJECT='1' if args.inject_html else '0')
     if args.chromium:
         env['AUDIO_V2_CHROMIUM'] = str(args.chromium)
-    suites = ['numeric', 'interaction', 'frequency_scale', 'audacity_labels', 'label_tracks', 'inline_edit', 'multi_channel', 'multichannel_sync'] + (['regression', 'million_markers_browser'] if args.large else []) if args.suite == 'all' else [args.suite]
+    suites = ['numeric', 'interaction', 'frequency_scale', 'audacity_labels', 'label_tracks', 'import_tagging', 'inline_edit', 'multi_channel', 'multichannel_sync'] + (['regression', 'million_markers_browser'] if args.large else []) if args.suite == 'all' else [args.suite]
     codes = []
     for suite in suites:
         result = subprocess.run([sys.executable, str(Path(__file__).with_name(suite+'_test.py'))], env=env, check=False)
