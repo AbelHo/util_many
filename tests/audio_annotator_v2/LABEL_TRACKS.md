@@ -28,6 +28,18 @@ Each imported file gets a distinct `sourceId`; this is carried by imported marke
 
 Bulk imports, replacements, clear operations, undo and redo swap markers, tags, and source/track state together. Invalid, canceled, or mismatched imports do not partially change that state. Track heights are display state, not part of annotation exports or undo history.
 
+## Keyword filters when importing labels
+
+Each file's Merge / Replace / Stack dialog includes optional keyword tagging. Audacity TXT imports without existing tags show automatically suggested whole-word and adjacent two-word filters, including short uppercase codes such as `NV`, `EC`, `CL`, `BP`, and `NDA`. Suggestions count distinct **non-empty labels** containing a term and show both the count and its percentage. Common stopwords are excluded, and candidate discovery remains bounded on very large imports. No suggestion is preselected; plain imports preserve existing labels and tags.
+
+Every suggestion has its own **Case-sensitive** checkbox. Filters with **1–3 characters default to case-sensitive** (so `EC` and `ec` differ); longer filters default to case-insensitive. The displayed coverage updates when the checkbox changes, and selected filters use the exact same matching mode when the import is committed. Word and phrase matches do not match inside a longer word, and a suggested adjacent pair can match across punctuation separators such as `NV | EC`.
+
+The **Add custom filters** area accepts any number of literal words or phrases, including punctuation such as `EC?`. Its live count and percentage update after typing and when case sensitivity changes. Clicking **Add filter** makes an editable, removable selected rule with its own tag key, color, and case setting. Custom filters remain available even when a JSON/CSV file already contains tags (automatic suggestions are skipped in that case). Each rule has a single tag outcome: **the first matching selected rule wins**, according to drag/↑/↓ priority, then the optional whole-file tag, then the label's original tag. Importing with no selected rules or file-wide tag does not modify labels' existing tags. Import, cancel, and undo/redo remain atomic.
+
+Run `python tests/audio_annotator_v2/run.py --suite import_tagging` for focused coverage of suggested codes, mixed casing, live custom percentages, rule editing, precedence, and undo.
+
+The keyword engine also has a dependency-free check: `node tests/audio_annotator_v2/import_tagging_logic_test.cjs`. You may append the path to an Audacity TXT file to confirm its short-code suggestions without adding that file to the repository.
+
 ## Browser test
 
 The focused Chromium regression checks all three import modes, source hiding, synchronized positions, drag/keyboard resizing, selected-track navigation, undo/redo, failed-import atomicity, JSON provenance, and independent per-file choices when dropping multiple files.

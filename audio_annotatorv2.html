@@ -71,10 +71,13 @@ tags and stacked tracks; [Stack] adds one time-aligned label row between wavefor
 and spectrogram, overlaid on spectrogram only (not waveform). Every picker or
 drop import first validates its file, then opens one per-file modal for the mode,
 optional batch tag/color and (for files without tags) opt-in word/phrase tagging.
-Candidate detection uses bounded samples plus exact label-level counts; common
-stopwords are excluded, matching is whole-word and case-insensitive, and selected
-rules have draggable/keyboard-changeable precedence (top wins over lower rules
-and any file-wide tag). No selections preserve source tags without modifications.
+Candidate detection includes two-letter codes, uses bounded samples plus exact
+label-level counts, and excludes common stopwords. Suggested terms retain their
+observed spelling; filters of three characters or fewer default case-sensitive,
+longer filters default case-insensitive. Users can add/edit multiple literal
+custom filters and see live distinct-label coverage. Selected rules have
+draggable/keyboard-changeable precedence (top wins over lower rules and any
+file-wide tag). No selections preserve source tags without modifications.
 Every import is atomic/undoable and a cancelled dialog makes no changes.
 Each imported set has a visibility toggle;
 hidden labels remain in the table, memory and exports.
@@ -145,9 +148,14 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 #importChoiceDialog .import-rule.is-dragging{opacity:.5}
 #importChoiceDialog .import-rule-main{display:flex;align-items:center;gap:6px;flex:1 1 210px;min-width:0}
 #importChoiceDialog .import-rule-main span{overflow-wrap:anywhere}
+#importChoiceDialog .import-rule-main input[type=text]{width:125px;max-width:26vw}
 #importChoiceDialog .import-rule-settings{display:flex;align-items:center;gap:5px}
 #importChoiceDialog .import-rule-settings input[type=text]{width:112px;max-width:27vw}
 #importChoiceDialog .import-rule:not(.is-selected) .import-rule-settings,#importChoiceDialog .import-rule:not(.is-selected) .import-rule-order{display:none}
+#importChoiceDialog .import-rule-case{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:12px}
+#importChoiceDialog .import-custom-row{align-items:center}
+#importChoiceDialog .import-custom-row input[type=text]{width:min(270px,55vw)}
+#importChoiceDialog .import-rule-remove{color:#9b2636}
 #importChoiceDialog .import-rule-order button{min-width:28px;padding:2px 6px}
 #importChoiceDialog .import-rule-rank{font-variant-numeric:tabular-nums;color:#415e7a;font-size:12px}
 #importChoiceDialog .import-rule-count{color:#526578;font-size:12px;white-space:nowrap}
@@ -232,11 +240,14 @@ Y-axis scales: Linear, Logarithmic, Mel, Bark, ERB and Period. The same\ntransfo
 <div class="import-base-row"><label>Tag key<input id="importBatchTagName" type="text" maxlength="64" disabled></label><label>Tag color<input id="importBatchTagColor" type="color" disabled></label></div>
 <p class="hint">When enabled, this replaces tags on imported labels. Selected keyword rules have higher priority and override this file-wide tag when they match. Tags and their colors are shared across all annotations with the same tag key.</p>
 </fieldset>
-<fieldset id="importKeywordSection" hidden><legend>Suggested keyword tags (optional)</legend>
+<fieldset id="importKeywordSection"><legend>Keyword filters and tags (optional)</legend>
 <p id="importKeywordSummary" class="hint"></p>
-<p class="hint">Suggestions use distinct-label frequency, not repeated words within one label. Whole words and adjacent two-word phrases match case-insensitively. Select keywords to add tags. <strong>Top selected row wins</strong> when multiple rules match; drag selected rows or use ↑/↓ to change priority. Edit the resulting tag key and color if desired.</p>
+<p class="hint">Suggestions include short codes and use distinct-label frequency, not repeated words within one label. Filters match whole words or phrases; 2–3-character filters default to case-sensitive and longer ones to case-insensitive. Toggle <strong>Case-sensitive</strong> independently for any filter. <strong>Top selected row wins</strong> when multiple rules match; drag rows or use ↑/↓ to change priority. Nothing is tagged until a rule is selected.</p>
 <div class="import-rule-subhead">Selected rules — highest priority first</div><div id="importSelectedRules" class="import-rule-list" aria-label="Selected keyword rules, highest priority first"></div>
 <div class="import-rule-subhead">Suggested keywords — unchecked by default</div><div id="importSuggestedRules" class="import-rule-list" aria-label="Suggested keyword rules"></div>
+<div class="import-rule-subhead">Add custom filters (as many as needed)</div>
+<div class="import-base-row import-custom-row"><label>Keyword or literal phrase<input id="importCustomFilter" type="text" maxlength="128" placeholder="e.g. EC?, dolphin, NV | CL"></label><label class="import-rule-case"><input id="importCustomCase" type="checkbox"> Case-sensitive</label><span id="importCustomCoverage" class="import-rule-count" role="status">Enter a filter to see coverage.</span><button id="importAddFilter" type="button">Add filter</button></div>
+<p class="hint">Custom filter percentages update while typing (percentage of non-empty labels). Added filters appear above, can be edited or removed, and are selected by default.</p>
 </fieldset>
 <p id="importChoiceError" class="import-error" role="alert" hidden></p>
 <div class="row import-actions"><button type="button" data-import-choice="merge">Merge</button><button type="button" data-import-choice="replace">Replace</button><button type="button" data-import-choice="stack">Stack</button><button type="button" data-import-choice="cancel">Cancel</button></div>
@@ -4445,16 +4456,45 @@ self.onmessage = async ({ data: m }) => {
         'this those to was were what when where which while who with would you your not no yes ' +
         'one two three this that than then also all some any per via each only label labels ' +
         'annotation annotations recording recordings file files').split(' '));
-    function importLabelTerms(label) {
-        const words = label.normalize('NFKC').toLowerCase().match(/[\p{L}][\p{L}\p{M}\p{N}]*/gu) || [];
+    function importLabelTerms(label, preserveCase = false) {
+        const words = label.normalize('NFKC').match(/[\p{L}][\p{L}\p{M}\p{N}]*/gu) || [];
         const result = new Set();
-        const useful = word => word.length >= 3 && word.length <= 30 && !IMPORT_STOPWORDS.has(word);
+        const useful = word => word.length >= 2 && word.length <= 30 && !IMPORT_STOPWORDS.has(word.toLowerCase());
         for (let i = 0; i < words.length; i++) {
             if (!useful(words[i])) continue;
-            result.add(words[i]);
-            if (i && useful(words[i - 1])) result.add(words[i - 1] + ' ' + words[i]);
+            const word = preserveCase ? words[i] : words[i].toLowerCase();
+            result.add(word);
+            if (i && useful(words[i - 1]))
+                result.add((preserveCase ? words[i - 1] : words[i - 1].toLowerCase()) + ' ' + word);
         }
         return result;
+    }
+    const defaultImportCaseSensitive = term => [...term.trim()].length <= 3;
+    function compileImportFilter(term, caseSensitive, useDiscoveryTokens = true) {
+        const text = term.trim().normalize('NFKC');
+        if (!text || text.length > 128)
+            throw Error('Each keyword filter must contain 1–128 characters.');
+        // Single words and adjacent word pairs use the same token semantics as
+        // discovery, including pairs separated by punctuation such as "NV | EC".
+        if (useDiscoveryTokens && /^[\p{L}][\p{L}\p{M}\p{N}]*(?:\s+[\p{L}][\p{L}\p{M}\p{N}]*)?$/u.test(text))
+            return { word: caseSensitive ? text.replace(/\s+/g, ' ') : text.replace(/\s+/g, ' ').toLowerCase(), caseSensitive };
+        // A custom filter can also match common words and longer phrases which
+        // discovery deliberately excludes. Punctuation is literal; plain
+        // multiword phrases also accept punctuation between adjacent words.
+        const escapeLiteral = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const wordsOnly = /^[\p{L}][\p{L}\p{M}\p{N}]*(?:\s+[\p{L}][\p{L}\p{M}\p{N}]*)+$/u.test(text);
+        const escaped = wordsOnly ? text.split(/\s+/).map(escapeLiteral).join('[^\\p{L}\\p{M}\\p{N}]+') :
+            escapeLiteral(text).replace(/\s+/g, '\\s+');
+        const left = /^[\p{L}\p{M}\p{N}]/u.test(text) ? '(?<![\\p{L}\\p{M}\\p{N}])' : '';
+        const right = /[\p{L}\p{M}\p{N}]$/u.test(text) ? '(?![\\p{L}\\p{M}\\p{N}])' : '';
+        return { regex: new RegExp(left + escaped + right, caseSensitive ? 'u' : 'iu') };
+    }
+    function importFilterMatches(label, matcher, termsInsensitive, termsSensitive) {
+        if (matcher.word !== undefined) {
+            const terms = matcher.caseSensitive ? termsSensitive : termsInsensitive;
+            return terms.has(matcher.word);
+        }
+        return matcher.regex.test(label.normalize('NFKC'));
     }
     async function suggestImportKeywords(markers, epoch, serial) {
         const candidateCounts = new Map(), sampleStep = Math.max(1, Math.ceil(markers.length / 2500));
@@ -4472,11 +4512,16 @@ self.onmessage = async ({ data: m }) => {
         const candidates = [...candidateCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
             .slice(0, 250).map(([term]) => term);
         const coverage = new Map(candidates.map(term => [term, 0]));
+        const variants = new Map(candidates.map(term => [term, new Map()]));
         let nonempty = 0;
         for (let i = 0; i < markers.length; i++) {
             if (markers[i].label.trim()) nonempty++;
             for (const term of importLabelTerms(markers[i].label))
                 if (coverage.has(term)) coverage.set(term, coverage.get(term) + 1);
+            for (const form of importLabelTerms(markers[i].label, true)) {
+                const choices = variants.get(form.toLowerCase());
+                if (choices) choices.set(form, (choices.get(form) || 0) + 1);
+            }
             if ((i & 4095) === 0) {
                 checkImport(epoch, serial);
                 if (markers.length >= 8192) {
@@ -4486,10 +4531,20 @@ self.onmessage = async ({ data: m }) => {
             }
         }
         const minCoverage = Math.max(2, Math.ceil(nonempty * .005));
-        const suggestions = [...coverage].filter(([term, count]) => count >= minCoverage)
+        const ranked = [...coverage].filter(([term, count]) => count >= minCoverage)
             .sort((a, b) => (b[1] * (b[0].includes(' ') ? 1.12 : 1)) -
-                (a[1] * (a[0].includes(' ') ? 1.12 : 1)) || a[0].localeCompare(b[0]))
-            .slice(0, 24).map(([term, count]) => ({ term, count }));
+                (a[1] * (a[0].includes(' ') ? 1.12 : 1)) || a[0].localeCompare(b[0]));
+        // Reserve space for common short codes even when many two-word phrases
+        // have slightly higher frequency, e.g. NV, EC, CL, BP in Audacity TXT.
+        const shortCodes = ranked.filter(([term]) => term.length <= 3 && !term.includes(' ')).slice(0, 12);
+        const chosen = [...shortCodes, ...ranked.filter(entry => !shortCodes.includes(entry))
+            .slice(0, 24 - shortCodes.length)];
+        const suggestions = chosen.map(([lower, insensitiveCount]) => {
+            const forms = [...variants.get(lower)].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+            const [term, sensitiveCount] = forms[0] || [lower, insensitiveCount];
+            return { term, count: defaultImportCaseSensitive(term) ? sensitiveCount : insensitiveCount,
+                insensitiveCount };
+        });
         checkImport(epoch, serial);
         return { suggestions, nonempty };
     }
@@ -4503,7 +4558,8 @@ self.onmessage = async ({ data: m }) => {
                 throw Error('The same tag key has conflicting colors. Give each key one color.');
             definitions.set(key, color);
         }
-        const rules = plan.rules.map(rule => ({ ...rule, key: rule.key.trim() }));
+        const rules = plan.rules.map(rule => ({ ...rule, key: rule.key.trim(),
+            matcher: compileImportFilter(rule.term, rule.caseSensitive === true, rule.custom !== true) }));
         return { baseTag: plan.baseTag ? { ...plan.baseTag, key: plan.baseTag.key.trim() } : null, rules, definitions };
     }
     async function applyImportedAnnotations(data, format, choice, epoch, serial, filename) {
@@ -4519,15 +4575,20 @@ self.onmessage = async ({ data: m }) => {
         sources.set(sourceId, { id: sourceId, filename: cleanText(filename, 512, 'Import filename'),
             mode: mode === 'stack' ? 'stack' : 'merge', visible: true });
         const usedTags = plan.definitions.size ? new Set() : null;
+        const needsInsensitiveWords = plan.rules.some(rule => rule.matcher.word !== undefined && !rule.matcher.caseSensitive);
+        const needsSensitiveWords = plan.rules.some(rule => rule.matcher.word !== undefined && rule.matcher.caseSensitive);
         for (let i = 0; i < data.markers.length; i++) {
             const item = data.markers[i];
             // Whole-file tag is a fallback. First matching (top-priority) keyword
             // overrides it; a no-options import preserves every original tag.
             let tag = plan.baseTag ? plan.baseTag.key : item.tag;
             if (plan.rules.length) {
-                const terms = importLabelTerms(item.label);
+                const terms = needsInsensitiveWords ? importLabelTerms(item.label) : null;
+                const caseTerms = needsSensitiveWords ? importLabelTerms(item.label, true) : null;
                 for (const rule of plan.rules) {
-                    if (terms.has(rule.term)) { tag = rule.key; break; }
+                    if (importFilterMatches(item.label, rule.matcher, terms, caseTerms)) {
+                        tag = rule.key; break;
+                    }
                 }
             }
             const m = { ...item, id: markers.has(item.id) ? uid() : item.id, sourceId, tag };
@@ -5114,12 +5175,57 @@ self.onmessage = async ({ data: m }) => {
         const toggleBatch = () => { batchName.disabled = batchColor.disabled = !batch.checked; };
         batch.addEventListener('change', toggleBatch);
         const section = $('importKeywordSection');
-        section.hidden = !keywords;
-        if (keywords) {
-            $('importKeywordSummary').textContent = keywords.nonempty.toLocaleString() +
-                ' non-empty labels · ' + keywords.suggestions.length + ' frequent candidate(s)' +
-                (keywords.suggestions.length ? ', coverage measured across every label.' :
-                    '. No repeated informative words found.');
+        section.hidden = false; // Custom filters also work on files with existing tags.
+        const nonempty = keywords ? keywords.nonempty : data.markers.reduce((sum, item) => sum + !!item.label.trim(), 0);
+        $('importKeywordSummary').textContent = nonempty.toLocaleString() + ' non-empty labels · ' +
+            (keywords ? keywords.suggestions.length + ' frequent candidate(s).' :
+                'already-tagged labels; automatic suggestions are skipped.') +
+            ' Coverage is measured across all non-empty labels.';
+        const coverageCache = new Map();
+        const cacheKey = (term, sensitive) => (sensitive ? 's:' : 'i:') + term.trim().normalize('NFKC');
+        const coverageText = count => count.toLocaleString() + ' (' +
+            (100 * count / Math.max(1, nonempty)).toFixed(1) + '%)';
+        for (const entry of keywords?.suggestions || []) {
+            coverageCache.set(cacheKey(entry.term, defaultImportCaseSensitive(entry.term)), entry.count);
+            coverageCache.set(cacheKey(entry.term, false), entry.insensitiveCount);
+        }
+        const pendingCoverage = new Set();
+        function watchCoverage(element, getTerm, getSensitive, useDiscoveryTokens = false) {
+            let revision = 0, timer = null;
+            const update = (now = false) => {
+                const token = ++revision;
+                clearTimeout(timer);
+                const term = getTerm().trim(), sensitive = getSensitive();
+                if (!term) { element.textContent = 'Enter a filter to see coverage.'; return; }
+                let matcher;
+                try { matcher = compileImportFilter(term, sensitive, useDiscoveryTokens); }
+                catch (error) { element.textContent = error.message; return; }
+                const key = cacheKey(term, sensitive);
+                if (coverageCache.has(key)) { element.textContent = coverageText(coverageCache.get(key)); return; }
+                element.textContent = 'Calculating…';
+                timer = setTimeout(async () => {
+                    let count = 0;
+                    try {
+                        for (let i = 0; i < data.markers.length; i++) {
+                            if (token !== revision || !dialog.open) return;
+                            const label = data.markers[i].label;
+                            if (label.trim()) {
+                                const terms = matcher.word !== undefined ? importLabelTerms(label) : null;
+                                const caseTerms = matcher.word !== undefined ? importLabelTerms(label, true) : null;
+                                if (importFilterMatches(label, matcher, terms, caseTerms)) count++;
+                            }
+                            if (i && (i & 2047) === 0) await yieldUI();
+                        }
+                        if (token !== revision || !dialog.open) return;
+                        coverageCache.set(key, count);
+                        element.textContent = coverageText(count);
+                    }
+                    catch (error) { if (token === revision) element.textContent = 'Coverage unavailable'; }
+                }, now ? 0 : 140);
+            };
+            const stop = () => { revision++; clearTimeout(timer); };
+            pendingCoverage.add(stop);
+            return { update, stop };
         }
         let dragging = null;
         const updateRanks = () => {
@@ -5134,22 +5240,35 @@ self.onmessage = async ({ data: m }) => {
                 selected.insertBefore(row.nextElementSibling, row);
             updateRanks();
         }
-        for (const entry of keywords?.suggestions || []) {
+        function addRule(entry, custom = false) {
             const rule = document.createElement('div');
             rule.className = 'import-rule';
             rule.dataset.term = entry.term;
-            const main = document.createElement('label');
+            if (custom) rule.dataset.custom = 'true';
+            const main = document.createElement('div');
             main.className = 'import-rule-main';
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
+            checkbox.checked = custom;
             checkbox.setAttribute('aria-label', 'Tag labels containing ' + entry.term);
-            const term = document.createElement('span');
-            term.textContent = entry.term;
+            const term = document.createElement(custom ? 'input' : 'span');
+            if (custom) {
+                term.type = 'text';
+                term.maxLength = 128;
+                term.value = entry.term;
+                term.setAttribute('aria-label', 'Custom keyword filter');
+            }
+            else term.textContent = entry.term;
             const count = document.createElement('span');
             count.className = 'import-rule-count';
-            count.textContent = entry.count.toLocaleString() + ' (' +
-                (100 * entry.count / Math.max(1, keywords.nonempty)).toFixed(1) + '%)';
             main.append(checkbox, term, count);
+            const caseLabel = document.createElement('label');
+            caseLabel.className = 'import-rule-case';
+            const caseInput = document.createElement('input');
+            caseInput.type = 'checkbox';
+            caseInput.checked = entry.caseSensitive ?? defaultImportCaseSensitive(entry.term);
+            caseInput.setAttribute('aria-label', 'Case-sensitive matching for ' + entry.term);
+            caseLabel.append(caseInput, document.createTextNode('Case-sensitive'));
             const settings = document.createElement('div');
             settings.className = 'import-rule-settings';
             const tagName = document.createElement('input');
@@ -5177,7 +5296,29 @@ self.onmessage = async ({ data: m }) => {
                 button.addEventListener('click', () => moveRule(rule, direction));
             }
             order.append(rank, up, down);
-            rule.append(main, settings, order);
+            rule.append(main, caseLabel, settings, order);
+            if (custom) {
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'import-rule-remove';
+                remove.textContent = 'Remove';
+                remove.setAttribute('aria-label', 'Remove custom filter');
+                rule.append(remove);
+                remove.addEventListener('click', () => { coverage.stop(); rule.remove(); updateRanks(); });
+            }
+            const coverage = watchCoverage(count, () => rule.dataset.term, () => caseInput.checked, !custom);
+            coverage.update(true);
+            let caseTouched = !!entry.caseTouched;
+            caseInput.addEventListener('change', () => { caseTouched = true; coverage.update(); });
+            if (custom) term.addEventListener('input', () => {
+                const previous = rule.dataset.term;
+                rule.dataset.term = term.value;
+                checkbox.setAttribute('aria-label', 'Tag labels containing ' + term.value);
+                caseInput.setAttribute('aria-label', 'Case-sensitive matching for ' + term.value);
+                if (tagName.value === previous) tagName.value = term.value.slice(0, 64);
+                if (!caseTouched) caseInput.checked = defaultImportCaseSensitive(term.value);
+                coverage.update();
+            });
             checkbox.addEventListener('change', () => {
                 rule.classList.toggle('is-selected', checkbox.checked);
                 rule.draggable = checkbox.checked;
@@ -5189,11 +5330,53 @@ self.onmessage = async ({ data: m }) => {
                 dragging = rule;
                 rule.classList.add('is-dragging');
                 event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', entry.term);
+                event.dataTransfer.setData('text/plain', rule.dataset.term);
             });
             rule.addEventListener('dragend', () => { dragging = null; rule.classList.remove('is-dragging'); });
-            suggested.append(rule);
+            if (custom) {
+                rule.classList.add('is-selected');
+                rule.draggable = true;
+                selected.append(rule);
+            }
+            else suggested.append(rule);
+            updateRanks();
         }
+        for (const entry of keywords?.suggestions || []) addRule(entry);
+        const customTerm = $('importCustomFilter'), customCase = $('importCustomCase');
+        const customCoverage = $('importCustomCoverage'), addCustom = $('importAddFilter');
+        customTerm.value = '';
+        customCase.checked = false;
+        let customCaseTouched = false;
+        const preview = watchCoverage(customCoverage, () => customTerm.value, () => customCase.checked);
+        const updatePreview = () => {
+            if (!customCaseTouched) customCase.checked = defaultImportCaseSensitive(customTerm.value);
+            preview.update();
+        };
+        const touchCustomCase = () => { customCaseTouched = true; preview.update(); };
+        const addCustomRule = () => {
+            const term = customTerm.value.trim();
+            try { compileImportFilter(term, customCase.checked, false); }
+            catch (error) {
+                $('importChoiceError').textContent = error.message;
+                $('importChoiceError').hidden = false;
+                customTerm.focus();
+                return;
+            }
+            addRule({ term, caseSensitive: customCase.checked, caseTouched: customCaseTouched }, true);
+            $('importChoiceError').hidden = true;
+            customTerm.value = '';
+            customCase.checked = false;
+            customCaseTouched = false;
+            preview.update();
+            customTerm.focus();
+        }
+        const customKeydown = event => {
+            if (event.key === 'Enter') { event.preventDefault(); addCustomRule(); }
+        };
+        customTerm.addEventListener('input', updatePreview);
+        customTerm.addEventListener('keydown', customKeydown);
+        customCase.addEventListener('change', touchCustomCase);
+        addCustom.addEventListener('click', addCustomRule);
         const dragover = event => {
             if (!dragging) return;
             event.preventDefault();
@@ -5222,6 +5405,11 @@ self.onmessage = async ({ data: m }) => {
                 selected.removeEventListener('dragover', dragover);
                 selected.removeEventListener('drop', stopDrag);
                 batch.removeEventListener('change', toggleBatch);
+                customTerm.removeEventListener('input', updatePreview);
+                customTerm.removeEventListener('keydown', customKeydown);
+                customCase.removeEventListener('change', touchCustomCase);
+                addCustom.removeEventListener('click', addCustomRule);
+                for (const stop of pendingCoverage) stop();
                 if (dialog.open) dialog.close();
             };
             const complete = choice => { cleanup(); resolve(choice); };
@@ -5236,7 +5424,9 @@ self.onmessage = async ({ data: m }) => {
                         rules: [...selected.children].map(row => ({
                             term: row.dataset.term,
                             key: row.querySelector('.import-rule-settings input[type=text]').value,
-                            color: row.querySelector('.import-rule-settings input[type=color]').value
+                            color: row.querySelector('.import-rule-settings input[type=color]').value,
+                            caseSensitive: row.querySelector('.import-rule-case input').checked,
+                            custom: row.dataset.custom === 'true'
                         }))
                     };
                     importTagPlan(data, plan); // Validate before closing; keep modal for correction.

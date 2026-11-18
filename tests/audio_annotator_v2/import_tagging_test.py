@@ -68,7 +68,7 @@ with sync_playwright() as p:
     assert suggestions.count() >= 4
     for term in ('whistle', 'click', 'burst pulse'):
         assert page.locator('#importSuggestedRules [data-term="' + term + '"]').count() == 1
-        page.locator('#importSuggestedRules [data-term="' + term + '"] input[type=checkbox]').check()
+        page.locator('#importSuggestedRules [data-term="' + term + '"] .import-rule-main input[type=checkbox]').check()
     assert rule('whistle').count() == 1
     assert page.locator('#importSelectedRules .import-rule').evaluate_all(
         '(rows) => rows.map(row => row.dataset.term)') == ['whistle', 'click', 'burst pulse']
@@ -123,7 +123,7 @@ with sync_playwright() as p:
     count(9)
     assert state()['markers'][-1]['tag'] == ''
 
-    # A tagged JSON file hides suggestions, but allows explicit file-wide override.
+    # A tagged JSON file suppresses automatic suggestions but allows manual filters.
     with page.expect_download() as download:
         page.locator('#exportJson').click()
     full_json = download.value.path().read_bytes()
@@ -132,7 +132,8 @@ with sync_playwright() as p:
     })
     page.locator('#importBtn').click()
     page.locator('#importChoiceDialog[open]').wait_for()
-    assert page.locator('#importKeywordSection').is_hidden()
+    assert page.locator('#importKeywordSection').is_visible()
+    assert page.locator('#importSuggestedRules .import-rule').count() == 0
     page.locator('#importBatchTag').check()
     page.locator('#importBatchTagName').fill('BatchAll')
     color(page.locator('#importBatchTagColor'), '#abcdef')
@@ -149,11 +150,84 @@ with sync_playwright() as p:
     assert state()['markerCount'] == old['markerCount']
     assert state()['undo'] == old['undo']
     assert state()['tags'] == old['tags']
+
+    # Two-letter codes from multi-column Audacity labels must be discoverable.
+    codes = (
+        '1.1\t1.1\tNV | EC | NDA\n'
+        '1.2\t1.2\tNV | CL | NDA\n'
+        '1.3\t1.3\tnv | EC? | NDA\n'
+        '1.4\t1.4\tNM | BP | NDA\n'
+        '1.5\t1.5\tNM | bp | NDA\n'
+        '1.6\t1.6\tGinger | EC | NDA\n'
+        '1.7\t1.7\tec | CL | NDA\n'
+        '1.8\t1.8\tNV! | BP | NDA\n'
+    )
+    begin('coded-labels.txt', codes)
+    for term in ('NV', 'EC', 'CL', 'BP', 'NDA', 'NM'):
+        suggestion = page.locator('#importSuggestedRules .import-rule[data-term="' + term + '"]')
+        assert suggestion.count() == 1, term
+        assert suggestion.locator('.import-rule-case input').is_checked(), term
+    nv = page.locator('#importSuggestedRules .import-rule[data-term="NV"]')
+    assert '3 (37.5%)' in nv.locator('.import-rule-count').inner_text()
+    nv.locator('.import-rule-case input').uncheck()
+    page.wait_for_function("() => document.querySelector('[data-term=NV] .import-rule-count').textContent.includes('4 (50.0%)')")
+    nv.locator('.import-rule-main input[type=checkbox]').check()
+
+    # Preview responds as the user types; case toggles change the measured count.
+    custom = page.locator('#importCustomFilter')
+    custom.fill('bp')
+    assert page.locator('#importCustomCase').is_checked()
+    page.wait_for_function("() => document.querySelector('#importCustomCoverage').textContent.includes('1 (12.5%)')")
+    page.locator('#importCustomCase').uncheck()
+    page.wait_for_function("() => document.querySelector('#importCustomCoverage').textContent.includes('3 (37.5%)')")
+    page.locator('#importCustomCase').check()
+    page.locator('#importAddFilter').click()
+    assert rule('bp').count() == 1
+    assert '1 (12.5%)' in rule('bp').locator('.import-rule-count').inner_text()
+    rule('bp').locator('.import-rule-settings input[type=text]').fill('LowerBP')
+
+    custom.fill('EC?')
+    page.wait_for_function("() => document.querySelector('#importCustomCoverage').textContent.includes('1 (12.5%)')")
+    page.locator('#importAddFilter').click()
+    assert rule('EC?').count() == 1
+    rule('EC?').locator('.import-rule-settings input[type=text]').fill('QuestionEC')
+
+    custom.fill('ginger')
+    assert not page.locator('#importCustomCase').is_checked()
+    page.wait_for_function("() => document.querySelector('#importCustomCoverage').textContent.includes('1 (12.5%)')")
+    page.locator('#importAddFilter').click()
+    assert rule('ginger').count() == 1
+    rule('ginger').locator('.import-rule-settings input[type=text]').fill('DolphinGinger')
+    rule('ginger').locator('.import-rule-main input[type=text]').fill('Ginger')
+    page.wait_for_function("() => document.querySelector('#importSelectedRules [data-term=Ginger] .import-rule-count').textContent.includes('1 (12.5%)')")
+    assert '1 (12.5%)' in rule('Ginger').locator('.import-rule-count').inner_text()
+    assert not rule('Ginger').locator('.import-rule-case input').is_checked()
+    rule('Ginger').locator('.import-rule-remove').click()
+    assert rule('Ginger').count() == 0
+
+    # Editable custom filters use selected-row precedence and apply on import.
+    rule('bp').locator('.import-rule-main input[type=text]').fill('BP')
+    page.wait_for_function("() => document.querySelector('#importSelectedRules [data-term=BP] .import-rule-count').textContent.includes('2 (25.0%)')")
+    rule('BP').locator('.import-rule-settings input[type=text]').fill('UpperBP')
+    choose('merge')
+    count(old['markerCount'] + 8)
+    tagged_codes = {m['label']: m['tag'] for m in state()['markers'][-8:]}
+    assert tagged_codes['NV | EC | NDA'] == 'NV', tagged_codes
+    assert tagged_codes['nv | EC? | NDA'] == 'NV'  # NV matching was switched to insensitive.
+    assert tagged_codes['NM | BP | NDA'] == 'UpperBP'
+    assert tagged_codes['NM | bp | NDA'] == ''  # Custom BP remains case-sensitive.
+    assert tagged_codes['Ginger | EC | NDA'] == ''  # Removed custom rule has no effect.
+    assert tagged_codes['ec | CL | NDA'] == ''
+    page.locator('#undoBtn').click()
+    count(old['markerCount'])
+    page.locator('#redoBtn').click()
+    count(old['markerCount'] + 8)
+
     assert not errors, errors
     (OUT / 'import-tagging-results.json').write_text(json.dumps({
         'passed': True, 'markers': state()['markerCount'], 'tags': state()['tags'],
         'errors': errors, 'browser': browser.version,
     }, indent=2))
-    print('IMPORT TAGGING PASS: suggestions, counts, drag precedence, colors,'
-          ' no-op defaults, batch override, stack/replace, undo/redo, cancel')
+    print('IMPORT TAGGING PASS: short-code suggestions, per-rule case filters, live custom'
+          ' coverage, multiple editable/removable filters, priority, colors, undo/redo, cancel')
     browser.close()
