@@ -4541,7 +4541,12 @@ self.onmessage = async ({ data: m }) => {
             .slice(0, 24 - shortCodes.length)];
         const suggestions = chosen.map(([lower, insensitiveCount]) => {
             const forms = [...variants.get(lower)].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-            const [term, sensitiveCount] = forms[0] || [lower, insensitiveCount];
+            // Ordinary words use their normalized spelling so label capitalization
+            // does not make discovery selectors unstable. Preserve the dominant
+            // observed form for short codes, where capitalization can distinguish
+            // meaningful abbreviations (for example NV vs nv).
+            const [observed, sensitiveCount] = forms[0] || [lower, insensitiveCount];
+            const term = lower.length <= 3 ? observed : lower;
             return { term, count: defaultImportCaseSensitive(term) ? sensitiveCount : insensitiveCount,
                 insensitiveCount };
         });
