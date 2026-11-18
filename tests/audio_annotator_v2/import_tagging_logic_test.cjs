@@ -42,6 +42,23 @@ async function checkSuggestions(labels, required) {
 }
 
 async function main() {
+  // Regression for 7a5b2a2: a dominant capitalized occurrence must not change
+  // the stable lowercase identity of an ordinary (case-insensitive) suggestion.
+  const longMixed = [
+    'Whistle CLICK', 'Whistle click', 'Whistle click', 'whistle',
+    'CLICK train', 'click train', 'Burst pulse', 'burst pulse',
+  ];
+  const longSuggestions = await checkSuggestions(longMixed, ['whistle', 'click', 'burst pulse']);
+  assert(!longSuggestions.suggestions.some(item =>
+    ['Whistle', 'CLICK', 'Burst pulse'].includes(item.term)));
+
+  // Short abbreviations retain the dominant observed case and their default
+  // percentages count only that case, even when lowercase variants coexist.
+  const shortMixed = ['NV | EC', 'NV | CL', 'NV | EC', 'nv | CL', 'nv | EC'];
+  const shortSuggestions = await checkSuggestions(shortMixed, ['NV', 'EC', 'CL']);
+  assert.equal(shortSuggestions.suggestions.find(item => item.term === 'NV').count, 3);
+  assert.equal(shortMixed.filter(label => matches(label, 'NV', false)).length, 5);
+
   const labels = [
     'NV | EC | NDA', 'NV | CL | NDA', 'nv | EC? | NDA', 'NM | BP | NDA',
     'NM | bp | NDA', 'Ginger | EC | NDA', 'ec | CL | NDA', 'NV! | BP | NDA',
