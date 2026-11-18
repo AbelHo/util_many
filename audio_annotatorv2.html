@@ -5,6 +5,9 @@ Purpose: annotate local audio with synchronized native-rate waveform/spectrogram
 Open this file directly; no server, build, network requests, or external dependencies.
 WAV/RF64/BW64 PCM (8/16/24/32-bit), IEEE float (32/64-bit), and native FLAC are
 read in bounded slices in inline Blob workers, NOT decoded into a whole-file AudioBuffer.
+Oversized RIFF files with saturated sizes use the remaining file as their final data
+chunk; this recovery assumes there are no trailing chunks and is shown to the user.
+The original annotator can pass a selected large WAV to this page in an embedded view.
 The file's sample rate is authoritative; Nyquist = sampleRate / 2. Analysis never
 passes through a resampling AudioContext. ensureAudioContext() requests the native
 rate; unsupported output rates fall back explicitly, without changing analysis.
@@ -311,7 +314,8 @@ class WavSource {
         const head = await this.bytes.range(0, 12), kind = ascii(head, 0, 4);
         if (!['RIFF', 'RF64', 'BW64'].includes(kind) || ascii(head, 8, 4) !== 'WAVE')
             throw Error('Unsupported WAV header (little-endian RIFF/RF64/BW64 required).');
-        let pos = 12, fmt = null, ds = null, chunks = 0;
+        let pos = 12, fmt = null, ds = null, chunks = 0, inferredDataLength = false;
+        const riffSize = new DataView(head.buffer).getUint32(4, true);
         const sizes = new Map();
         while (pos + 8 <= this.file.size) {
             if (++chunks > 100000)
@@ -321,6 +325,12 @@ class WavSource {
             if (len === 0xffffffff) {
                 if (id === 'data' && ds !== null && this.segments.length === 0)
                     len = ds;
+                else if (kind === 'RIFF' && riffSize === 0xffffffff && id === 'data' && fmt && !this.segments.length && this.file.size > 0xffffffff) {
+                    // Some recorders write an oversized RIFF without RF64's ds64.
+                    // There is no unambiguous way to locate chunks after this data.
+                    len = this.file.size - (pos + 8);
+                    inferredDataLength = true;
+                }
                 else if (sizes.has(id))
                     len = sizes.get(id).shift();
                 else
@@ -382,7 +392,8 @@ class WavSource {
         if (!frames)
             throw Error('The recording is empty.');
         this.frames = frames;
-        this.format = kind + ' ' + (this.code === 3 ? 'float' : 'PCM') + ' ' + this.bits + '-bit';
+        this.format = kind + ' ' + (this.code === 3 ? 'float' : 'PCM') + ' ' + this.bits + '-bit' +
+            (inferredDataLength ? ' (data extends to EOF; trailing chunks cannot be detected)' : '');
         return this;
     }
     async read(start, count, channel) {
@@ -4912,6 +4923,11 @@ self.onmessage = async ({ data: m }) => {
         $('fileInput').value = '';
         if (file)
             return loadAudio(file);
+    });
+    window.addEventListener('message', event => {
+        if (window.parent !== window && event.source === window.parent &&
+            event.data?.type === 'audio-annotator-open-large-wav' && event.data.file instanceof File)
+            loadAudio(event.data.file).catch(report);
     });
     handle('playPauseBtn', 'click', play);
     handle('stopBtn', 'click', () => seek(0, false));
